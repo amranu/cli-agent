@@ -541,7 +541,9 @@ class MCPDeepseekHost(BaseMCPAgent):
                             
                             # Check if tool failed and add appropriate notice
                             tool_failed = tool_result.startswith("Error:") or "error" in tool_result.lower()[:100]
-                            result_msg = f"Result: {tool_result}"
+                            # Truncate tool output for display to user
+                            display_result = self.truncate_tool_output_for_display(tool_result)
+                            result_msg = f"Result: {display_result}"
                             if tool_failed:
                                 result_msg += " ⚠️  Command failed - take this into account for your next action."
                             yield f"{result_msg}\n"

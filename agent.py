@@ -94,6 +94,10 @@ class SlashCommandManager:
             return self._handle_review(args)
         elif command == "tokens":
             return self._handle_tokens(messages)
+        elif command in ["quit", "exit"]:
+            return self._handle_quit()
+        elif command == "tools":
+            return self._handle_tools()
         elif command == "switch-chat":
             return self._handle_switch_chat()
         elif command == "switch-reason":
@@ -124,6 +128,8 @@ Built-in Commands:
   /tokens         - Show current token usage statistics
   /model [name]   - Show current model or set model
   /review [file]  - Request code review
+  /tools          - List all available tools
+  /quit, /exit    - Exit the interactive chat
 
 Model Switching:
   /switch-chat    - Switch to deepseek-chat model
@@ -148,12 +154,26 @@ Custom Commands:"""
         
         return help_text
     
-    def _handle_clear(self) -> str:
+    def _handle_clear(self) -> Dict[str, Any]:
         """Handle /clear command."""
         if hasattr(self.agent, 'conversation_history'):
             self.agent.conversation_history.clear()
-            return "Conversation history cleared."
-        return "No conversation history to clear."
+        return {"status": "Conversation history cleared.", "clear_messages": True}
+    
+    def _handle_quit(self) -> Dict[str, Any]:
+        """Handle /quit and /exit commands."""
+        return {"status": "Goodbye!", "quit": True}
+    
+    def _handle_tools(self) -> str:
+        """Handle /tools command."""
+        if not self.agent.available_tools:
+            return "No tools available."
+        
+        tools_text = "Available tools:\n"
+        for tool_name, tool_info in self.agent.available_tools.items():
+            tools_text += f"  {tool_name}: {tool_info['description']}\n"
+        
+        return tools_text.rstrip()
     
     async def _handle_compact(self, messages: List[Dict[str, Any]] = None) -> str:
         """Handle /compact command."""
@@ -208,29 +228,29 @@ Custom Commands:"""
         
         return result
     
-    def _handle_switch_chat(self) -> str:
+    def _handle_switch_chat(self) -> Dict[str, Any]:
         """Handle /switch-chat command."""
         try:
             from config import load_config
             config = load_config()
             config.deepseek_model = "deepseek-chat"
             config.save()
-            return f"✅ Model switched to: {config.deepseek_model}\n⚠️  Restart the chat session to use the new model"
+            return {"status": f"✅ Model switched to: {config.deepseek_model}", "reload_host": "deepseek"}
         except Exception as e:
             return f"❌ Failed to switch model: {str(e)}"
     
-    def _handle_switch_reason(self) -> str:
+    def _handle_switch_reason(self) -> Dict[str, Any]:
         """Handle /switch-reason command."""
         try:
             from config import load_config
             config = load_config()
             config.deepseek_model = "deepseek-reasoner"
             config.save()
-            return f"✅ Model switched to: {config.deepseek_model}\n⚠️  Restart the chat session to use the new model"
+            return {"status": f"✅ Model switched to: {config.deepseek_model}", "reload_host": "deepseek"}
         except Exception as e:
             return f"❌ Failed to switch model: {str(e)}"
     
-    def _handle_switch_gemini(self) -> str:
+    def _handle_switch_gemini(self) -> Dict[str, Any]:
         """Handle /switch-gemini command."""
         try:
             from config import load_config
@@ -238,11 +258,11 @@ Custom Commands:"""
             config.deepseek_model = "gemini"
             config.gemini_model = "gemini-2.5-flash"
             config.save()
-            return f"✅ Backend switched to: Gemini Flash 2.5 ({config.gemini_model})\n⚠️  Restart the chat session to use Gemini backend"
+            return {"status": f"✅ Backend switched to: Gemini Flash 2.5 ({config.gemini_model})", "reload_host": "gemini"}
         except Exception as e:
             return f"❌ Failed to switch backend: {str(e)}"
     
-    def _handle_switch_gemini_pro(self) -> str:
+    def _handle_switch_gemini_pro(self) -> Dict[str, Any]:
         """Handle /switch-gemini-pro command."""
         try:
             from config import load_config
@@ -250,7 +270,7 @@ Custom Commands:"""
             config.deepseek_model = "gemini"
             config.gemini_model = "gemini-2.5-pro"
             config.save()
-            return f"✅ Backend switched to: Gemini Pro 2.5 ({config.gemini_model})\n⚠️  Restart the chat session to use Gemini backend"
+            return {"status": f"✅ Backend switched to: Gemini Pro 2.5 ({config.gemini_model})", "reload_host": "gemini"}
         except Exception as e:
             return f"❌ Failed to switch backend: {str(e)}"
     
@@ -452,28 +472,9 @@ class InterruptibleInput:
                 self.interrupted = True
                 return None
         
-        # Get input - prompt_toolkit handles paste detection automatically
+        # For normal chat, just use single-line input by default
+        # Users can paste multiline content and it will be handled automatically
         user_input = self.get_input(initial_prompt, multiline_mode=False, allow_escape_interrupt=allow_escape_interrupt)
-        if user_input is None:
-            return None
-        
-        # Check if this looks like it might be incomplete multiline content
-        is_likely_incomplete = (
-            len(user_input) > 300 or  # Very long line
-            (user_input.startswith('def ') or user_input.startswith('class ')) or  # Code definitions
-            '```' in user_input or  # Code blocks
-            (user_input.endswith(':') and len(user_input) > 80) or  # Long lines ending with colon
-            (user_input.endswith('{') and len(user_input) > 30) or  # Likely code
-            user_input.endswith('\\') or  # Backslash continuation
-            user_input.count('\n') > 0  # Already contains newlines
-        )
-        
-        if is_likely_incomplete and '\n' not in user_input:
-            print("(Looks like multiline content - press Enter on empty line to send, or continue typing)")
-            
-            # Use multiline mode with the same thread-safe approach
-            return self.get_input("... ", multiline_mode=True, allow_escape_interrupt=allow_escape_interrupt)
-        
         return user_input
 
 
@@ -1250,6 +1251,31 @@ You are the expert. Complete the task."""
 
         return system_prompt
     
+    def truncate_tool_output_for_display(self, text: str, max_length: int = 500) -> str:
+        """Truncate tool output for user display while preserving full output for LLM."""
+        if not text:
+            return text
+            
+        if len(text) <= max_length:
+            return text
+            
+        # Try to truncate at a line boundary near the limit
+        lines = text.split('\n')
+        truncated = ""
+        for line in lines:
+            if len(truncated + line) > max_length - 50:  # Leave room for truncation message
+                break
+            truncated += line + '\n'
+        
+        truncated = truncated.rstrip('\n')
+        if not truncated:  # If no lines fit, just truncate the first part
+            truncated = text[:max_length-50]
+            
+        remaining_chars = len(text) - len(truncated)
+        remaining_lines = len(text.split('\n')) - len(truncated.split('\n'))
+        
+        return f"{truncated}\n\n... (truncated {remaining_chars} chars, {remaining_lines} more lines for display)"
+
     def format_markdown(self, text: str) -> str:
         """Format markdown text for terminal display."""
         if not text:
@@ -1399,12 +1425,12 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
         """Parse tool calls from the LLM response. Must be implemented by subclasses."""
         pass
     
-    async def interactive_chat(self, input_handler: InterruptibleInput):
+    async def interactive_chat(self, input_handler: InterruptibleInput, existing_messages: List[Dict[str, Any]] = None):
         """Interactive chat session with shared functionality."""
-        messages = []
+        messages = existing_messages or []
         current_task = None
         
-        print("Starting interactive chat. Type 'quit' or 'exit' to end, 'tools' to list available tools.")
+        print("Starting interactive chat. Type /quit or /exit to end, /tools to list available tools.")
         print("Use /help for slash commands. Press ESC at any time to interrupt operations.\n")
         
         while True:
@@ -1421,7 +1447,7 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                     continue
                 
                 # Get user input with smart multiline detection
-                user_input = input_handler.get_multiline_input("[94m[1mYou:[0m ")
+                user_input = input_handler.get_multiline_input("You: ")
                 
                 if user_input is None:  # Interrupted
                     if current_task and not current_task.done():
@@ -1431,25 +1457,27 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                     current_task = None
                     continue
                 
-                if user_input.lower().strip() in ['quit', 'exit', 'q']:
-                    break
-                
-                if user_input.lower().strip() == 'tools':
-                    print("\nAvailable tools:")
-                    for tool_name, tool_info in self.available_tools.items():
-                        print(f"  {tool_name}: {tool_info['description']}")
-                    print()
-                    continue
-                
                 # Handle slash commands
                 if user_input.strip().startswith('/'):
                     try:
                         slash_response = await self.slash_commands.handle_slash_command(user_input.strip(), messages)
                         if slash_response:
-                            # Handle special compact command response
-                            if isinstance(slash_response, dict) and "compacted_messages" in slash_response:
-                                print(f"\n{slash_response['status']}\n")
-                                messages[:] = slash_response["compacted_messages"]  # Update messages in place
+                            # Handle special command responses
+                            if isinstance(slash_response, dict):
+                                if "compacted_messages" in slash_response:
+                                    print(f"\n{slash_response['status']}\n")
+                                    messages[:] = slash_response["compacted_messages"]  # Update messages in place
+                                elif "clear_messages" in slash_response:
+                                    print(f"\n{slash_response['status']}\n")
+                                    messages.clear()  # Clear the local messages list
+                                elif "quit" in slash_response:
+                                    print(f"\n{slash_response['status']}")
+                                    break  # Exit the chat loop
+                                elif "reload_host" in slash_response:
+                                    print(f"\n{slash_response['status']}")
+                                    return {"reload_host": slash_response["reload_host"], "messages": messages}
+                                else:
+                                    print(f"\n{slash_response.get('status', str(slash_response))}\n")
                             else:
                                 print(f"\n{slash_response}\n")
                             continue
@@ -1464,58 +1492,31 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                 # Add user message
                 messages.append({"role": "user", "content": user_input})
                 
+                # Show thinking message
+                print("\nThinking...")
+                
                 # Create response task
                 tools_list = self.convert_tools_to_llm_format()
                 current_task = asyncio.create_task(
                     self.generate_response(messages, tools_list)
                 )
                 
-                # Monitor for interruption while waiting for response
-                old_settings = None
+                # Wait for response with simple interruption handling
                 try:
-                    while not current_task.done():
-                        try:
-                            if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0.1)[0]:
-                                # Set up raw mode for a single character read
-                                if old_settings is None:
-                                    old_settings = termios.tcgetattr(sys.stdin.fileno())
-                                    tty.setraw(sys.stdin.fileno())
-                                
-                                char = sys.stdin.read(1)
-                                if char == '\x1b':  # Escape key
-                                    current_task.cancel()
-                                    input_handler.interrupted = True
-                                    break
-                        except Exception:
-                            pass  # Ignore errors in interrupt monitoring
-                    
-                finally:
-                    # Always restore terminal settings
-                    if old_settings is not None:
-                        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
-                
-                # Handle task cancellation
-                if current_task.cancelled():
-                    continue
-                
-                # Wait for any remaining tasks to complete
-                pending = [t for t in [current_task] if not t.done()]
-                if pending:
-                    done, pending = await asyncio.wait(pending, timeout=0.1)
-                    for task in pending:
-                        task.cancel()
-                
-                if input_handler.interrupted:
-                    print("\n🛑 Request cancelled by user")
+                    await current_task
+                except asyncio.CancelledError:
+                    print("\n🛑 Request cancelled")
                     input_handler.interrupted = False
                     current_task = None
                     continue
-                
-                if current_task and current_task.done() and not current_task.cancelled():
-                    response = current_task.result()
+                except Exception as e:
+                    print(f"\nError generating response: {e}")
                     current_task = None
-                else:
-                    continue  # Request was cancelled, go back to input
+                    continue
+                
+                # Get the response
+                response = current_task.result()
+                current_task = None
                 
                 if hasattr(response, '__aiter__'):
                     # Streaming response
@@ -1545,11 +1546,14 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                                 break
                                 
                             if isinstance(chunk, str):
-                                print(chunk, end="", flush=True)
+                                # Convert \n to \r\n for proper terminal display in raw mode
+                                display_chunk = chunk.replace('\n', '\r\n')
+                                print(display_chunk, end="", flush=True)
                                 full_response += chunk
                             else:
                                 # Handle any non-string chunks if needed
-                                print(str(chunk), end="", flush=True)
+                                display_chunk = str(chunk).replace('\n', '\r\n')
+                                print(display_chunk, end="", flush=True)
                                 full_response += str(chunk)
                     finally:
                         # Always restore terminal settings first
@@ -1663,6 +1667,8 @@ async def chat(ctx, server):
             # Import and create Gemini host
             from mcp_gemini_host import MCPGeminiHost
             host = MCPGeminiHost(config)
+            click.echo(f"Using model: {config.gemini_model}")
+            click.echo(f"Temperature: {config.gemini_temperature}")
         else:
             if not config.deepseek_api_key:
                 click.echo("Error: DEEPSEEK_API_KEY not set. Run 'init' command first and update .env file.")
@@ -1671,6 +1677,8 @@ async def chat(ctx, server):
             # Create Deepseek host
             from mcp_deepseek_host import MCPDeepseekHost
             host = MCPDeepseekHost(config)
+            click.echo(f"Using model: {config.deepseek_model}")
+            click.echo(f"Temperature: {config.deepseek_temperature}")
         
         # Connect to additional MCP servers specified via --server option
         for server_spec in server:
@@ -1693,9 +1701,56 @@ async def chat(ctx, server):
             else:
                 click.echo(f"✅ Connected to MCP server: {server_name}")
         
-        # Start interactive chat using the host's class method
+        # Start interactive chat with host reloading support
         input_handler = InterruptibleInput()
-        await host.interactive_chat(input_handler)
+        messages = []
+        
+        while True:
+            chat_result = await host.interactive_chat(input_handler, messages)
+            
+            # Check if we need to reload the host
+            if isinstance(chat_result, dict) and "reload_host" in chat_result:
+                messages = chat_result.get("messages", [])
+                reload_type = chat_result["reload_host"]
+                
+                # Shutdown current host
+                await host.shutdown()
+                
+                # Reload config and create new host
+                config = load_config()
+                
+                if reload_type == "gemini":
+                    if not config.gemini_api_key:
+                        click.echo("Error: GEMINI_API_KEY not set. Cannot switch to Gemini.")
+                        break
+                    from mcp_gemini_host import MCPGeminiHost
+                    host = MCPGeminiHost(config)
+                    click.echo(f"Switched to model: {config.gemini_model}")
+                    click.echo(f"Temperature: {config.gemini_temperature}")
+                else:  # deepseek
+                    if not config.deepseek_api_key:
+                        click.echo("Error: DEEPSEEK_API_KEY not set. Cannot switch to DeepSeek.")
+                        break
+                    from mcp_deepseek_host import MCPDeepseekHost
+                    host = MCPDeepseekHost(config)
+                    click.echo(f"Switched to model: {config.deepseek_model}")
+                    click.echo(f"Temperature: {config.deepseek_temperature}")
+                
+                # Reconnect to MCP servers
+                for server_name, server_config in config.mcp_servers.items():
+                    click.echo(f"Reconnecting to MCP server: {server_name}")
+                    success = await host.start_mcp_server(server_name, server_config)
+                    if success:
+                        click.echo(f"✅ Reconnected to MCP server: {server_name}")
+                    else:
+                        click.echo(f"⚠️  Failed to reconnect to MCP server: {server_name}")
+                
+                # Continue with the same input handler and preserved messages
+                print(f"\n🔄 Continuing chat with {len(messages)} preserved messages...\n")
+                continue
+            else:
+                # Normal exit from chat
+                break
         
     except KeyboardInterrupt:
         pass

@@ -683,7 +683,9 @@ class MCPGeminiHost(BaseMCPAgent):
                 result_content += "\n⚠️  Command failed - take this into account for your next action."
             function_results.append(result_content)
             
-            tool_result_msg = f"     Result: {tool_result[:200]}..." if len(tool_result) > 200 else f"     Result: {tool_result}"
+            # Truncate tool output for display to user
+            display_result = self.truncate_tool_output_for_display(tool_result)
+            tool_result_msg = f"     Result: {display_result}"
             if not tool_success:
                 tool_result_msg += " ⚠️  Command failed - take this into account for your next action."
             
