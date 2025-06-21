@@ -1,1 +1,0 @@
-This has been replaced file for the replace_in_file tool.
