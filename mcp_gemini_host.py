@@ -585,11 +585,16 @@ class MCPGeminiHost(BaseMCPAgent):
         function_results = []
         all_tool_output = []  # Collect all tool execution output for non-interactive mode
         
+        # Prepare tool info for parallel execution
+        tool_info_list = []
+        tool_coroutines = []
+        
+        # Check for interruption before starting any tool execution
+        if input_handler and input_handler.interrupted:
+            all_tool_output.append("🛑 Tool execution interrupted by user")
+            return function_results, all_tool_output
+        
         for i, function_call in enumerate(function_calls, 1):
-            # Check for interruption before each tool execution
-            if input_handler and input_handler.interrupted:
-                all_tool_output.append("🛑 Tool execution interrupted by user")
-                break
             tool_name = function_call.name.replace("_", ":", 1)  # Convert back to MCP format
             
             # Parse arguments from function call
@@ -616,87 +621,67 @@ class MCPGeminiHost(BaseMCPAgent):
                     logger.warning(f"Raw args: {function_call.args}")
                     arguments = {}
             
+            # Store tool info for processing
+            tool_info_list.append((i, tool_name, arguments))
+            
+            # Display tool execution step
             tool_execution_msg = self.display_tool_execution_step(i, tool_name, arguments, self.is_subagent, interactive=not self.is_subagent)
             if interactive and not streaming_mode:
                 print(f"\r\x1b[K{tool_execution_msg}", flush=True)
             elif interactive and streaming_mode:
-                # For streaming mode, show tool execution directly to user without adding to output
                 print(f"\r\x1b[K{tool_execution_msg}", flush=True)
             else:
-                # Only add to tool output for non-interactive mode
                 all_tool_output.append(tool_execution_msg)
             
-            # Execute the tool with interruption support
-            tool_success = True
-            tool_result = ""
-            
+            # Create coroutine for parallel execution
+            tool_coroutines.append(self._execute_mcp_tool(tool_name, arguments, None))
+        
+        # Execute all tools in parallel
+        if tool_coroutines:
             try:
-                if interactive and input_handler:
-                    # Create interruptible tool execution
-                    tool_task = asyncio.create_task(self._execute_mcp_tool(tool_name, arguments, input_handler))
-                    
-                    # Monitor for interruption while tool executes
-                    while not tool_task.done():
-                        if input_handler.interrupted:
-                            tool_task.cancel()
-                            all_tool_output.append(f"🛑 Tool {tool_name} execution cancelled by user")
-                            function_results.append(f"Tool {tool_name} CANCELLED: User interrupted execution")
-                            return function_results, all_tool_output
-                        
-                        # Check for escape key input
-                        try:
-                            if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0.1)[0]:
-                                old_settings = termios.tcgetattr(sys.stdin.fileno())
-                                tty.setraw(sys.stdin.fileno())
-                                char = sys.stdin.read(1)
-                                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
-                                if char == '\x1b':  # Escape key
-                                    input_handler.interrupted = True
-                                    tool_task.cancel()
-                                    all_tool_output.append(f"🛑 Tool {tool_name} execution cancelled by user")
-                                    function_results.append(f"Tool {tool_name} CANCELLED: User interrupted execution")
-                                    return function_results, all_tool_output
-                        except:
-                            pass  # Ignore errors in interrupt checking
-                        
-                        await asyncio.sleep(0.1)
-                    
-                    try:
-                        tool_result = tool_task.result()
-                    except asyncio.CancelledError:
-                        all_tool_output.append(f"🛑 Tool {tool_name} execution cancelled")
-                        function_results.append(f"Tool {tool_name} CANCELLED: Task was cancelled")
-                        return function_results, all_tool_output
-                else:
-                    # Non-interactive or no input handler - execute normally
-                    tool_result = await self._execute_mcp_tool(tool_name, arguments, None)
+                # Execute all tool calls concurrently like DeepSeek
+                tool_results = await asyncio.gather(*tool_coroutines, return_exceptions=True)
                 
-                # Check if tool result indicates an error
-                if tool_result.startswith("Error:") or "error" in tool_result.lower()[:100]:
-                    tool_success = False
+                # Process results in order
+                for (i, tool_name, arguments), tool_result in zip(tool_info_list, tool_results):
+                    tool_success = True
                     
+                    # Handle exceptions
+                    if isinstance(tool_result, Exception):
+                        tool_success = False
+                        tool_result = f"Exception during execution: {str(tool_result)}"
+                    elif isinstance(tool_result, str):
+                        # Check if tool result indicates an error
+                        if tool_result.startswith("Error:") or "error" in tool_result.lower()[:100]:
+                            tool_success = False
+                    else:
+                        # Convert non-string results to string
+                        tool_result = str(tool_result)
+                    
+                    # Format result with success/failure status
+                    status = "SUCCESS" if tool_success else "FAILED"
+                    result_content = f"Tool {tool_name} {status}: {tool_result}"
+                    if not tool_success:
+                        result_content += "\n⚠️  Command failed - take this into account for your next action."
+                    function_results.append(result_content)
+                    
+                    # Use unified tool result display
+                    tool_result_msg = self.display_tool_execution_result(tool_result, not tool_success, self.is_subagent, interactive=not self.is_subagent)
+                    
+                    # Fix newlines in tool result messages to have proper cursor positioning
+                    if interactive and (not streaming_mode or streaming_mode):
+                        # Replace any bare newlines with \n\r to ensure proper cursor positioning
+                        formatted_result_msg = tool_result_msg.replace('\n', '\n\r')
+                        print(f"\r\x1b[K{formatted_result_msg}", flush=True)
+                    else:
+                        # Only add to tool output for non-interactive mode
+                        all_tool_output.append(tool_result_msg)
+                        
             except Exception as e:
-                tool_success = False
-                tool_result = f"Exception during execution: {str(e)}"
-            
-            # Format result with success/failure status
-            status = "SUCCESS" if tool_success else "FAILED"
-            result_content = f"Tool {tool_name} {status}: {tool_result}"
-            if not tool_success:
-                result_content += "\n⚠️  Command failed - take this into account for your next action."
-            function_results.append(result_content)
-            
-            # Use unified tool result display
-            tool_result_msg = self.display_tool_execution_result(tool_result, not tool_success, self.is_subagent, interactive=not self.is_subagent)
-            
-            # Fix newlines in tool result messages to have proper cursor positioning
-            if interactive and (not streaming_mode or streaming_mode):
-                # Replace any bare newlines with \n\r to ensure proper cursor positioning
-                formatted_result_msg = tool_result_msg.replace('\n', '\n\r')
-                print(f"\r\x1b[K{formatted_result_msg}", flush=True)
-            else:
-                # Only add to tool output for non-interactive mode
-                all_tool_output.append(tool_result_msg)
+                # Handle any unexpected errors during parallel execution
+                error_msg = f"Error during parallel tool execution: {str(e)}"
+                all_tool_output.append(error_msg)
+                function_results.append(f"PARALLEL EXECUTION FAILED: {error_msg}")
         
         return function_results, all_tool_output
 

@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 class MCPDeepseekHost(BaseMCPAgent):
     """MCP Host that uses Deepseek as the language model backend."""
     
-    def __init__(self, config: HostConfig):
-        super().__init__(config)
+    def __init__(self, config: HostConfig, is_subagent: bool = False):
+        super().__init__(config, is_subagent)
         self.deepseek_config = config.get_deepseek_config()
         
         # Store last reasoning content for deepseek-reasoner
@@ -527,50 +527,95 @@ class MCPDeepseekHost(BaseMCPAgent):
                     })
                     
                     # Execute tools and add results to conversation
+                    # Execute all tools in parallel like the non-streaming version
+                    tool_coroutines = []
+                    tool_call_mapping = {}
+                    
+                    # Prepare all tool executions
                     for i, tool_call in enumerate(tool_calls, 1):
                         tool_name = tool_call.function.name.replace("_", ":", 1)
                         try:
                             arguments = json.loads(tool_call.function.arguments)
                             yield f"\n{i}. Executing {tool_name}...\n"
                             
-                            tool_result, keepalive_messages = await self._execute_mcp_tool_with_keepalive(tool_name, arguments, keepalive_interval=self.deepseek_config.keepalive_interval)
-                            
-                            # Yield any keep-alive messages that were generated
-                            for msg in keepalive_messages:
-                                yield f"{msg}\n"
-                            
-                            # Check if tool failed and add appropriate notice
-                            tool_failed = tool_result.startswith("Error:") or "error" in tool_result.lower()[:100]
-                            # Truncate tool output for display to user
-                            display_result = self.truncate_tool_output_for_display(tool_result)
-                            result_msg = f"Result: {display_result}"
-                            if tool_failed:
-                                result_msg += " ⚠️  Command failed - take this into account for your next action."
-                            yield f"{result_msg}\n"
-                            
-                            # Add tool result to conversation
-                            current_messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": tool_result
-                            })
+                            tool_coroutines.append(
+                                self._execute_mcp_tool_with_keepalive(tool_name, arguments, keepalive_interval=self.deepseek_config.keepalive_interval)
+                            )
+                            tool_call_mapping[len(tool_coroutines) - 1] = tool_call
                             
                         except json.JSONDecodeError as e:
                             error_msg = f"Error parsing arguments for {tool_name}: {e} ⚠️  Command failed - take this into account for your next action."
                             yield f"{error_msg}\n"
+                            # Add error to conversation
                             current_messages.append({
                                 "role": "tool",
                                 "tool_call_id": tool_call.id,
                                 "content": error_msg
                             })
-                        except Exception as e:
-                            error_msg = f"Error executing {tool_name}: {e} ⚠️  Command failed - take this into account for your next action."
-                            yield f"{error_msg}\n"
-                            current_messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": error_msg
-                            })
+                    
+                    # Execute all tools with real-time streaming
+                    if tool_coroutines:
+                        yield f"\n🔧 Executing {len(tool_coroutines)} tool(s) in parallel...\n"
+                        
+                        # Create tasks with identifiers for real-time completion tracking
+                        tasks_to_tools = {}
+                        for i, (coro, tool_call) in enumerate(zip(tool_coroutines, tool_call_mapping.values())):
+                            task = asyncio.create_task(coro)
+                            tasks_to_tools[task] = (tool_call, i + 1)
+                        
+                        pending_tasks = set(tasks_to_tools.keys())
+                        completed_count = 0
+                        
+                        # Process tools as they complete for real-time output
+                        while pending_tasks:
+                            done, pending_tasks = await asyncio.wait(
+                                pending_tasks, return_when=asyncio.FIRST_COMPLETED
+                            )
+                            
+                            for task in done:
+                                completed_count += 1
+                                tool_call, tool_num = tasks_to_tools[task]
+                                
+                                try:
+                                    result = task.result()
+                                    
+                                    if isinstance(result, Exception):
+                                        error_msg = f"Error executing tool: {str(result)} ⚠️  Command failed - take this into account for your next action."
+                                        yield f"\nTool {completed_count} Result: {error_msg}\n"
+                                        current_messages.append({
+                                            "role": "tool", 
+                                            "tool_call_id": tool_call.id,
+                                            "content": error_msg
+                                        })
+                                    else:
+                                        tool_result, keepalive_messages = result
+                                        
+                                        # Yield any keep-alive messages immediately
+                                        for msg in keepalive_messages:
+                                            yield f"{msg}\n"
+                                        
+                                        # Check if tool failed and add appropriate notice
+                                        tool_failed = tool_result.startswith("Error:") or "error" in tool_result.lower()[:100]
+                                        result_msg = f"Result: {tool_result}"
+                                        if tool_failed:
+                                            result_msg += " ⚠️  Command failed - take this into account for your next action."
+                                        yield f"\nTool {completed_count} {result_msg}\n"
+                                        
+                                        # Add tool result to conversation
+                                        current_messages.append({
+                                            "role": "tool",
+                                            "tool_call_id": tool_call.id,
+                                            "content": tool_result
+                                        })
+                                        
+                                except Exception as e:
+                                    error_msg = f"Error executing tool: {str(e)} ⚠️  Command failed - take this into account for your next action."
+                                    yield f"\nTool {completed_count} Result: {error_msg}\n"
+                                    current_messages.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_call.id, 
+                                        "content": error_msg
+                                    })
                     
                     yield "\n✅ Tool execution complete. Continuing...\n"
                     

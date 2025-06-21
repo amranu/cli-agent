@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cli-agent"
+version = "1.0.0"
+description = "MCP-enabled AI assistant with tool integration"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "CLI Agent Team"},
+]
+keywords = ["ai", "assistant", "mcp", "tools", "cli", "chatbot", "deepseek", "gemini"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Tools",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "openai>=1.0.0",
+    "google-genai>=1.0.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "click>=8.0.0",
+    "prompt_toolkit>=3.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/anthropics/cli-agent"
+"Bug Reports" = "https://github.com/anthropics/cli-agent/issues"
+"Source Code" = "https://github.com/anthropics/cli-agent"
+
+[project.scripts]
+agent = "agent:main"
+
+[tool.setuptools]
+py-modules = ["agent", "config", "mcp_deepseek_host", "mcp_gemini_host"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]
+exclude = ["tests*"]

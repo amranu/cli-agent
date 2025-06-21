@@ -481,11 +481,21 @@ class InterruptibleInput:
 class BaseMCPAgent(ABC):
     """Base class for MCP agents with shared functionality."""
     
-    def __init__(self, config: HostConfig):
+    def __init__(self, config: HostConfig, is_subagent: bool = False):
         self.config = config
+        self.is_subagent = is_subagent
         self.mcp_clients: Dict[str, ClientSession] = {}
         self.available_tools: Dict[str, Dict] = {}
         self.conversation_history: List[Dict[str, Any]] = []
+        
+        # Task management for subprocess-based subagents
+        self.running_tasks: Dict[str, Dict] = {}  # task_id -> task_info
+        self.task_counter = 0
+        self.current_batch_id = None  # Track batches of parallel tasks
+        self.batch_counter = 0
+        
+        # Communication socket for subagent forwarding (set by parent process)
+        self.comm_socket = None
         
         # Add built-in tools
         self._add_builtin_tools()
@@ -643,12 +653,52 @@ class BaseMCPAgent(ABC):
                     "required": ["url"]
                 },
                 "client": None
+            },
+            "builtin:task": {
+                "server": "builtin",
+                "name": "task",
+                "description": "Spawn a subagent to investigate a specific task and return a comprehensive summary",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "description": {"type": "string", "description": "A brief description of the task (3-5 words)"},
+                        "prompt": {"type": "string", "description": "Detailed instructions for what the subagent should investigate or accomplish"},
+                        "context": {"type": "string", "description": "Optional additional context or files the subagent should consider"}
+                    },
+                    "required": ["description", "prompt"]
+                },
+                "client": None
+            },
+            "builtin:task_status": {
+                "server": "builtin",
+                "name": "task_status",
+                "description": "Check the status of running subagent tasks",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {"type": "string", "description": "Optional specific task ID to check. If not provided, shows all tasks"}
+                    }
+                },
+                "client": None
+            },
+            "builtin:task_results": {
+                "server": "builtin",
+                "name": "task_results",
+                "description": "Retrieve the results and summaries from completed subagent tasks",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "include_running": {"type": "boolean", "description": "Whether to include running tasks (default: false, only completed)"},
+                        "clear_after_retrieval": {"type": "boolean", "description": "Whether to clear tasks after retrieving results (default: true)"}
+                    }
+                },
+                "client": None
             }
         }
         
         self.available_tools.update(builtin_tools)
     
-    def _execute_builtin_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
+    async def _execute_builtin_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Execute a built-in tool."""
         if tool_name == "bash_execute":
             return self._bash_execute(args)
@@ -670,6 +720,12 @@ class BaseMCPAgent(ABC):
         #     return self._edit_file(args)
         elif tool_name == "webfetch":
             return self._webfetch(args)
+        elif tool_name == "task":
+            return await self._task(args)
+        elif tool_name == "task_status":
+            return self._task_status(args)
+        elif tool_name == "task_results":
+            return self._task_results(args)
         else:
             return f"Unknown built-in tool: {tool_name}"
     
@@ -1036,6 +1092,644 @@ class BaseMCPAgent(ABC):
         # Return the content (truncated if limit was provided)
         return content
     
+    async def _task(self, args: Dict[str, Any]) -> str:
+        """Spawn a subagent subprocess to investigate a task and return immediately."""
+        description = args.get("description", "")
+        prompt = args.get("prompt", "")
+        context = args.get("context", "")
+        
+        if not description:
+            return "Error: No task description provided"
+        if not prompt:
+            return "Error: No task prompt provided"
+        
+        try:
+            # Generate unique task ID and batch tracking
+            self.task_counter += 1
+            task_id = f"task_{self.task_counter}"
+            
+            # Create a new batch if this is the first task in a while
+            # (assumes tasks called within 5 seconds are part of the same batch)
+            current_time = time.time()
+            if (self.current_batch_id is None or 
+                not self.running_tasks or 
+                current_time - max(task['start_time'] for task in self.running_tasks.values()) > 5):
+                self.batch_counter += 1
+                self.current_batch_id = f"batch_{self.batch_counter}"
+            
+            # Create task prompt
+            task_prompt = f"""You are a specialized subagent tasked with investigating and completing the following task:
+
+TASK: {description}
+
+INSTRUCTIONS:
+{prompt}"""
+            
+            if context:
+                task_prompt += f"""
+
+ADDITIONAL CONTEXT:
+{context}"""
+            
+            task_prompt += """
+
+Your goal is to thoroughly investigate this task using all available tools and provide a comprehensive summary of your findings. Be systematic, thorough, and provide actionable insights.
+
+IMPORTANT: 
+- Use tools extensively to gather information
+- Provide a clear, well-structured summary
+- Include specific details and findings
+- If you encounter any issues, document them clearly
+- Your response will be returned to the parent agent, so make it complete and self-contained"""
+            
+            # Write task prompt to a temporary file
+            import tempfile
+            import json
+            import sys
+            import os
+            
+            # Create a communication socket for tool execution forwarding
+            import socket
+            comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            comm_socket.bind(('localhost', 0))  # Bind to any available port
+            comm_port = comm_socket.getsockname()[1]
+            comm_socket.listen(1)
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as task_file:
+                task_data = {
+                    "task_id": task_id,
+                    "description": description,
+                    "prompt": task_prompt,
+                    "timestamp": time.time(),
+                    "comm_port": comm_port  # Add communication port
+                }
+                json.dump(task_data, task_file)
+                task_file_path = task_file.name
+            
+            # Start subprocess for subagent
+            python_executable = sys.executable
+            script_path = os.path.abspath(__file__)
+            
+            # Start subprocess with task execution
+            process = await asyncio.create_subprocess_exec(
+                python_executable, script_path, "execute-task", task_file_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=os.getcwd()
+            )
+            
+            # Store task info
+            self.running_tasks[task_id] = {
+                "description": description,
+                "process": process,
+                "task_file": task_file_path,
+                "result_file": task_file_path.replace('.json', '_result.json'),
+                "start_time": current_time,
+                "output_buffer": "",
+                "completed": False,
+                "result": None,
+                "batch_id": self.current_batch_id,
+                "comm_socket": comm_socket,
+                "comm_port": comm_port
+            }
+            
+            # Start monitoring task in background
+            asyncio.create_task(self._monitor_task(task_id))
+            
+            # Start communication handler for tool execution forwarding
+            asyncio.create_task(self._handle_subagent_communication(task_id))
+            
+            # Return immediately to allow main LLM to continue
+            print(f"\n\r🤖 [SUBAGENT] Starting task {task_id}: {description}\r")
+            print(f"🎯 [SUBAGENT] Task running in subprocess...\r")
+            
+            return f"""[SUBAGENT TASK STARTED]
+Task ID: {task_id}
+Description: {description}
+Status: Running in subprocess
+
+The subagent is now running independently and will report progress. You can continue with other tasks while this completes."""
+            
+        except Exception as e:
+            logger.error(f"Error starting subagent task: {e}")
+            return f"Error starting subagent task '{description}': {str(e)}"
+    
+    async def _monitor_task(self, task_id: str):
+        """Monitor a running task subprocess and display its output."""
+        if task_id not in self.running_tasks:
+            return
+        
+        task_info = self.running_tasks[task_id]
+        process = task_info["process"]
+        
+        try:
+            import os
+            
+            # Monitor stdout and stderr
+            while True:
+                # Check if process is still running
+                if process.returncode is not None:
+                    break
+                
+                # Read available output
+                try:
+                    stdout_data = await asyncio.wait_for(process.stdout.read(1024), timeout=0.1)
+                    if stdout_data:
+                        output = stdout_data.decode('utf-8', errors='ignore')
+                        # Display subagent output with proper formatting
+                        formatted_output = output.replace('\n', '\n\r')
+                        print(f"{formatted_output}", end='', flush=True)
+                        task_info["output_buffer"] += output
+                except asyncio.TimeoutError:
+                    pass
+                
+                await asyncio.sleep(0.1)
+            
+            # Process completed, get final output
+            try:
+                stdout, stderr = await process.communicate()
+                if stdout:
+                    output = stdout.decode('utf-8', errors='ignore')
+                    formatted_output = output.replace('\n', '\n\r')
+                    print(f"{formatted_output}", end='', flush=True)
+                    task_info["output_buffer"] += output
+                
+                if stderr and stderr.strip():
+                    error_output = stderr.decode('utf-8', errors='ignore')
+                    print(f"\n\r🤖 [SUBAGENT ERROR {task_id}]: {error_output}\r")
+            except Exception as e:
+                print(f"\n\r🤖 [SUBAGENT ERROR {task_id}]: Failed to read final output: {e}\r")
+            
+            # Mark task as completed
+            task_info["completed"] = True
+            task_info["end_time"] = time.time()
+            
+            # Try to collect the result
+            try:
+                import json
+                result_file = task_info["result_file"]
+                if os.path.exists(result_file):
+                    with open(result_file, 'r') as f:
+                        result_data = json.load(f)
+                        task_info["result"] = result_data.get("result", "No result captured")
+                    # Clean up result file
+                    os.unlink(result_file)
+                else:
+                    task_info["result"] = "Result file not found"
+            except Exception as e:
+                task_info["result"] = f"Error collecting result: {e}"
+            
+            print(f"\n\r🤖 [SUBAGENT] Task {task_id} completed: {task_info['description']}\r")
+            
+            # Check if all tasks in the current batch are completed
+            self._check_all_tasks_completed()
+            
+            # Clean up task file
+            try:
+                os.unlink(task_info["task_file"])
+            except Exception:
+                pass
+                
+        except Exception as e:
+            logger.error(f"Error monitoring task {task_id}: {e}")
+            print(f"\n\r🤖 [SUBAGENT ERROR {task_id}]: Monitoring failed: {e}\r")
+    
+    async def _handle_subagent_communication(self, task_id: str):
+        """Handle communication from subagent for tool execution forwarding."""
+        if task_id not in self.running_tasks:
+            return
+        
+        import socket
+        import json
+        
+        task_info = self.running_tasks[task_id]
+        comm_socket = task_info["comm_socket"]
+        
+        try:
+            # Wait for subagent to connect with timeout
+            comm_socket.settimeout(10.0)  # 10 second timeout for connection
+            try:
+                # Use asyncio to make the blocking accept() non-blocking for the event loop
+                loop = asyncio.get_event_loop()
+                client_socket, addr = await loop.run_in_executor(None, comm_socket.accept)
+                logger.debug(f"Subagent {task_id} connected for communication")
+            except socket.timeout:
+                logger.warning(f"Subagent {task_id} did not connect within timeout")
+                return
+            
+            # Handle messages from subagent
+            with client_socket:
+                client_socket.settimeout(1.0)  # 1 second timeout for messages
+                buffer = ""
+                
+                # Store client socket reference for sending responses
+                task_info["client_socket"] = client_socket
+                
+                while task_id in self.running_tasks and not self.running_tasks[task_id].get("completed", False):
+                    try:
+                        # Use executor to make recv non-blocking for event loop
+                        data = await loop.run_in_executor(None, client_socket.recv, 4096)
+                        if not data:
+                            break
+                        data = data.decode('utf-8')
+                        
+                        buffer += data
+                        
+                        # Process complete messages (newline-delimited JSON)
+                        while '\n' in buffer:
+                            line, buffer = buffer.split('\n', 1)
+                            if line.strip():
+                                try:
+                                    message = json.loads(line.strip())
+                                    await self._process_subagent_message(task_id, message)
+                                except json.JSONDecodeError as e:
+                                    logger.error(f"Invalid JSON from subagent {task_id}: {e}")
+                    
+                    except socket.timeout:
+                        # Continue waiting for more messages
+                        continue
+                    except Exception as e:
+                        logger.error(f"Error receiving from subagent {task_id}: {e}")
+                        break
+                        
+        except Exception as e:
+            logger.error(f"Error in subagent communication for {task_id}: {e}")
+        finally:
+            try:
+                comm_socket.close()
+            except:
+                pass
+    
+    async def _process_subagent_message(self, task_id: str, message: dict):
+        """Process a message from a subagent."""
+        try:
+            msg_type = message.get("type")
+            
+            if msg_type == "tool_execution_request":
+                # Handle tool execution request from subagent (don't await - run concurrently)
+                asyncio.create_task(self._handle_subagent_tool_request(task_id, message))
+                
+            elif msg_type == "display_message":
+                # Handle display messages from subagent - print immediately in main process
+                display_msg = message.get("message", "")
+                print(display_msg, flush=True)
+                
+            elif msg_type == "tool_execution":
+                # Forward tool execution to main chat
+                tool_name = message.get("tool_name", "unknown")
+                tool_args = message.get("tool_args", {})
+                tool_result = message.get("tool_result", "")
+                
+                # Display tool execution in main chat
+                print(f"\n\r🔧 [SUBAGENT {task_id}] Executing tool: {tool_name}\r")
+                if tool_args:
+                    print(f"📝 [SUBAGENT {task_id}] Arguments: {str(tool_args)[:100]}{'...' if len(str(tool_args)) > 100 else ''}\r")
+                if tool_result:
+                    # Truncate long results for display
+                    result_preview = str(tool_result)[:300] + "..." if len(str(tool_result)) > 300 else str(tool_result)
+                    print(f"✅ [SUBAGENT {task_id}] Result: {result_preview}\r")
+                    
+            elif msg_type == "status":
+                # Handle status updates
+                status = message.get("status", "")
+                print(f"\n\r📊 [SUBAGENT {task_id}] {status}\r")
+                
+            elif msg_type == "error":
+                # Handle error messages
+                error = message.get("error", "")
+                print(f"\n\r❌ [SUBAGENT {task_id}] Error: {error}\r")
+                
+        except Exception as e:
+            logger.error(f"Error processing subagent message from {task_id}: {e}")
+    
+    async def _handle_subagent_tool_request(self, task_id: str, message: dict):
+        """Handle a tool execution request from a subagent."""
+        try:
+            import json
+            import asyncio
+            
+            request_id = message.get("request_id")
+            tool_key = message.get("tool_key")
+            tool_name = message.get("tool_name")
+            tool_args = message.get("tool_args", {})
+            
+            if not request_id or not tool_key or not tool_name:
+                logger.error(f"Invalid tool request from subagent {task_id}: missing required fields")
+                return
+            
+            # Get the subagent's communication socket
+            if task_id not in self.running_tasks:
+                logger.error(f"Task {task_id} not found for tool request")
+                return
+                
+            task_info = self.running_tasks[task_id]
+            comm_socket = task_info.get("comm_socket")
+            if not comm_socket:
+                logger.error(f"No communication socket for task {task_id}")
+                return
+            
+            # Display tool execution in main chat
+            print(f"\n🔧 [SUBAGENT {task_id}] Executing tool: {tool_name}", flush=True)
+            if tool_args:
+                args_preview = str(tool_args)[:100] + "..." if len(str(tool_args)) > 100 else str(tool_args)
+                print(f"📝 [SUBAGENT {task_id}] Arguments: {args_preview}", flush=True)
+            
+            # Execute the tool on behalf of the subagent
+            try:
+                # Temporarily disable subagent mode to execute locally
+                original_is_subagent = self.is_subagent
+                self.is_subagent = False
+                
+                result = await self._execute_mcp_tool(tool_key, tool_args)
+                
+                # Restore subagent mode
+                self.is_subagent = original_is_subagent
+                
+                # Display result in main chat
+                result_preview = str(result)[:300] + "..." if len(str(result)) > 300 else str(result)
+                print(f"✅ [SUBAGENT {task_id}] Result: {result_preview}", flush=True)
+                
+                # Send successful response back to subagent (with full result so it can continue)
+                response = {
+                    "type": "tool_execution_response", 
+                    "request_id": request_id,
+                    "success": True,
+                    "result": result  # Full result for subagent to continue its work
+                }
+                
+            except Exception as e:
+                error_msg = f"Error executing tool {tool_name}: {str(e)}"
+                logger.error(f"Tool execution error for subagent {task_id}: {e}")
+                
+                # Display error in main chat
+                print(f"❌ [SUBAGENT {task_id}] Tool error: {error_msg}", flush=True)
+                
+                # Send error response back to subagent
+                response = {
+                    "type": "tool_execution_response",
+                    "request_id": request_id,
+                    "success": False,
+                    "error": error_msg
+                }
+            
+            # Send response back to subagent through client socket
+            try:
+                client_socket = task_info.get("client_socket")
+                if client_socket:
+                    response_json = json.dumps(response) + "\n"
+                    client_socket.send(response_json.encode('utf-8'))
+                else:
+                    logger.error(f"No client socket available for subagent {task_id}")
+                
+            except Exception as e:
+                logger.error(f"Error sending response to subagent {task_id}: {e}")
+                
+        except Exception as e:
+            logger.error(f"Error handling tool request from subagent {task_id}: {e}")
+    
+    def _task_status(self, args: Dict[str, Any]) -> str:
+        """Check the status of running subagent tasks."""
+        task_id = args.get("task_id", None)
+        
+        if not self.running_tasks:
+            return "No tasks are currently running."
+        
+        if task_id:
+            # Check specific task
+            if task_id not in self.running_tasks:
+                return f"Task {task_id} not found."
+            
+            task_info = self.running_tasks[task_id]
+            status = "Completed" if task_info["completed"] else "Running"
+            runtime = time.time() - task_info["start_time"]
+            
+            result = f"""Task Status: {task_id}
+Description: {task_info["description"]}
+Status: {status}
+Runtime: {runtime:.2f} seconds
+Output Buffer Size: {len(task_info["output_buffer"])} characters"""
+            
+            if task_info["completed"] and "end_time" in task_info:
+                total_time = task_info["end_time"] - task_info["start_time"]
+                result += f"\nTotal Time: {total_time:.2f} seconds"
+            
+            return result
+        else:
+            # Check all tasks
+            result = f"Task Status Summary ({len(self.running_tasks)} tasks):\n"
+            for tid, task_info in self.running_tasks.items():
+                status = "Completed" if task_info["completed"] else "Running"
+                runtime = time.time() - task_info["start_time"]
+                result += f"\n{tid}: {task_info['description']} - {status} ({runtime:.1f}s)"
+            
+            return result
+    
+    def _task_results(self, args: Dict[str, Any]) -> str:
+        """Retrieve the results and summaries from completed subagent tasks."""
+        try:
+            # Validate arguments - the error suggests args might not be a dict
+            if not isinstance(args, dict):
+                logger.error(f"_task_results received invalid args type: {type(args)}")
+                return f"Error: Invalid arguments type: {type(args)}. Expected dictionary."
+            
+            include_running = args.get("include_running", False)
+            clear_after_retrieval = args.get("clear_after_retrieval", True)
+            
+            # Check if running_tasks exists and is valid
+            if not hasattr(self, 'running_tasks') or not isinstance(self.running_tasks, dict):
+                return "No task manager found or tasks corrupted."
+                
+            if not self.running_tasks:
+                return "No tasks found."
+            
+            # Simple approach - just return basic info to avoid complex iteration bugs
+            task_count = len(self.running_tasks)
+            completed_count = sum(1 for task in self.running_tasks.values() 
+                                if isinstance(task, dict) and task.get("completed", False))
+            running_count = task_count - completed_count
+            
+            result_parts = [
+                f"=== TASK RESULTS SUMMARY ===",
+                f"Total tasks: {task_count}",
+                f"Completed: {completed_count}",
+                f"Running: {running_count}",
+                ""
+            ]
+            
+            # Show completed tasks
+            if completed_count > 0:
+                result_parts.append("=== COMPLETED TASKS ===")
+                for task_id, task_info in self.running_tasks.items():
+                    if not isinstance(task_info, dict) or not task_info.get("completed", False):
+                        continue
+                    
+                    runtime = task_info.get('end_time', time.time()) - task_info.get('start_time', 0)
+                    result_parts.append(f"\n{task_id}: {task_info.get('description', 'Unknown')} - ✅ Completed ({runtime:.2f}s)")
+                    
+                    result = task_info.get("result", "No result")
+                    if result and len(str(result)) > 10:
+                        # Include full results (no truncation)
+                        result_parts.append(f"Result: {str(result)}")
+            
+            # Show running tasks if requested
+            if include_running and running_count > 0:
+                result_parts.append("\n=== RUNNING TASKS ===")
+                for task_id, task_info in self.running_tasks.items():
+                    if not isinstance(task_info, dict) or task_info.get("completed", False):
+                        continue
+                    
+                    runtime = time.time() - task_info.get('start_time', 0)
+                    result_parts.append(f"\n{task_id}: {task_info.get('description', 'Unknown')} - ⏳ Running ({runtime:.2f}s)")
+            
+            # Clear completed tasks if requested
+            if clear_after_retrieval and completed_count > 0:
+                to_remove = [tid for tid, task in self.running_tasks.items() 
+                           if isinstance(task, dict) and task.get("completed", False)]
+                for task_id in to_remove:
+                    del self.running_tasks[task_id]
+                result_parts.append(f"\n--- {len(to_remove)} completed tasks cleared from memory ---")
+            
+            return "\n".join(result_parts)
+        
+        except Exception as e:
+            logger.error(f"Error in _task_results: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return f"Error retrieving task results: {str(e)}"
+    
+    def _check_all_tasks_completed(self):
+        """Check if all tasks in the current batch are completed and automatically report results."""
+        if not self.running_tasks:
+            return
+        
+        # Group tasks by batch
+        batches = {}
+        for task_id, task_info in self.running_tasks.items():
+            batch_id = task_info.get("batch_id", "unknown")
+            if batch_id not in batches:
+                batches[batch_id] = []
+            batches[batch_id].append((task_id, task_info))
+        
+        # Check each batch for completion
+        for batch_id, batch_tasks in batches.items():
+            completed_in_batch = [task for task_id, task in batch_tasks if task["completed"]]
+            
+            if (len(completed_in_batch) == len(batch_tasks) and 
+                len(completed_in_batch) > 1 and 
+                batch_id == self.current_batch_id):
+                # All tasks in current batch are completed - generate consolidated summary
+                print(f"\n\r🎉 [TASK MANAGER] All {len(completed_in_batch)} subagent tasks in {batch_id} have completed!\r")
+                print(f"📋 [TASK MANAGER] Generating consolidated summary...\r")
+                
+                # Create consolidated summary for this batch
+                summary = self._generate_consolidated_summary(batch_id)
+                
+                # Display the summary to the user
+                print(f"\n\r📊 [SUBAGENT SUMMARY] Consolidated Results from {batch_id} ({len(completed_in_batch)} tasks):\r")
+                print(f"{summary}\r")
+                
+                # Remove completed batch tasks
+                for task_id, _ in batch_tasks:
+                    if task_id in self.running_tasks:
+                        del self.running_tasks[task_id]
+    
+    def _generate_consolidated_summary(self, batch_id: str = None) -> str:
+        """Generate a consolidated summary of completed subagent tasks for a specific batch."""
+        if not self.running_tasks:
+            return "No completed tasks to summarize."
+        
+        # Filter tasks by batch if specified
+        if batch_id:
+            batch_tasks = {task_id: task_info for task_id, task_info in self.running_tasks.items() 
+                          if task_info.get("batch_id") == batch_id and task_info["completed"]}
+        else:
+            batch_tasks = {task_id: task_info for task_id, task_info in self.running_tasks.items() 
+                          if task_info["completed"]}
+        
+        if not batch_tasks:
+            return "No completed tasks found for the specified batch."
+        
+        completed_tasks = list(batch_tasks.values())
+        
+        # Create structured summary
+        summary_parts = [
+            f"=== SUBAGENT TASK SUMMARY ({batch_id or 'All Tasks'}) ===",
+            f"Completed Tasks: {len(completed_tasks)}",
+        ]
+        
+        # Calculate total runtime with error handling
+        try:
+            # Extract valid timestamps and calculate runtime
+            start_times = []
+            end_times = []
+            for task in completed_tasks:
+                start_time = task.get('start_time')
+                end_time = task.get('end_time', time.time())
+                
+                # Validate that times are numeric
+                if isinstance(start_time, (int, float)) and isinstance(end_time, (int, float)):
+                    start_times.append(start_time)
+                    end_times.append(end_time)
+            
+            if start_times and end_times:
+                total_runtime = max(end_times) - min(start_times)
+                summary_parts.append(f"Total Runtime: {total_runtime:.2f} seconds")
+            else:
+                summary_parts.append("Total Runtime: Unable to calculate (invalid time data)")
+        except Exception as e:
+            logger.error(f"Error calculating total runtime: {e}")
+            summary_parts.append("Total Runtime: Unable to calculate (calculation error)")
+        
+        summary_parts.extend([
+            "",
+            "=== INDIVIDUAL TASK RESULTS ==="
+        ])
+        
+        for i, (task_id, task_info) in enumerate(sorted(batch_tasks.items()), 1):
+            if not task_info["completed"]:
+                continue
+                
+            # Calculate individual task runtime with error handling
+            try:
+                start_time = task_info.get('start_time')
+                end_time = task_info.get('end_time', time.time())
+                
+                if isinstance(start_time, (int, float)) and isinstance(end_time, (int, float)):
+                    runtime = end_time - start_time
+                    runtime_str = f"{runtime:.2f} seconds"
+                else:
+                    runtime_str = "Unable to calculate (invalid time data)"
+            except Exception as e:
+                logger.error(f"Error calculating runtime for task {task_id}: {e}")
+                runtime_str = "Unable to calculate (calculation error)"
+            
+            summary_parts.extend([
+                f"\n--- Task {i}: {task_id} ---",
+                f"Description: {task_info['description']}",
+                f"Runtime: {runtime_str}",
+                f"Status: {'✅ Completed' if task_info['completed'] else '⏳ Running'}",
+                ""
+            ])
+            
+            # Add the actual result from the subagent
+            result = task_info.get("result", "No result available")
+            if result and result != "No result available":
+                # Include full results (no truncation)
+                summary_parts.extend([
+                    "Result:",
+                    result,
+                    ""
+                ])
+        
+        summary_parts.extend([
+            "=== SUMMARY COMPLETE ===",
+            "",
+            "All parallel subagent tasks have finished. The above results are now available",
+            "for your analysis and next steps."
+        ])
+        
+        return "\n".join(summary_parts)
+    
     async def start_mcp_server(self, server_name: str, server_config) -> bool:
         """Start and connect to an MCP server using FastMCP."""
         try:
@@ -1115,15 +1809,28 @@ class BaseMCPAgent(ABC):
         """Execute an MCP tool (built-in or external) and return the result."""
         try:
             if tool_key not in self.available_tools:
-                return f"Error: Tool {tool_key} not found"
+                # Debug: show available tools when tool not found
+                available_list = list(self.available_tools.keys())[:10]  # First 10 tools
+                return f"Error: Tool {tool_key} not found. Available tools: {available_list}"
             
             tool_info = self.available_tools[tool_key]
             tool_name = tool_info["name"]
             
+            # Forward to parent if this is a subagent (except for subagent management tools)
+            import sys
+            if self.is_subagent and self.comm_socket:
+                excluded_tools = ['task', 'task_status', 'task_results']
+                if tool_name not in excluded_tools:
+                    # Tool forwarding happens silently
+                    return await self._forward_tool_to_parent(tool_key, tool_name, arguments)
+            elif self.is_subagent:
+                sys.stderr.write(f"🤖 [SUBAGENT] WARNING: is_subagent=True but no comm_socket for tool {tool_name}\n")
+                sys.stderr.flush()
+            
             # Check if it's a built-in tool
             if tool_info["server"] == "builtin":
                 logger.info(f"Executing built-in tool: {tool_name}")
-                return self._execute_builtin_tool(tool_name, arguments)
+                return await self._execute_builtin_tool(tool_name, arguments)
             
             # Handle external MCP tools with FastMCP
             client = tool_info["client"]
@@ -1154,6 +1861,72 @@ class BaseMCPAgent(ABC):
         except Exception as e:
             logger.error(f"Error executing tool {tool_key}: {e}")
             return f"Error executing tool {tool_key}: {str(e)}"
+
+    async def _forward_tool_to_parent(self, tool_key: str, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Forward tool execution to parent agent via communication socket."""
+        try:
+            import json
+            import uuid
+            
+            # Create unique request ID for tracking
+            request_id = str(uuid.uuid4())
+            
+            # Prepare tool execution message
+            message = {
+                "type": "tool_execution_request",
+                "request_id": request_id,
+                "tool_key": tool_key,
+                "tool_name": tool_name,
+                "tool_args": arguments,
+                "timestamp": time.time()
+            }
+            
+            # Send request to parent (synchronous)
+            message_json = json.dumps(message) + "\n"
+            self.comm_socket.send(message_json.encode('utf-8'))
+            
+            # Wait for response with timeout
+            response_timeout = 300.0  # 5 minutes timeout for tool execution
+            self.comm_socket.settimeout(response_timeout)
+            
+            # Read response (synchronous)
+            buffer = ""
+            while True:
+                try:
+                    data = self.comm_socket.recv(4096).decode('utf-8')
+                    if not data:
+                        break
+                    
+                    buffer += data
+                    
+                    # Process complete messages (newline-delimited JSON)
+                    while '\n' in buffer:
+                        line, buffer = buffer.split('\n', 1)
+                        if line.strip():
+                            try:
+                                response = json.loads(line.strip())
+                                if (response.get("type") == "tool_execution_response" and 
+                                    response.get("request_id") == request_id):
+                                    
+                                    # Return tool result
+                                    if response.get("success", False):
+                                        return response.get("result", "Tool executed successfully")
+                                    else:
+                                        error = response.get("error", "Unknown error")
+                                        return f"Error from parent: {error}"
+                                        
+                            except json.JSONDecodeError:
+                                continue
+                                
+                except Exception as e:
+                    logger.error(f"Error receiving response from parent: {e}")
+                    break
+            
+            return f"Error: No response received from parent for tool {tool_name}"
+            
+        except Exception as e:
+            logger.error(f"Error forwarding tool {tool_name} to parent: {e}")
+            return f"Error forwarding tool to parent: {str(e)}"
 
     async def _execute_mcp_tool_with_keepalive(self, tool_key: str, arguments: Dict[str, Any], input_handler=None, keepalive_interval: float = 5.0) -> tuple:
         """Execute an MCP tool with keep-alive messages, returning (result, keepalive_messages)."""
@@ -1251,30 +2024,6 @@ You are the expert. Complete the task."""
 
         return system_prompt
     
-    def truncate_tool_output_for_display(self, text: str, max_length: int = 500) -> str:
-        """Truncate tool output for user display while preserving full output for LLM."""
-        if not text:
-            return text
-            
-        if len(text) <= max_length:
-            return text
-            
-        # Try to truncate at a line boundary near the limit
-        lines = text.split('\n')
-        truncated = ""
-        for line in lines:
-            if len(truncated + line) > max_length - 50:  # Leave room for truncation message
-                break
-            truncated += line + '\n'
-        
-        truncated = truncated.rstrip('\n')
-        if not truncated:  # If no lines fit, just truncate the first part
-            truncated = text[:max_length-50]
-            
-        remaining_chars = len(text) - len(truncated)
-        remaining_lines = len(text.split('\n')) - len(truncated.split('\n'))
-        
-        return f"{truncated}\n\n... (truncated {remaining_chars} chars, {remaining_lines} more lines for display)"
 
     def format_markdown(self, text: str) -> str:
         """Format markdown text for terminal display."""
@@ -1319,6 +2068,42 @@ You are the expert. Complete the task."""
                 formatted_lines.append(line)
         
         return '\n'.join(formatted_lines)
+    
+    def display_tool_execution_start(self, tool_count: int, is_subagent: bool = False, interactive: bool = True) -> str:
+        """Display tool execution start message."""
+        if is_subagent:
+            return f"🤖 [SUBAGENT] Executing {tool_count} tool(s)..."
+        else:
+            return f"🔧 Using {tool_count} tool(s)..."
+    
+    def display_tool_execution_step(self, step_num: int, tool_name: str, arguments: dict, is_subagent: bool = False, interactive: bool = True) -> str:
+        """Display individual tool execution step."""
+        if is_subagent:
+            return f"🤖 [SUBAGENT] Step {step_num}: Executing {tool_name}..."
+        else:
+            return f"{step_num}. Executing {tool_name}..."
+    
+    def display_tool_execution_result(self, result: str, is_error: bool = False, is_subagent: bool = False, interactive: bool = True) -> str:
+        """Display tool execution result."""
+        if is_error:
+            prefix = "❌ [SUBAGENT] Error:" if is_subagent else "❌ Error:"
+        else:
+            prefix = "✅ [SUBAGENT] Result:" if is_subagent else "✅ Result:"
+        
+        # Truncate long results for display
+        if len(result) > 200:
+            result_preview = result[:200] + "..."
+        else:
+            result_preview = result
+            
+        return f"{prefix} {result_preview}"
+    
+    def display_tool_processing(self, is_subagent: bool = False, interactive: bool = True) -> str:
+        """Display tool processing message."""
+        if is_subagent:
+            return "🤖 [SUBAGENT] Processing tool results..."
+        else:
+            return "⚙️ Processing tool results..."
     
     def estimate_tokens(self, text: str) -> int:
         """Rough estimation of tokens (1 token ≈ 4 characters for most models)."""
@@ -1821,6 +2606,122 @@ async def compact(ctx):
     """Show conversation token usage and compacting options."""
     click.echo("Compact functionality is only available in interactive chat mode.")
     click.echo("Use 'python agent.py chat' and then '/tokens' or '/compact' commands.")
+
+
+@cli.command('execute-task')
+@click.argument('task_file_path')
+def execute_task_command(task_file_path):
+    """Execute a task from a task file (used for subprocess execution)."""
+    import asyncio
+    asyncio.run(execute_task_subprocess(task_file_path))
+
+
+async def execute_task_subprocess(task_file_path: str):
+    """Execute a task from a JSON file in subprocess mode."""
+    try:
+        import json
+        import os
+        import time
+        
+        # Load task data from file
+        if not os.path.exists(task_file_path):
+            print(f"Error: Task file not found: {task_file_path}")
+            return
+        
+        with open(task_file_path, 'r') as f:
+            task_data = json.load(f)
+        
+        task_id = task_data.get("task_id", "unknown")
+        description = task_data.get("description", "")
+        task_prompt = task_data.get("prompt", "")
+        comm_port = task_data.get("comm_port")
+        
+        print(f"🤖 [SUBAGENT {task_id}] Starting task: {description}")
+        
+        # Connect to parent for tool execution forwarding
+        comm_socket = None
+        if comm_port:
+            try:
+                import socket
+                comm_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                comm_socket.connect(('localhost', comm_port))
+                print(f"🤖 [SUBAGENT {task_id}] Connected to parent for tool forwarding")
+            except Exception as e:
+                print(f"🤖 [SUBAGENT {task_id}] Warning: Could not connect to parent: {e}")
+                comm_socket = None
+        
+        # Load configuration
+        config = load_config()
+        
+        # Create appropriate host instance with subagent flag and communication socket
+        if hasattr(config, 'deepseek_model') and config.deepseek_model == "gemini":
+            from mcp_gemini_host import MCPGeminiHost
+            subagent = MCPGeminiHost(config, is_subagent=True)
+            print(f"🤖 [SUBAGENT {task_id}] Created Gemini subagent with is_subagent=True")
+        else:
+            from mcp_deepseek_host import MCPDeepseekHost
+            subagent = MCPDeepseekHost(config, is_subagent=True)
+            print(f"🤖 [SUBAGENT {task_id}] Created DeepSeek subagent with is_subagent=True")
+        
+        # Set communication socket for tool forwarding
+        if comm_socket:
+            subagent.comm_socket = comm_socket
+            print(f"🤖 [SUBAGENT {task_id}] Communication socket configured for tool forwarding")
+        else:
+            print(f"🤖 [SUBAGENT {task_id}] WARNING: No communication socket - tools will execute locally")
+        
+        # Connect to MCP servers
+        for server_name, server_config in config.mcp_servers.items():
+            try:
+                await subagent.start_mcp_server(server_name, server_config)
+            except Exception as e:
+                print(f"🤖 [SUBAGENT {task_id}] Warning: Failed to connect to MCP server {server_name}: {e}")
+        
+        # Execute the task
+        messages = [{"role": "user", "content": task_prompt}]
+        tools_list = subagent.convert_tools_to_llm_format()
+        
+        print(f"🤖 [SUBAGENT {task_id}] Executing task with {len(tools_list)} tools available...")
+        
+        # Get response from subagent
+        response = await subagent.generate_response(messages, tools_list)
+        
+        # Handle streaming response
+        if hasattr(response, '__aiter__'):
+            full_response = ""
+            async for chunk in response:
+                if isinstance(chunk, str):
+                    print(chunk, end='', flush=True)
+                    full_response += chunk
+            response = full_response
+        else:
+            print(response)
+        
+        # Clean up connections
+        await subagent.shutdown()
+        
+        # Extract the final response for summary
+        final_response = response if isinstance(response, str) else str(response)
+        
+        # Write result to a result file for the parent to collect
+        result_file_path = task_file_path.replace('.json', '_result.json')
+        result_data = {
+            "task_id": task_id,
+            "description": description,
+            "status": "completed",
+            "result": final_response,
+            "timestamp": time.time()
+        }
+        
+        with open(result_file_path, 'w') as f:
+            json.dump(result_data, f, indent=2)
+        
+        print(f"\n🤖 [SUBAGENT {task_id}] Task completed successfully")
+        
+    except Exception as e:
+        print(f"🤖 [SUBAGENT ERROR] Failed to execute task: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 @cli.group()
