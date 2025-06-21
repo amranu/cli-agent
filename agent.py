@@ -223,6 +223,7 @@ class InterruptibleInput:
     def __init__(self):
         self.interrupted = False
         self.old_settings = None
+        self.view_offset = 0  # Horizontal scroll offset for long lines
         
     def setup_terminal(self):
         """Setup terminal for raw input."""
@@ -241,24 +242,79 @@ class InterruptibleInput:
             sys.stdout.flush()
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self.old_settings)
     
-    def get_input(self, prompt: str, multiline_mode: bool = False) -> Optional[str]:
-        """Get input with cursor movement support and escape interrupt.
+    def get_terminal_width(self):
+        """Get terminal width, with fallback."""
+        try:
+            import shutil
+            return shutil.get_terminal_size().columns
+        except:
+            return 80
+    
+    def calculate_display_line(self, line, cursor_pos, prompt_len):
+        """Calculate what part of the line to display and cursor position."""
+        term_width = self.get_terminal_width()
+        available_width = term_width - prompt_len - 1
+        
+        if len(line) <= available_width:
+            # Line fits completely
+            self.view_offset = 0
+            return line, cursor_pos
+        
+        # Line is too long, need scrolling
+        # Ensure cursor is visible by adjusting view_offset
+        if cursor_pos < self.view_offset:
+            # Cursor moved left of visible area
+            self.view_offset = max(0, cursor_pos - 10)
+        elif cursor_pos >= self.view_offset + available_width:
+            # Cursor moved right of visible area
+            self.view_offset = cursor_pos - available_width + 10
+        
+        # Extract visible portion
+        end_pos = min(len(line), self.view_offset + available_width)
+        visible_line = line[self.view_offset:end_pos]
+        display_cursor = cursor_pos - self.view_offset
+        
+        return visible_line, display_cursor
+    
+    def update_display(self, prompt, line, cursor_pos):
+        """Update the display with current line content and cursor position."""
+        visible_line, display_cursor = self.calculate_display_line(line, cursor_pos, len(prompt))
+        
+        # Clear line and redraw
+        sys.stdout.write('\r\x1b[K' + prompt + visible_line)
+        
+        # Position cursor - move back from end of line to correct position
+        if 0 <= display_cursor < len(visible_line):
+            # Move cursor back from end of visible line to the correct position
+            chars_to_move_back = len(visible_line) - display_cursor
+            if chars_to_move_back > 0:
+                sys.stdout.write(f'\x1b[{chars_to_move_back}D')
+        # If display_cursor equals len(visible_line), cursor is already at the right position (end)
+        
+        sys.stdout.flush()
+    
+    def get_input(self, prompt: str, multiline_mode: bool = False, allow_escape_interrupt: bool = False) -> Optional[str]:
+        """Get input with enhanced cursor movement support and escape interrupt.
         
         Args:
             prompt: The prompt to display
             multiline_mode: If True, requires empty line to send. If False, sends on Enter.
+            allow_escape_interrupt: If True, pressing ESC alone will interrupt. If False, ESC is ignored.
         """
-        # Ensure we start at the beginning of the line
-        sys.stdout.write('\r' + prompt)
-        sys.stdout.flush()
-        
         if not sys.stdin.isatty():
             # Fallback for non-tty environments
             try:
-                return input()
+                return input(f"{prompt} ")
             except KeyboardInterrupt:
                 self.interrupted = True
                 return None
+        
+        # Reset view offset for new input
+        self.view_offset = 0
+        
+        # Initial display
+        sys.stdout.write('\r' + prompt)
+        sys.stdout.flush()
         
         self.setup_terminal()
         try:
@@ -276,198 +332,144 @@ class InterruptibleInput:
                     if not char:  # EOF
                         break
                     
-                    # Check if this is rapid input (potential paste)
+                    # Handle rapid input (paste detection)
                     is_rapid_input = last_input_time > 0 and (current_time - last_input_time) < 0.01
                     
                     if is_rapid_input:
-                        # Accumulate rapid input
                         rapid_input_buffer.append(char)
                         last_input_time = current_time
                         continue
                     elif rapid_input_buffer:
-                        # Process accumulated rapid input as paste
-                        pasted_text = ''.join(rapid_input_buffer)
+                        # Process accumulated paste
+                        pasted_text = ''.join(rapid_input_buffer) + char
                         rapid_input_buffer = []
                         
-                        # Add current char to the paste
-                        pasted_text += char
-                        
-                        # Check for more rapid input with longer timeout to capture full paste
-                        while select.select([sys.stdin], [], [], 0.05)[0]:  # Longer timeout for full paste
+                        # Continue reading any remaining paste content
+                        while select.select([sys.stdin], [], [], 0.05)[0]:
                             next_char = sys.stdin.read(1)
                             if next_char:
                                 pasted_text += next_char
                             else:
                                 break
                         
-                        # Process the paste - don't treat any characters as special keys
                         if '\n' in pasted_text:
                             print("(Looks like multiline content - processing immediately)")
-                            return pasted_text.rstrip('\n')  # Remove trailing newline
+                            return pasted_text.rstrip('\n')
                         else:
-                            # Single line paste - add to current line and continue
+                            # Single line paste
                             line = line[:cursor_pos] + pasted_text + line[cursor_pos:]
                             cursor_pos += len(pasted_text)
-                            # Use the same display logic as regular characters
-                            import shutil
-                            try:
-                                term_width = shutil.get_terminal_size().columns
-                            except:
-                                term_width = 80
-                            
-                            # Calculate display line with cursor position indicator
-                            prompt_len = len(prompt)
-                            available_width = term_width - prompt_len - 1
-                            
-                            if len(line) <= available_width:
-                                # Line fits, display normally
-                                display_line = line
-                                display_cursor = cursor_pos
-                            else:
-                                # Line is too long, show window around cursor
-                                if cursor_pos < available_width // 2:
-                                    # Cursor near start
-                                    display_line = line[:available_width-3] + "..."
-                                    display_cursor = cursor_pos
-                                elif cursor_pos > len(line) - available_width // 2:
-                                    # Cursor near end
-                                    display_line = "..." + line[-(available_width-3):]
-                                    display_cursor = available_width - (len(line) - cursor_pos)
-                                else:
-                                    # Cursor in middle
-                                    start = cursor_pos - available_width // 2 + 3
-                                    display_line = "..." + line[start:start + available_width - 6] + "..."
-                                    display_cursor = available_width // 2
-                            
-                            # Clear line and redraw
-                            sys.stdout.write('\r\x1b[K' + prompt + display_line)
-                            if display_cursor < len(display_line):
-                                sys.stdout.write('\x1b[{}G'.format(prompt_len + display_cursor + 1))
-                            sys.stdout.flush()
-                            # Reset timing to prevent next character from being treated as rapid input
+                            self.update_display(prompt, line, cursor_pos)
                             last_input_time = 0
                             continue
                     
                     last_input_time = current_time
-                        
-                    # Handle special keys (only process escape if NOT rapid input)
+                    
+                    # Handle escape sequences and special keys
                     if char == '\x1b':  # Escape sequence
-                        # Check if this is just an escape key or arrow key sequence
-                        if select.select([sys.stdin], [], [], 0.1)[0]:
+                        escape_handled = False
+                        # Use a longer timeout for escape sequences to ensure we catch them all
+                        if select.select([sys.stdin], [], [], 0.2)[0]:
                             seq = sys.stdin.read(1)
                             if seq == '[':
-                                next_seq = sys.stdin.read(1)
-                                if next_seq == 'D':  # Left arrow
-                                    if cursor_pos > 0:
-                                        cursor_pos -= 1
-                                        sys.stdout.write('\x1b[D')
-                                        sys.stdout.flush()
-                                elif next_seq == 'C':  # Right arrow
-                                    if cursor_pos < len(line):
-                                        cursor_pos += 1
-                                        sys.stdout.write('\x1b[C')
-                                        sys.stdout.flush()
-                                elif next_seq == 'A' or next_seq == 'B':  # Up/Down arrow
-                                    pass  # Ignore for now
-                        else:
-                            # Just escape key - interrupt
-                            self.interrupted = True
-                            sys.stdout.write('\r\x1b[K[Interrupted by Escape key]\n')
-                            sys.stdout.flush()
-                            return None
+                                # Use another timeout to ensure we get the command character
+                                if select.select([sys.stdin], [], [], 0.1)[0]:
+                                    cmd = sys.stdin.read(1)
+                                    if cmd == 'D':  # Left arrow
+                                        if cursor_pos > 0:
+                                            cursor_pos -= 1
+                                            self.update_display(prompt, line, cursor_pos)
+                                        escape_handled = True
+                                    elif cmd == 'C':  # Right arrow
+                                        if cursor_pos < len(line):
+                                            cursor_pos += 1
+                                            self.update_display(prompt, line, cursor_pos)
+                                        escape_handled = True
+                                    elif cmd == 'H':  # Home
+                                        cursor_pos = 0
+                                        self.view_offset = 0
+                                        self.update_display(prompt, line, cursor_pos)
+                                        escape_handled = True
+                                    elif cmd == 'F':  # End
+                                        cursor_pos = len(line)
+                                        self.update_display(prompt, line, cursor_pos)
+                                        escape_handled = True
+                                    elif cmd == '3':  # Delete key (might have trailing ~)
+                                        # Read potential trailing ~
+                                        if select.select([sys.stdin], [], [], 0.05)[0]:
+                                            trail = sys.stdin.read(1)
+                                            if trail == '~' and cursor_pos < len(line):
+                                                line = line[:cursor_pos] + line[cursor_pos+1:]
+                                                self.update_display(prompt, line, cursor_pos)
+                                        escape_handled = True
+                                    elif cmd in ['A', 'B']:  # Up/Down arrows - ignore for now
+                                        escape_handled = True
+                                    else:
+                                        # Unknown escape sequence, but still mark as handled
+                                        escape_handled = True
+                                else:
+                                    # Incomplete escape sequence, mark as handled anyway
+                                    escape_handled = True
+                            else:
+                                # Not a standard escape sequence, mark as handled
+                                escape_handled = True
+                        
+                        # Only check for interrupt if we didn't handle an escape sequence
+                        if not escape_handled:
+                            # Just escape key pressed alone - only interrupt if allowed
+                            if allow_escape_interrupt:
+                                self.interrupted = True
+                                sys.stdout.write('\r\x1b[K[Interrupted by Escape key]\n')
+                                sys.stdout.flush()
+                                return None
+                            # Otherwise, ignore the escape key during normal input
+                        
+                        # Continue to next iteration - escape sequence was handled
+                        continue
+                    
                     elif char == '\x03':  # Ctrl+C
                         self.interrupted = True
-                        # Move to beginning of line and clear, then print message
                         sys.stdout.write('\r\x1b[K[Interrupted by Ctrl+C]\n')
                         sys.stdout.flush()
                         return None
-                    elif char.isprintable():  # Regular character
+                    
+                    elif char == '\x01':  # Ctrl+A (Home)
+                        cursor_pos = 0
+                        self.view_offset = 0
+                        self.update_display(prompt, line, cursor_pos)
+                    
+                    elif char == '\x05':  # Ctrl+E (End)
+                        cursor_pos = len(line)
+                        self.update_display(prompt, line, cursor_pos)
+                    
+                    elif char == '\x0b':  # Ctrl+K (kill to end of line)
+                        line = line[:cursor_pos]
+                        self.update_display(prompt, line, cursor_pos)
+                    
+                    elif char == '\x15':  # Ctrl+U (kill entire line)
+                        line = ""
+                        cursor_pos = 0
+                        self.view_offset = 0
+                        self.update_display(prompt, line, cursor_pos)
+                    
+                    elif char.isprintable():  # Regular printable character
                         line = line[:cursor_pos] + char + line[cursor_pos:]
                         cursor_pos += 1
-                        # Use a simpler approach - get terminal width and handle display
-                        import shutil
-                        try:
-                            term_width = shutil.get_terminal_size().columns
-                        except:
-                            term_width = 80
-                        
-                        # Calculate display line with cursor position indicator
-                        prompt_len = len(prompt)
-                        available_width = term_width - prompt_len - 1
-                        
-                        if len(line) <= available_width:
-                            # Line fits, display normally
-                            display_line = line
-                            display_cursor = cursor_pos
-                        else:
-                            # Line is too long, show window around cursor
-                            if cursor_pos < available_width // 2:
-                                # Cursor near start
-                                display_line = line[:available_width-3] + "..."
-                                display_cursor = cursor_pos
-                            elif cursor_pos > len(line) - available_width // 2:
-                                # Cursor near end
-                                display_line = "..." + line[-(available_width-3):]
-                                display_cursor = available_width - (len(line) - cursor_pos)
-                            else:
-                                # Cursor in middle
-                                start = cursor_pos - available_width // 2 + 3
-                                display_line = "..." + line[start:start + available_width - 6] + "..."
-                                display_cursor = available_width // 2
-                        
-                        # Clear line and redraw
-                        sys.stdout.write('\r\x1b[K' + prompt + display_line)
-                        if display_cursor < len(display_line):
-                            sys.stdout.write('\x1b[{}G'.format(prompt_len + display_cursor + 1))
-                        sys.stdout.flush()
+                        self.update_display(prompt, line, cursor_pos)
+                    
                     elif char == '\x7f':  # Backspace
                         if cursor_pos > 0:
                             line = line[:cursor_pos-1] + line[cursor_pos:]
                             cursor_pos -= 1
-                            # Use the same display logic as regular characters
-                            import shutil
-                            try:
-                                term_width = shutil.get_terminal_size().columns
-                            except:
-                                term_width = 80
-                            
-                            # Calculate display line with cursor position indicator
-                            prompt_len = len(prompt)
-                            available_width = term_width - prompt_len - 1
-                            
-                            if len(line) <= available_width:
-                                # Line fits, display normally
-                                display_line = line
-                                display_cursor = cursor_pos
-                            else:
-                                # Line is too long, show window around cursor
-                                if cursor_pos < available_width // 2:
-                                    # Cursor near start
-                                    display_line = line[:available_width-3] + "..."
-                                    display_cursor = cursor_pos
-                                elif cursor_pos > len(line) - available_width // 2:
-                                    # Cursor near end
-                                    display_line = "..." + line[-(available_width-3):]
-                                    display_cursor = available_width - (len(line) - cursor_pos)
-                                else:
-                                    # Cursor in middle
-                                    start = cursor_pos - available_width // 2 + 3
-                                    display_line = "..." + line[start:start + available_width - 6] + "..."
-                                    display_cursor = available_width // 2
-                            
-                            # Clear line and redraw
-                            sys.stdout.write('\r\x1b[K' + prompt + display_line)
-                            if display_cursor < len(display_line):
-                                sys.stdout.write('\x1b[{}G'.format(prompt_len + display_cursor + 1))
-                            sys.stdout.flush()
+                            self.update_display(prompt, line, cursor_pos)
+                    
                     elif char == '\r' or char == '\n':  # Enter
                         print()
                         if multiline_mode and line.strip() == "":
-                            # In multiline mode, empty line means send
                             return line.rstrip()
                         else:
-                            # Normal mode or non-empty line
                             return line
+                    
                     # Ignore other control characters
                         
         finally:
@@ -475,10 +477,10 @@ class InterruptibleInput:
         
         return line if line else None
     
-    def get_multiline_input(self, initial_prompt: str) -> Optional[str]:
+    def get_multiline_input(self, initial_prompt: str, allow_escape_interrupt: bool = False) -> Optional[str]:
         """Get input with smart paste detection."""
         # Get input - bracketed paste will be detected automatically
-        user_input = self.get_input(initial_prompt, multiline_mode=False)
+        user_input = self.get_input(initial_prompt, multiline_mode=False, allow_escape_interrupt=allow_escape_interrupt)
         if user_input is None:
             return None
         
@@ -501,7 +503,7 @@ class InterruptibleInput:
             # Switch to multiline mode
             lines = [user_input]
             while True:
-                line = self.get_input("... ", multiline_mode=True)
+                line = self.get_input("... ", multiline_mode=True, allow_escape_interrupt=allow_escape_interrupt)
                 if line is None:  # Interrupted
                     return None
                 if line.strip() == "":
@@ -1457,7 +1459,7 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                     continue
                 
                 # Get user input with smart multiline detection
-                user_input = input_handler.get_multiline_input("You: ")
+                user_input = input_handler.get_multiline_input("[94m[1mYou:[0m ")
                 
                 if user_input is None:  # Interrupted
                     if current_task and not current_task.done():
