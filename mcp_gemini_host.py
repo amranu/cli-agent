@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 class MCPGeminiHost(BaseMCPAgent):
     """MCP Host that uses Google Gemini as the language model backend."""
     
-    def __init__(self, config: HostConfig):
-        super().__init__(config)
+    def __init__(self, config: HostConfig, is_subagent: bool = False):
+        super().__init__(config, is_subagent)
         self.gemini_config = config.get_gemini_config()
         
         # Initialize Gemini client with timeout configuration
@@ -79,7 +79,10 @@ class MCPGeminiHost(BaseMCPAgent):
     
     async def generate_response(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None) -> Union[str, Any]:
         """Generate a response using Gemini API."""
-        return await self.chat_completion(messages, stream=True, interactive=True)
+        # For subagents, use interactive=False to avoid terminal formatting issues
+        # when output is forwarded to parent chat
+        interactive = not self.is_subagent
+        return await self.chat_completion(messages, stream=True, interactive=interactive)
     
     def convert_tools_to_llm_format(self) -> List[Dict]:
         """Convert tools to Gemini format."""
@@ -613,7 +616,7 @@ class MCPGeminiHost(BaseMCPAgent):
                     logger.warning(f"Raw args: {function_call.args}")
                     arguments = {}
             
-            tool_execution_msg = f"  {i}. Executing {tool_name} with args: {arguments}"
+            tool_execution_msg = self.display_tool_execution_step(i, tool_name, arguments, self.is_subagent, interactive=not self.is_subagent)
             if interactive and not streaming_mode:
                 print(f"\r\x1b[K{tool_execution_msg}", flush=True)
             elif interactive and streaming_mode:
@@ -630,7 +633,7 @@ class MCPGeminiHost(BaseMCPAgent):
             try:
                 if interactive and input_handler:
                     # Create interruptible tool execution
-                    tool_task = asyncio.create_task(self._execute_mcp_tool(tool_name, arguments))
+                    tool_task = asyncio.create_task(self._execute_mcp_tool(tool_name, arguments, input_handler))
                     
                     # Monitor for interruption while tool executes
                     while not tool_task.done():
@@ -666,7 +669,7 @@ class MCPGeminiHost(BaseMCPAgent):
                         return function_results, all_tool_output
                 else:
                     # Non-interactive or no input handler - execute normally
-                    tool_result = await self._execute_mcp_tool(tool_name, arguments)
+                    tool_result = await self._execute_mcp_tool(tool_name, arguments, None)
                 
                 # Check if tool result indicates an error
                 if tool_result.startswith("Error:") or "error" in tool_result.lower()[:100]:
@@ -683,11 +686,8 @@ class MCPGeminiHost(BaseMCPAgent):
                 result_content += "\n⚠️  Command failed - take this into account for your next action."
             function_results.append(result_content)
             
-            # Truncate tool output for display to user
-            display_result = self.truncate_tool_output_for_display(tool_result)
-            tool_result_msg = f"     Result: {display_result}"
-            if not tool_success:
-                tool_result_msg += " ⚠️  Command failed - take this into account for your next action."
+            # Use unified tool result display
+            tool_result_msg = self.display_tool_execution_result(tool_result, not tool_success, self.is_subagent, interactive=not self.is_subagent)
             
             # Fix newlines in tool result messages to have proper cursor positioning
             if interactive and (not streaming_mode or streaming_mode):
@@ -739,7 +739,7 @@ class MCPGeminiHost(BaseMCPAgent):
                 if function_calls:
                     # Handle function calls
                     if interactive:
-                        print(f"\r\x1b[K\n\r🔧 Using {len(function_calls)} tool(s)...", flush=True)
+                        print(f"\r\x1b[K\n\r{self.display_tool_execution_start(len(function_calls), self.is_subagent, interactive=not self.is_subagent)}", flush=True)
                     
                     # Execute function calls
                     function_results, tool_output = await self._execute_function_calls(function_calls, interactive)
@@ -905,9 +905,9 @@ class MCPGeminiHost(BaseMCPAgent):
                     if function_calls:
                         # Show tool execution indicator to user via print (not yielded to avoid LLM contamination)
                         if accumulated_content.strip():
-                            print(f"\r\x1b[K\n\r\n\r🔧 Using {len(function_calls)} tool(s)...", flush=True)
+                            print(f"\r\x1b[K\n\r\n\r{self.display_tool_execution_start(len(function_calls), self.is_subagent, interactive=not self.is_subagent)}", flush=True)
                         else:
-                            print(f"\r\x1b[K🔧 Using {len(function_calls)} tool(s)...", flush=True)
+                            print(f"\r\x1b[K{self.display_tool_execution_start(len(function_calls), self.is_subagent, interactive=not self.is_subagent)}", flush=True)
                         
                         # Execute function calls using shared method
                         function_results, tool_output = await self._execute_function_calls(function_calls, True, input_handler, streaming_mode=True)  # Always interactive for streaming
@@ -916,19 +916,20 @@ class MCPGeminiHost(BaseMCPAgent):
                         # The tool results will be included in the next iteration's prompt context
                         
                         # Indicate we're getting the follow-up response (via print to avoid LLM contamination)
-                        print("\n\r\n\r💭 Processing results and generating response...\n\r", flush=True)
+                        print(f"\n\r\n\r{self.display_tool_processing(self.is_subagent, interactive=not self.is_subagent)}\n\r", flush=True)
                         
                         # Create follow-up prompt for next iteration
                         tool_results_text = "\n".join(function_results)
-                        current_prompt = f"{current_prompt}\n\nTool Results:\n{tool_results_text}\n\nThe tool execution is complete. Please continue with your response based on these results."
+                        #current_prompt = f"{current_prompt}\n\nTool Results:\n{tool_results_text}\n\nThe tool execution is complete. Please continue with your response based on these results."
+                        current_prompt = f"Tool Results:\n{tool_results_text}\n\nThe tool execution is complete. Please continue with your response based on these results."
                         
                         logger.debug(f"Updated prompt length after tool execution: {len(current_prompt)}")
                         logger.debug(f"Tool results length: {len(tool_results_text)}")
                         
                         # Check if prompt is getting too long
-                        if len(current_prompt) > 100000:  # 100k characters
-                            logger.warning(f"Prompt is very long ({len(current_prompt)} chars), this might cause issues")
-                            yield f"\n⚠️ Conversation is getting very long. Consider using '/compact' to reduce length.\n"
+#                        if len(current_prompt) > 200000:  # 100k characters
+#                            logger.warning(f"Prompt is very long ({len(current_prompt)} chars), this might cause issues")
+#                            yield f"\n⚠️ Conversation is getting very long. Consider using '/compact' to reduce length.\n"
                         
                         # Continue the loop - let Gemini decide if more tools are needed
                         continue
