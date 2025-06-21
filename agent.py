@@ -92,6 +92,16 @@ class SlashCommandManager:
             return self._handle_model(args)
         elif command == "review":
             return self._handle_review(args)
+        elif command == "tokens":
+            return self._handle_tokens(messages)
+        elif command == "switch-chat":
+            return self._handle_switch_chat()
+        elif command == "switch-reason":
+            return self._handle_switch_reason()
+        elif command == "switch-gemini":
+            return self._handle_switch_gemini()
+        elif command == "switch-gemini-pro":
+            return self._handle_switch_gemini_pro()
         elif command.startswith("mcp__"):
             return await self._handle_mcp_command(command, args)
         elif ":" in command:
@@ -111,8 +121,15 @@ Built-in Commands:
   /help           - Show this help message
   /clear          - Clear conversation history
   /compact        - Compact conversation history into a summary
+  /tokens         - Show current token usage statistics
   /model [name]   - Show current model or set model
   /review [file]  - Request code review
+
+Model Switching:
+  /switch-chat    - Switch to deepseek-chat model
+  /switch-reason  - Switch to deepseek-reasoner model
+  /switch-gemini  - Switch to Gemini Flash 2.5 backend
+  /switch-gemini-pro - Switch to Gemini Pro 2.5 backend
 
 Custom Commands:"""
         
@@ -172,6 +189,70 @@ Custom Commands:"""
                 
         except Exception as e:
             return f"❌ Failed to compact conversation: {str(e)}"
+    
+    def _handle_tokens(self, messages: List[Dict[str, Any]] = None) -> str:
+        """Handle /tokens command."""
+        if not hasattr(self.agent, 'count_conversation_tokens'):
+            return "❌ Token counting not available for this agent type."
+        
+        if messages is None or len(messages) == 0:
+            return "No conversation history to analyze."
+        
+        tokens = self.agent.count_conversation_tokens(messages)
+        limit = self.agent.get_token_limit() if hasattr(self.agent, 'get_token_limit') else 32000
+        percentage = (tokens / limit) * 100
+        
+        result = f"📊 Token usage: ~{tokens}/{limit} ({percentage:.1f}%)"
+        if percentage > 80:
+            result += "\n⚠️  Consider using '/compact' to reduce token usage"
+        
+        return result
+    
+    def _handle_switch_chat(self) -> str:
+        """Handle /switch-chat command."""
+        try:
+            from config import load_config
+            config = load_config()
+            config.deepseek_model = "deepseek-chat"
+            config.save()
+            return f"✅ Model switched to: {config.deepseek_model}\n⚠️  Restart the chat session to use the new model"
+        except Exception as e:
+            return f"❌ Failed to switch model: {str(e)}"
+    
+    def _handle_switch_reason(self) -> str:
+        """Handle /switch-reason command."""
+        try:
+            from config import load_config
+            config = load_config()
+            config.deepseek_model = "deepseek-reasoner"
+            config.save()
+            return f"✅ Model switched to: {config.deepseek_model}\n⚠️  Restart the chat session to use the new model"
+        except Exception as e:
+            return f"❌ Failed to switch model: {str(e)}"
+    
+    def _handle_switch_gemini(self) -> str:
+        """Handle /switch-gemini command."""
+        try:
+            from config import load_config
+            config = load_config()
+            config.deepseek_model = "gemini"
+            config.gemini_model = "gemini-2.5-flash"
+            config.save()
+            return f"✅ Backend switched to: Gemini Flash 2.5 ({config.gemini_model})\n⚠️  Restart the chat session to use Gemini backend"
+        except Exception as e:
+            return f"❌ Failed to switch backend: {str(e)}"
+    
+    def _handle_switch_gemini_pro(self) -> str:
+        """Handle /switch-gemini-pro command."""
+        try:
+            from config import load_config
+            config = load_config()
+            config.deepseek_model = "gemini"
+            config.gemini_model = "gemini-2.5-pro"
+            config.save()
+            return f"✅ Backend switched to: Gemini Pro 2.5 ({config.gemini_model})\n⚠️  Restart the chat session to use Gemini backend"
+        except Exception as e:
+            return f"❌ Failed to switch backend: {str(e)}"
     
     def _handle_model(self, args: str) -> str:
         """Handle /model command."""
@@ -1498,284 +1579,6 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                 print(f"\nError: {e}")
 
 
-# Standalone interactive chat function - exact copy from mcp_deepseek_host.py
-async def interactive_chat(host):
-    """Run an interactive chat session with streaming tool execution."""
-    # Determine host type and display appropriate info
-    if hasattr(host, 'deepseek_config'):
-        print(f"MCP Deepseek Host - Interactive Chat")
-        print(f"Model: {host.deepseek_config.model}")
-    elif hasattr(host, 'gemini_config'):
-        print(f"MCP Gemini Host - Interactive Chat") 
-        print(f"Model: {host.gemini_config.model}")
-    else:
-        print(f"MCP Agent - Interactive Chat")
-    
-    print(f"Available tools: {len(host.available_tools)}")
-    print("Commands: 'quit' to exit, 'tools' to list tools, 'ESC' to interrupt")
-    print("Model switching: '/switch-chat', '/switch-reason', '/switch-gemini', '/switch-gemini-pro'")
-    print("Utility: '/compact' to manually compact conversation, '/tokens' to show token count")
-    print("Input: Single Enter to send, paste multiline content automatically detected")
-    print("Navigation: Arrow keys for cursor movement, Backspace to delete")
-    print("-" * 50)
-    
-    messages = []
-    input_handler = InterruptibleInput()
-    current_task = None
-    
-    while True:
-        try:
-            # Check if we were interrupted during a previous operation
-            if input_handler.interrupted:
-                if current_task and not current_task.done():
-                    current_task.cancel()
-                    sys.stdout.write('\r\x1b[K\n')
-                    print("🛑 Operation cancelled by user")
-                input_handler.interrupted = False
-                current_task = None
-                continue
-            
-            # Get user input with smart multiline detection
-            user_input = input_handler.get_multiline_input("You: ")
-            
-            if user_input is None:  # Interrupted
-                if current_task and not current_task.done():
-                    current_task.cancel()
-                    sys.stdout.write('\r\x1b[K\n')
-                    print("🛑 Operation cancelled by user")
-                input_handler.interrupted = False
-                current_task = None
-                continue
-            
-            if user_input.lower().strip() in ['quit', 'exit', 'q']:
-                break
-            elif user_input.lower().strip() == 'tools':
-                if host.available_tools:
-                    print("\nAvailable tools:")
-                    for tool_key, tool_info in host.available_tools.items():
-                        print(f"  - {tool_key}: {tool_info['description']}")
-                else:
-                    print("No tools available")
-                continue
-            elif user_input.lower().strip() == '/switch-chat':
-                # Switch to deepseek-chat model
-                config = load_config()
-                config.deepseek_model = "deepseek-chat"
-                config.save()
-                # Update the host's config and recreate the deepseek client
-                if hasattr(host, 'deepseek_config'):
-                    host.config = config
-                    host.deepseek_config = config.get_deepseek_config()
-                    host.deepseek_client = host.deepseek_client.__class__(
-                        api_key=host.deepseek_config.api_key,
-                        base_url=host.deepseek_config.base_url
-                    )
-                print(f"✅ Model switched to: {config.deepseek_model}")
-                continue
-            elif user_input.lower().strip() == '/switch-reason':
-                # Switch to deepseek-reasoner model
-                config = load_config()
-                config.deepseek_model = "deepseek-reasoner"
-                config.save()
-                # Update the host's config and recreate the deepseek client
-                if hasattr(host, 'deepseek_config'):
-                    host.config = config
-                    host.deepseek_config = config.get_deepseek_config()
-                    host.deepseek_client = host.deepseek_client.__class__(
-                        api_key=host.deepseek_config.api_key,
-                        base_url=host.deepseek_config.base_url
-                    )
-                print(f"✅ Model switched to: {config.deepseek_model}")
-                continue
-            elif user_input.lower().strip() == '/switch-gemini':
-                # Switch to Gemini Flash backend
-                config = load_config()
-                config.deepseek_model = "gemini"  # Use this as a marker
-                config.gemini_model = "gemini-2.5-flash"
-                config.save()
-                print(f"✅ Backend switched to: Gemini Flash 2.5 ({config.gemini_model})")
-                print("⚠️  Note: Restart the chat session to use Gemini backend")
-                continue
-            elif user_input.lower().strip() == '/switch-gemini-pro':
-                # Switch to Gemini Pro backend
-                config = load_config()
-                config.deepseek_model = "gemini"  # Use this as a marker
-                config.gemini_model = "gemini-2.5-pro"
-                config.save()
-                print(f"✅ Backend switched to: Gemini Pro 2.5 ({config.gemini_model})")
-                print("⚠️  Note: Restart the chat session to use Gemini backend")
-                continue
-            elif user_input.lower().strip() == '/compact':
-                # Manually compact conversation
-                if len(messages) > 3:
-                    print(f"\n🗜️  Compacting conversation... ({len(messages)} messages)")
-                    try:
-                        messages = await host.compact_conversation(messages)
-                        tokens = host.count_conversation_tokens(messages)
-                        print(f"✅ Conversation compacted. Current tokens: ~{tokens}")
-                    except Exception as e:
-                        print(f"❌ Failed to compact: {e}")
-                else:
-                    print("📝 Conversation is already short, no need to compact")
-                continue
-            elif user_input.lower().strip() == '/tokens':
-                # Show token count
-                tokens = host.count_conversation_tokens(messages)
-                limit = host.get_token_limit()
-                percentage = (tokens / limit) * 100
-                print(f"\n📊 Token usage: ~{tokens}/{limit} ({percentage:.1f}%)")
-                if percentage > 80:
-                    print("⚠️  Consider using '/compact' to reduce token usage")
-                continue
-            
-            # Process the user input (no longer need buffer logic)
-            if user_input.strip():  # Only process non-empty input
-                messages.append({"role": "user", "content": user_input})
-                
-                # Check if we should auto-compact before making the API call
-                if host.should_compact(messages):
-                    tokens_before = host.count_conversation_tokens(messages)
-                    print(f"\n🗜️  Auto-compacting conversation (was ~{tokens_before} tokens)...")
-                    try:
-                        messages = await host.compact_conversation(messages)
-                        tokens_after = host.count_conversation_tokens(messages)
-                        print(f"✅ Compacted to ~{tokens_after} tokens")
-                    except Exception as e:
-                        print(f"⚠️  Auto-compact failed: {e}")
-                
-                try:
-                    # Make API call interruptible by running in a task
-                    print("\n💭 Thinking... (press ESC to interrupt)")
-                    current_task = asyncio.create_task(
-                        host.chat_completion(messages, stream=True, interactive=True)
-                    )
-                    
-                    # Create a background task to monitor for escape key
-                    async def monitor_escape():
-                        old_settings = None
-                        try:
-                            while not current_task.done():
-                                try:
-                                    if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0.1)[0]:
-                                        # Set up raw mode for a single character read
-                                        if old_settings is None:
-                                            old_settings = termios.tcgetattr(sys.stdin.fileno())
-                                            tty.setraw(sys.stdin.fileno())
-                                        
-                                        char = sys.stdin.read(1)
-                                        if char == '\x1b':  # Escape key
-                                            input_handler.interrupted = True
-                                            return
-                                    await asyncio.sleep(0.1)
-                                except Exception as e:
-                                    await asyncio.sleep(0.1)
-                        finally:
-                            if old_settings is not None:
-                                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
-                    
-                    monitor_task = asyncio.create_task(monitor_escape())
-                    
-                    # Wait for either completion or interruption
-                    response = None
-                    done, pending = await asyncio.wait(
-                        [current_task, monitor_task],
-                        return_when=asyncio.FIRST_COMPLETED
-                    )
-                    
-                    # Cancel any remaining tasks
-                    for task in pending:
-                        task.cancel()
-                    
-                    if input_handler.interrupted:
-                        sys.stdout.write('\r\x1b[K\n')
-                        print("🛑 Request cancelled by user")
-                        input_handler.interrupted = False
-                        current_task = None
-                        continue
-                    
-                    if current_task and current_task.done() and not current_task.cancelled():
-                        response = current_task.result()
-                        current_task = None
-                    else:
-                        continue  # Request was cancelled, go back to input
-                    
-                    if hasattr(response, '__aiter__'):
-                        # Streaming response with potential tool execution
-                        # Clear current line and move to fresh line
-                        print("\nAssistant (press ESC to interrupt):")
-                        sys.stdout.flush()
-                        full_response = ""
-                        
-                        # Set up non-blocking input monitoring
-                        stdin_fd = sys.stdin.fileno()
-                        old_settings = termios.tcgetattr(stdin_fd)
-                        tty.setraw(stdin_fd)
-                        
-                        interrupted = False
-                        try:
-                            async for chunk in response:
-                                # Check for escape key on each chunk
-                                if select.select([sys.stdin], [], [], 0)[0]:  # Non-blocking check
-                                    char = sys.stdin.read(1)
-                                    if char == '\x1b':  # Escape key
-                                        interrupted = True
-                                        break
-                                
-                                # Check for interruption flag
-                                if input_handler.interrupted:
-                                    interrupted = True
-                                    input_handler.interrupted = False
-                                    break
-                                    
-                                if isinstance(chunk, str):
-                                    print(chunk, end="", flush=True)
-                                    full_response += chunk
-                                else:
-                                    # Handle any non-string chunks if needed
-                                    print(str(chunk), end="", flush=True)
-                                    full_response += str(chunk)
-                        finally:
-                            # Always restore terminal settings first
-                            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
-                            
-                            # Clean up display if interrupted
-                            if interrupted:
-                                print("\n🛑 Streaming interrupted by user")
-                                sys.stdout.flush()
-                            else:
-                                print()  # Normal newline after streaming
-                        
-                        # Add assistant response to messages
-                        if full_response:  # Only add if not interrupted
-                            messages.append({"role": "assistant", "content": full_response})
-                    else:
-                        # Non-streaming response (happens when tools are used)
-                        # Clear any input line artifacts and start fresh
-                        sys.stdout.write('\r\x1b[K\n')
-                        print(f"Assistant: {response}")
-                        messages.append({"role": "assistant", "content": response})
-                        
-                except asyncio.CancelledError:
-                    sys.stdout.write('\r\x1b[K\n')
-                    print("🛑 Request cancelled")
-                    current_task = None
-                except Exception as e:
-                    sys.stdout.write('\r\x1b[K\n')
-                    print(f"Error: {e}")
-                    current_task = None
-            else:
-                # Empty input, just continue
-                continue
-            
-        except KeyboardInterrupt:
-            # Move to beginning of line and clear, then print exit message
-            sys.stdout.write('\r\x1b[KExiting...\n')
-            sys.stdout.flush()
-            break
-        except Exception as e:
-            sys.stdout.write('\r\x1b[K\n')
-            print(f"Error: {e}")
-
 
 # CLI functionality
 @click.group()
@@ -1890,22 +1693,9 @@ async def chat(ctx, server):
             else:
                 click.echo(f"✅ Connected to MCP server: {server_name}")
         
-        # Start interactive chat using the host-specific function
-        if hasattr(host, 'deepseek_config'):
-            # Use the standalone interactive_chat function from deepseek host
-            from mcp_deepseek_host import interactive_chat as deepseek_interactive_chat
-            await deepseek_interactive_chat(host)
-        elif hasattr(host, 'gemini_config'):
-            # Use the standalone interactive_chat function from gemini host if available
-            try:
-                from mcp_gemini_host import interactive_chat_gemini
-                await interactive_chat_gemini(host)
-            except ImportError:
-                # Fallback to our interactive chat
-                await interactive_chat(host)
-        else:
-            # Fallback to our interactive chat
-            await interactive_chat(host)
+        # Start interactive chat using the host's class method
+        input_handler = InterruptibleInput()
+        await host.interactive_chat(input_handler)
         
     except KeyboardInterrupt:
         pass
