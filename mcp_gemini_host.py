@@ -53,12 +53,20 @@ class MCPGeminiHost(BaseMCPAgent):
                 api_key=self.gemini_config.api_key,
                 http_client=http_client
             )
+            self.http_client = http_client  # Store reference for cleanup
             logger.debug(f"Gemini client initialized with {timeout_seconds}s timeout")
             
         except Exception as e:
-            logger.warning(f"Failed to create custom HTTP client: {e}, using default")
+            import traceback
+            logger.warning(f"Failed to create custom HTTP client: {e}")
+            logger.debug(f"HTTP client creation traceback: {traceback.format_exc()}")
             # Fallback to default client
-            self.gemini_client = genai.Client(api_key=self.gemini_config.api_key)
+            try:
+                self.gemini_client = genai.Client(api_key=self.gemini_config.api_key)
+                self.http_client = None
+            except Exception as fallback_error:
+                logger.error(f"Failed to create even default Gemini client: {fallback_error}")
+                raise
         
         logger.info(f"Initialized MCP Gemini Host with model: {self.gemini_config.model}")
     
@@ -396,86 +404,22 @@ class MCPGeminiHost(BaseMCPAgent):
         
         return "\n\n".join(gemini_prompt_parts)
     
-    async def _execute_mcp_tool(self, tool_key: str, arguments: Dict[str, Any]) -> str:
-        """Execute an MCP tool (built-in or external) and return the result."""
-        try:
-            if tool_key not in self.available_tools:
-                return f"Error: Tool {tool_key} not found"
-            
-            tool_info = self.available_tools[tool_key]
-            tool_name = tool_info["name"]
-            
-            # Check if it's a built-in tool
-            if tool_info["server"] == "builtin":
-                logger.info(f"Executing built-in tool: {tool_name}")
-                return self._execute_builtin_tool(tool_name, arguments)
-            
-            # Handle external MCP tools
-            client_session = tool_info["client"]
-            if client_session is None:
-                return f"Error: No client session for tool {tool_key}"
-            
-            logger.info(f"Executing MCP tool: {tool_name}")
-            result = await client_session.call_tool(tool_name, arguments)
-            
-            # Format the result
-            if result.content:
-                content_parts = []
-                for content in result.content:
-                    if hasattr(content, 'text'):
-                        content_parts.append(content.text)
-                    elif hasattr(content, 'data'):
-                        content_parts.append(str(content.data))
-                    else:
-                        content_parts.append(str(content))
-                return "\n".join(content_parts)
-            else:
-                return "Tool executed successfully (no output)"
-                
-        except Exception as e:
-            logger.error(f"Error executing tool {tool_key}: {e}")
-            return f"Error executing tool {tool_key}: {str(e)}"
-
-    async def _execute_mcp_tool_with_keepalive(self, tool_key: str, arguments: Dict[str, Any]) -> tuple:
-        """Execute an MCP tool with keep-alive messages, returning (result, keepalive_messages)."""
-        import asyncio
-        
-        # Create the tool execution task
-        tool_task = asyncio.create_task(self._execute_mcp_tool(tool_key, arguments))
-        
-        # Keep-alive configuration
-        keepalive_interval = self.gemini_config.keepalive_interval
-        keepalive_messages = []
-        start_time = asyncio.get_event_loop().time()
-        
-        # Monitor the task and collect keep-alive messages
-        while not tool_task.done():
-            try:
-                # Wait for either task completion or timeout
-                await asyncio.wait_for(asyncio.shield(tool_task), timeout=keepalive_interval)
-                break  # Task completed
-            except asyncio.TimeoutError:
-                # Task is still running, send keep-alive message
-                current_time = asyncio.get_event_loop().time()
-                elapsed = current_time - start_time
-                
-                # Create a keep-alive message
-                keepalive_msg = f"⏳ Tool {tool_key} still running... ({elapsed:.1f}s elapsed)"
-                keepalive_messages.append(keepalive_msg)
-                logger.debug(f"Keep-alive: {keepalive_msg}")
-                continue
-        
-        # Get the final result
-        result = await tool_task
-        return result, keepalive_messages
     
     async def chat_completion(self, messages: List[Dict[str, str]], stream: bool = None, interactive: bool = False, input_handler=None) -> Union[str, Any]:
         """Handle chat completion using Gemini with MCP tool support."""
         if stream is None:
             stream = self.gemini_config.stream
         
+        # Add system prompt only for the first message in a conversation
+        enhanced_messages = messages.copy()
+        is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
+        
+        if is_first_message and (not enhanced_messages or enhanced_messages[0].get("role") != "system"):
+            system_prompt = self._create_system_prompt()
+            enhanced_messages.insert(0, {"role": "system", "content": system_prompt})
+        
         # Convert messages to Gemini format
-        gemini_prompt = self._convert_messages_to_gemini_format(messages)
+        gemini_prompt = self._convert_messages_to_gemini_format(enhanced_messages)
         
         # Prepare tools and config
         tools = self._convert_tools_to_gemini_format()
@@ -520,11 +464,17 @@ class MCPGeminiHost(BaseMCPAgent):
         
         try:
             if stream:
-                return await self._handle_streaming_response(gemini_prompt, config, interactive, messages, input_handler)
+                return await self._handle_streaming_response(gemini_prompt, config, interactive, enhanced_messages, input_handler)
             else:
-                return await self._handle_complete_response(gemini_prompt, config, interactive, messages)
+                return await self._handle_complete_response(gemini_prompt, config, interactive, enhanced_messages)
+        except KeyboardInterrupt:
+            # Handle Ctrl+C gracefully
+            logger.info("Chat completion interrupted by user")
+            raise
         except Exception as e:
+            import traceback
             logger.error(f"Error in Gemini chat completion: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return f"Error: {str(e)}"
     
     def _parse_response_content(self, response) -> tuple:
@@ -683,9 +633,14 @@ class MCPGeminiHost(BaseMCPAgent):
             
             # Format result with success/failure status
             status = "SUCCESS" if tool_success else "FAILED"
-            function_results.append(f"Tool {tool_name} {status}: {tool_result}")
+            result_content = f"Tool {tool_name} {status}: {tool_result}"
+            if not tool_success:
+                result_content += "\n⚠️  Command failed - take this into account for your next action."
+            function_results.append(result_content)
             
             tool_result_msg = f"     Result: {tool_result[:200]}..." if len(tool_result) > 200 else f"     Result: {tool_result}"
+            if not tool_success:
+                tool_result_msg += " ⚠️  Command failed - take this into account for your next action."
             if interactive and not streaming_mode:
                 print(f"\r\x1b[K{tool_result_msg}", flush=True)
             else:
@@ -719,22 +674,15 @@ class MCPGeminiHost(BaseMCPAgent):
                 if function_calls:
                     logger.debug(f"Function calls: {[fc.name for fc in function_calls]}")
                 
-                # Display any text response when present
-                if text_response:
+                # Accumulate text response for non-interactive mode only
+                # Interactive mode printing is handled by the chat loop to avoid duplication
+                if text_response and not interactive:
                     if function_calls:
-                        # Text with function calls - display the full text response
-                        if interactive:
-                            formatted_response = self.format_markdown(text_response)
-                            print(f"\nAssistant: {formatted_response}", flush=True)
-                        else:
-                            # In non-interactive mode, add to accumulated output
-                            all_accumulated_output.append(f"Assistant: {text_response}")
+                        # Text with function calls - add to accumulated output
+                        all_accumulated_output.append(f"Assistant: {text_response}")
                     else:
                         # Text without function calls - this is the final response
-                        if interactive:
-                            formatted_response = self.format_markdown(text_response)
-                            print(f"\nAssistant: {formatted_response}", flush=True)
-                        # Continue to return logic below
+                        all_accumulated_output.append(f"Assistant: {text_response}")
                 
                 if function_calls:
                     # Handle function calls
@@ -954,83 +902,38 @@ class MCPGeminiHost(BaseMCPAgent):
         
         return async_stream_generator()
     
-    async def start_mcp_server(self, server_name: str, server_config) -> bool:
-        """Start and connect to an MCP server."""
-        try:
-            logger.info(f"Starting MCP server: {server_name}")
-            
-            # Create server parameters
-            server_params = StdioServerParameters(
-                command=server_config.command[0],
-                args=server_config.command[1:] + server_config.args,
-                env=server_config.env
-            )
-            
-            # Connect to the server and store the context manager
-            stdio_context = stdio_client(server_params)
-            read, write = await stdio_context.__aenter__()
-            
-            # Store context manager for cleanup
-            self._stdio_contexts = getattr(self, '_stdio_contexts', {})
-            self._stdio_contexts[server_name] = stdio_context
-            
-            # Create client session
-            client_session = ClientSession(read, write)
-            await client_session.initialize()
-            
-            # Store the client
-            self.mcp_clients[server_name] = client_session
-            
-            # Get available tools from this server
-            tools_result = await client_session.list_tools()
-            if tools_result.tools:
-                for tool in tools_result.tools:
-                    tool_key = f"{server_name}:{tool.name}"
-                    self.available_tools[tool_key] = {
-                        "server": server_name,
-                        "name": tool.name,
-                        "description": tool.description,
-                        "schema": tool.inputSchema,
-                        "client": client_session
-                    }
-                    logger.info(f"Registered tool: {tool_key}")
-            
-            logger.info(f"Successfully connected to MCP server: {server_name}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to start MCP server {server_name}: {e}")
-            return False
-    
     async def shutdown(self):
-        """Shutdown all MCP connections."""
-        logger.info("Shutting down MCP connections...")
-        
-        # Close client sessions
-        for server_name, client in self.mcp_clients.items():
+        """Shutdown all MCP connections and HTTP client."""
+        # Close HTTP client first
+        if hasattr(self, 'http_client') and self.http_client:
             try:
-                await client.close()
-                logger.info(f"Closed client session for {server_name}")
+                await self.http_client.aclose()
+                logger.info("Closed Gemini HTTP client")
             except Exception as e:
-                logger.error(f"Error closing client session for {server_name}: {e}")
+                logger.error(f"Error closing Gemini HTTP client: {e}")
         
-        # Close stdio contexts
-        stdio_contexts = getattr(self, '_stdio_contexts', {})
-        for server_name, context in stdio_contexts.items():
-            try:
-                await context.__aexit__(None, None, None)
-                logger.info(f"Closed stdio context for {server_name}")
-            except Exception as e:
-                logger.error(f"Error closing stdio context for {server_name}: {e}")
-        
-        self.mcp_clients.clear()
-        self.available_tools.clear()
-        if hasattr(self, '_stdio_contexts'):
-            self._stdio_contexts.clear()
+        # Call parent shutdown for MCP connections
+        await super().shutdown()
+    
 
 
 async def interactive_chat_gemini(host: MCPGeminiHost):
     """Run an interactive chat session with Gemini and streaming tool execution."""
+    import signal
+    import atexit
+    
+    # Set up cleanup handlers
+    def cleanup_handler():
+        """Cleanup handler for unexpected exits."""
+        try:
+            if hasattr(host, 'http_client') and host.http_client:
+                # Note: We can't use async here, so just log
+                logger.warning("Process terminating - HTTP client may not be properly closed")
+        except:
+            pass
+    
+    atexit.register(cleanup_handler)
+    
     print(f"MCP Gemini Host - Interactive Chat")
     print(f"Model: {host.gemini_config.model}")
     print(f"Available tools: {len(host.available_tools)}")
@@ -1078,6 +981,11 @@ async def interactive_chat_gemini(host: MCPGeminiHost):
             
             # Process the user input (no longer need buffer logic)
             if user_input.strip():  # Only process non-empty input
+                # Ensure no other request is running
+                if current_task and not current_task.done():
+                    print("⚠️  Another request is already in progress. Please wait or press ESC to cancel it.")
+                    continue
+                
                 messages.append({"role": "user", "content": user_input})
                 
                 # Get response from Gemini (interactive mode with tools)
@@ -1212,9 +1120,10 @@ async def interactive_chat_gemini(host: MCPGeminiHost):
                             messages.append({"role": "assistant", "content": full_response})
                     else:
                         # Non-streaming response
-                        # Note: response might already be printed by chat_completion, so don't print again
-                        # Just add to messages for conversation history
-                        messages.append({"role": "assistant", "content": response})
+                        if response:
+                            formatted_response = host.format_markdown(str(response))
+                            print(f"\nAssistant: {formatted_response}")
+                            messages.append({"role": "assistant", "content": response})
                         
                 except Exception as response_error:
                     error_msg = f"Error getting response from Gemini: {response_error}"
@@ -1231,7 +1140,18 @@ async def interactive_chat_gemini(host: MCPGeminiHost):
             sys.stdout.flush()
             break
         except Exception as e:
-            print(f"\nError: {e}")
+            import traceback
+            logger.error(f"Unexpected error in interactive chat: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            print(f"\n💥 Unexpected error: {e}")
+            print("The chat session will continue, but please report this error.")
+            
+            # Reset any interrupted state
+            if input_handler:
+                input_handler.interrupted = False
+            if current_task and not current_task.done():
+                current_task.cancel()
+            current_task = None
 
 
 # CLI commands would be added to the main mcp_deepseek_host.py file

@@ -151,97 +151,24 @@ class MCPDeepseekHost(BaseMCPAgent):
     
     def _create_system_prompt(self, for_first_message: bool = False) -> str:
         """Create a system prompt that includes tool information."""
-        tool_descriptions = []
+        # Get the base system prompt
+        system_prompt = super()._create_system_prompt(for_first_message)
         
-        for tool_key, tool_info in self.available_tools.items():
-            # Use the Deepseek-formatted name (with underscores)
-            deepseek_tool_name = tool_key.replace(":", "_")
-            description = tool_info["description"]
-            tool_descriptions.append(f"- **{deepseek_tool_name}**: {description}")
+        # Add Deepseek-specific instructions for reasoning
+        deepseek_instructions = """
+
+**Special Instructions for Deepseek Reasoner:**
+1.  **Reason:** Use the <reasoning> section to outline your plan before taking action.
+2.  **Act:** Execute your plan with tool calls.
+3.  **Respond:** Provide the final answer to the user."""
+
+        # Insert Deepseek-specific instructions before the final line
+        final_line = "\n\nYou are the expert. Complete the task."
+        if final_line in system_prompt:
+            system_prompt = system_prompt.replace(final_line, deepseek_instructions + final_line)
         
-        tools_text = "\n".join(tool_descriptions) if tool_descriptions else "No tools available"
-        
-        # New agentic system prompt
-        system_prompt = f"""You are a top-tier autonomous software development agent. You are in control and responsible for completing the user's request.
-
-**Mission:** Use the available tools to solve the user's request.
-
-**Guiding Principles:**
-- **Ponder, then proceed:** Briefly outline your plan in the reasoning section before you act. State your assumptions.
-- **Bias for action:** You are empowered to take initiative. Do not ask for permission, just do the work.
-- **Problem-solve:** If a tool fails, analyze the error and try a different approach.
-- **Break large changes into smaller chunks:** For large code changes, divide the work into smaller, manageable tasks to ensure clarity and reduce errors.
-
-**File Editing Workflow:**
-1.  **Read first:** Always read a file before you try to edit it.
-2.  **Prefer `replace_in_file`:** For simple changes, `builtin_replace_in_file` is the best tool.
-3.  **Use `edit_file` for complexity:** For multi-line or complex changes, use `builtin_edit_file`.
-4.  **Chunk changes:** Break large edits into smaller, incremental changes to maintain control and clarity.
-
-**Todo List Workflow:**
-- **Use the Todo list:** Use `builtin_todo_read` and `builtin_todo_write` to manage your tasks.
-- **Start with a plan:** At the beginning of your session, create a todo list to outline your steps.
-- **Update as you go:** As you complete tasks, update the todo list to reflect your progress.
-
-**Workflow:**
-1.  **Reason:** Use the <reasoning> section to outline your plan.
-2.  **Act:** Use one or more tool calls to execute your plan. Use parallel tool calls when it makes sense.
-3.  **Respond:** When you have completed the request, provide the final answer to the user.
-
-**Available Tools:**
-{tools_text}
-
-You are the expert. Complete the task."""
-
         return system_prompt
     
-    async def start_mcp_server(self, server_name: str, server_config) -> bool:
-        """Start and connect to an MCP server."""
-        try:
-            logger.info(f"Starting MCP server: {server_name}")
-            
-            # Create server parameters
-            server_params = StdioServerParameters(
-                command=server_config.command[0],
-                args=server_config.command[1:] + server_config.args,
-                env=server_config.env
-            )
-            
-            # Connect to the server and store the context manager
-            stdio_context = stdio_client(server_params)
-            read, write = await stdio_context.__aenter__()
-            
-            # Store context manager for cleanup
-            self._stdio_contexts = getattr(self, '_stdio_contexts', {})
-            self._stdio_contexts[server_name] = stdio_context
-            
-            # Create client session
-            client_session = ClientSession(read, write)
-            await client_session.initialize()
-            
-            # Store the client
-            self.mcp_clients[server_name] = client_session
-            
-            # Get available tools from this server
-            tools_result = await client_session.list_tools()
-            if tools_result.tools:
-                for tool in tools_result.tools:
-                    tool_key = f"{server_name}:{tool.name}"
-                    self.available_tools[tool_key] = {
-                        "server": server_name,
-                        "name": tool.name,
-                        "description": tool.description,
-                        "schema": tool.inputSchema,
-                        "client": client_session
-                    }
-                    logger.info(f"Registered tool: {tool_key}")
-            
-            logger.info(f"Successfully connected to MCP server: {server_name}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to start MCP server {server_name}: {e}")
-            return False
     
     def _convert_tools_to_deepseek_format(self) -> List[Dict]:
         """Convert MCP tools to Deepseek function calling format."""
@@ -260,88 +187,6 @@ You are the expert. Complete the task."""
         
         return deepseek_tools
     
-    async def _execute_mcp_tool(self, tool_key: str, arguments: Dict[str, Any]) -> str:
-        """Execute an MCP tool (built-in or external) and return the result."""
-        try:
-            if tool_key not in self.available_tools:
-                return f"Error: Tool {tool_key} not found"
-            
-            tool_info = self.available_tools[tool_key]
-            tool_name = tool_info["name"]
-            
-            # Check if it's a built-in tool
-            if tool_info["server"] == "builtin":
-                logger.info(f"Executing built-in tool: {tool_name}")
-                return self._execute_builtin_tool(tool_name, arguments)
-            
-            # Handle external MCP tools
-            client_session = tool_info["client"]
-            if client_session is None:
-                return f"Error: No client session for tool {tool_key}"
-            
-            logger.info(f"Executing MCP tool: {tool_name}")
-            result = await client_session.call_tool(tool_name, arguments)
-            
-            # Format the result
-            if result.content:
-                content_parts = []
-                for content in result.content:
-                    if hasattr(content, 'text'):
-                        content_parts.append(content.text)
-                    elif hasattr(content, 'data'):
-                        content_parts.append(str(content.data))
-                    else:
-                        content_parts.append(str(content))
-                return "\n".join(content_parts)
-            else:
-                return "Tool executed successfully (no output)"
-                
-        except Exception as e:
-            logger.error(f"Error executing tool {tool_key}: {e}")
-            return f"Error executing tool {tool_key}: {str(e)}"
-
-    async def _execute_mcp_tool_with_keepalive(self, tool_key: str, arguments: Dict[str, Any], input_handler=None) -> tuple:
-        """Execute an MCP tool with keep-alive messages, returning (result, keepalive_messages)."""
-        import asyncio
-        
-        # Create the tool execution task
-        tool_task = asyncio.create_task(self._execute_mcp_tool(tool_key, arguments))
-        
-        # Keep-alive configuration
-        keepalive_interval = self.deepseek_config.keepalive_interval
-        keepalive_messages = []
-        start_time = asyncio.get_event_loop().time()
-        
-        # Monitor the task and collect keep-alive messages
-        while not tool_task.done():
-            try:
-                # Check for interruption before waiting
-                if input_handler and input_handler.interrupted:
-                    tool_task.cancel()
-                    keepalive_messages.append("🛑 Tool execution cancelled by user")
-                    try:
-                        await tool_task
-                    except asyncio.CancelledError:
-                        pass
-                    return "Tool execution cancelled", keepalive_messages
-                
-                # Wait for either task completion or timeout
-                await asyncio.wait_for(asyncio.shield(tool_task), timeout=keepalive_interval)
-                break  # Task completed
-            except asyncio.TimeoutError:
-                # Task is still running, send keep-alive message
-                current_time = asyncio.get_event_loop().time()
-                elapsed = current_time - start_time
-                
-                # Create a keep-alive message
-                keepalive_msg = f"⏳ Tool {tool_key} still running... ({elapsed:.1f}s elapsed, press ESC to cancel)"
-                keepalive_messages.append(keepalive_msg)
-                logger.debug(f"Keep-alive: {keepalive_msg}")
-                continue
-        
-        # Get the final result
-        result = await tool_task
-        return result, keepalive_messages
     
     async def chat_completion(self, messages: List[Dict[str, str]], stream: bool = None, interactive: bool = False) -> Union[str, Any]:
         """Handle chat completion using Deepseek with MCP tool support."""
@@ -496,14 +341,15 @@ You are the expert. Complete the task."""
                     try:
                         arguments = json.loads(tool_call.function.arguments)
                         tool_coroutines.append(
-                            self._execute_mcp_tool_with_keepalive(tool_name, arguments)
+                            self._execute_mcp_tool_with_keepalive(tool_name, arguments, keepalive_interval=self.deepseek_config.keepalive_interval)
                         )
                     except json.JSONDecodeError as e:
                         # Handle JSON parsing errors immediately
+                        error_content = f"Error parsing arguments for {tool_name}: {e}\n⚠️  Command failed - take this into account for your next action."
                         current_messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
-                            "content": f"Error parsing arguments for {tool_name}: {e}"
+                            "content": error_content
                         })
 
                 # Run all tool calls concurrently
@@ -523,6 +369,13 @@ You are the expert. Complete the task."""
                                 logger.info(f"Keep-alive: {msg}")
                         else:
                             tool_result_content = result
+
+                    # Check if tool failed and add notice to the content sent to the model
+                    tool_failed = (isinstance(result, Exception) or 
+                                 tool_result_content.startswith("Error:") or 
+                                 "error" in tool_result_content.lower()[:100])
+                    if tool_failed:
+                        tool_result_content += "\n⚠️  Command failed - take this into account for your next action."
 
                     current_messages.append({
                         "role": "tool",
@@ -680,13 +533,18 @@ You are the expert. Complete the task."""
                             arguments = json.loads(tool_call.function.arguments)
                             yield f"\n{i}. Executing {tool_name}...\n"
                             
-                            tool_result, keepalive_messages = await self._execute_mcp_tool_with_keepalive(tool_name, arguments)
+                            tool_result, keepalive_messages = await self._execute_mcp_tool_with_keepalive(tool_name, arguments, keepalive_interval=self.deepseek_config.keepalive_interval)
                             
                             # Yield any keep-alive messages that were generated
                             for msg in keepalive_messages:
                                 yield f"{msg}\n"
                             
-                            yield f"Result: {tool_result}\n"
+                            # Check if tool failed and add appropriate notice
+                            tool_failed = tool_result.startswith("Error:") or "error" in tool_result.lower()[:100]
+                            result_msg = f"Result: {tool_result}"
+                            if tool_failed:
+                                result_msg += " ⚠️  Command failed - take this into account for your next action."
+                            yield f"{result_msg}\n"
                             
                             # Add tool result to conversation
                             current_messages.append({
@@ -696,7 +554,7 @@ You are the expert. Complete the task."""
                             })
                             
                         except json.JSONDecodeError as e:
-                            error_msg = f"Error parsing arguments for {tool_name}: {e}"
+                            error_msg = f"Error parsing arguments for {tool_name}: {e} ⚠️  Command failed - take this into account for your next action."
                             yield f"{error_msg}\n"
                             current_messages.append({
                                 "role": "tool",
@@ -704,7 +562,7 @@ You are the expert. Complete the task."""
                                 "content": error_msg
                             })
                         except Exception as e:
-                            error_msg = f"Error executing {tool_name}: {e}"
+                            error_msg = f"Error executing {tool_name}: {e} ⚠️  Command failed - take this into account for your next action."
                             yield f"{error_msg}\n"
                             current_messages.append({
                                 "role": "tool",
@@ -741,31 +599,6 @@ You are the expert. Complete the task."""
         
         return async_stream_generator()
     
-    async def shutdown(self):
-        """Shutdown all MCP connections."""
-        logger.info("Shutting down MCP connections...")
-        
-        # Close client sessions
-        for server_name, client in self.mcp_clients.items():
-            try:
-                await client.close()
-                logger.info(f"Closed client session for {server_name}")
-            except Exception as e:
-                logger.error(f"Error closing client session for {server_name}: {e}")
-        
-        # Close stdio contexts
-        stdio_contexts = getattr(self, '_stdio_contexts', {})
-        for server_name, context in stdio_contexts.items():
-            try:
-                await context.__aexit__(None, None, None)
-                logger.info(f"Closed stdio context for {server_name}")
-            except Exception as e:
-                logger.error(f"Error closing stdio context for {server_name}: {e}")
-        
-        self.mcp_clients.clear()
-        self.available_tools.clear()
-        if hasattr(self, '_stdio_contexts'):
-            self._stdio_contexts.clear()
 
 
 async def interactive_chat(host: MCPDeepseekHost):
