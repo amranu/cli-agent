@@ -30,7 +30,7 @@ class GeminiConfig(BaseModel):
     api_key: str
     model: str = "gemini-2.5-flash"
     temperature: float = 0.7
-    max_output_tokens: int = 8192
+    max_output_tokens: int = 16384
     top_p: float = 0.9
     top_k: int = 40
     stream: bool = False  # Streaming disabled for Gemini (better reliability)
@@ -53,7 +53,7 @@ class HostConfig(BaseSettings):
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_MODEL")
     gemini_temperature: float = Field(default=0.7, alias="GEMINI_TEMPERATURE")
-    gemini_max_tokens: int = Field(default=4096, alias="GEMINI_MAX_TOKENS")
+    gemini_max_tokens: int = Field(default=8192, alias="GEMINI_MAX_TOKENS")
     gemini_top_p: float = Field(default=0.9, alias="GEMINI_TOP_P")
     gemini_top_k: int = Field(default=40, alias="GEMINI_TOP_K")
     gemini_stream: bool = Field(default=False, alias="GEMINI_STREAM")
@@ -206,7 +206,7 @@ DEEPSEEK_STREAM=true
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-2.5-flash
 GEMINI_TEMPERATURE=0.7
-GEMINI_MAX_TOKENS=4096
+GEMINI_MAX_TOKENS=8192
 GEMINI_TOP_P=0.9
 GEMINI_TOP_K=40
 GEMINI_STREAM=false

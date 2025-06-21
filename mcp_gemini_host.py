@@ -97,14 +97,55 @@ class MCPGeminiHost(BaseMCPAgent):
         function_declarations = []
         
         for tool_key, tool_info in self.available_tools.items():
+            # Sanitize schema to remove unsupported properties
+            sanitized_schema = self._sanitize_schema_for_gemini(tool_info["schema"] or {"type": "object", "properties": {}})
+            
             function_declaration = {
                 "name": tool_key.replace(":", "_"),  # Replace colon with underscore for Gemini
                 "description": tool_info["description"] or f"Execute {tool_info['name']} tool",
-                "parameters": tool_info["schema"] or {"type": "object", "properties": {}}
+                "parameters": sanitized_schema
             }
             function_declarations.append(function_declaration)
         
         return [types.Tool(function_declarations=function_declarations)] if function_declarations else []
+    
+    def _sanitize_schema_for_gemini(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Sanitize JSON schema to be compatible with Gemini API."""
+        if not isinstance(schema, dict):
+            return {"type": "object", "properties": {}}
+        
+        # List of properties that Gemini doesn't support
+        unsupported_properties = {
+            'additionalProperties', 'additional_properties', 'patternProperties', 
+            'dependencies', 'definitions', '$ref', '$schema', '$id', 'allOf', 
+            'anyOf', 'oneOf', 'not', 'if', 'then', 'else'
+        }
+        
+        def clean_schema(obj):
+            if isinstance(obj, dict):
+                cleaned = {}
+                for key, value in obj.items():
+                    # Skip unsupported properties
+                    if key in unsupported_properties:
+                        continue
+                    # Recursively clean nested objects
+                    cleaned[key] = clean_schema(value)
+                return cleaned
+            elif isinstance(obj, list):
+                return [clean_schema(item) for item in obj]
+            else:
+                return obj
+        
+        cleaned_schema = clean_schema(schema)
+        
+        # Ensure we have a valid basic schema structure
+        if not cleaned_schema.get("type"):
+            cleaned_schema["type"] = "object"
+        
+        if cleaned_schema.get("type") == "object" and "properties" not in cleaned_schema:
+            cleaned_schema["properties"] = {}
+        
+        return cleaned_schema
     
     async def _make_gemini_request_with_retry(self, request_func, max_retries: int = 3, base_delay: float = 1.0):
         """Make a Gemini API request with exponential backoff retry logic."""
@@ -575,7 +616,11 @@ class MCPGeminiHost(BaseMCPAgent):
             tool_execution_msg = f"  {i}. Executing {tool_name} with args: {arguments}"
             if interactive and not streaming_mode:
                 print(f"\r\x1b[K{tool_execution_msg}", flush=True)
+            elif interactive and streaming_mode:
+                # For streaming mode, show tool execution directly to user without adding to output
+                print(f"\r\x1b[K{tool_execution_msg}", flush=True)
             else:
+                # Only add to tool output for non-interactive mode
                 all_tool_output.append(tool_execution_msg)
             
             # Execute the tool with interruption support
@@ -641,9 +686,14 @@ class MCPGeminiHost(BaseMCPAgent):
             tool_result_msg = f"     Result: {tool_result[:200]}..." if len(tool_result) > 200 else f"     Result: {tool_result}"
             if not tool_success:
                 tool_result_msg += " ⚠️  Command failed - take this into account for your next action."
-            if interactive and not streaming_mode:
-                print(f"\r\x1b[K{tool_result_msg}", flush=True)
+            
+            # Fix newlines in tool result messages to have proper cursor positioning
+            if interactive and (not streaming_mode or streaming_mode):
+                # Replace any bare newlines with \n\r to ensure proper cursor positioning
+                formatted_result_msg = tool_result_msg.replace('\n', '\n\r')
+                print(f"\r\x1b[K{formatted_result_msg}", flush=True)
             else:
+                # Only add to tool output for non-interactive mode
                 all_tool_output.append(tool_result_msg)
         
         return function_results, all_tool_output
@@ -687,16 +737,13 @@ class MCPGeminiHost(BaseMCPAgent):
                 if function_calls:
                     # Handle function calls
                     if interactive:
-                        print(f"\r\x1b[K\n🔧 Using {len(function_calls)} tool(s)...", flush=True)
+                        print(f"\r\x1b[K\n\r🔧 Using {len(function_calls)} tool(s)...", flush=True)
                     
                     # Execute function calls
                     function_results, tool_output = await self._execute_function_calls(function_calls, interactive)
                     
-                    # Accumulate output for non-interactive mode
-                    if not interactive:
-                        all_accumulated_output.append(f"🔧 Using {len(function_calls)} tool(s)...")
-                        all_accumulated_output.extend(tool_output)
-                        all_accumulated_output.append("")  # Empty line for spacing
+                    # Note: We don't add tool execution status messages to accumulated output
+                    # as they are only for user feedback and cause LLM hallucinations
                     
                     # Create follow-up prompt with tool results and clear instruction
                     tool_results_text = "\n".join(function_results)
@@ -707,9 +754,8 @@ class MCPGeminiHost(BaseMCPAgent):
                 else:
                     # No function calls - this is the final response
                     if not interactive and all_accumulated_output:
-                        # Include all accumulated tool output plus final response
-                        final_output = "\n".join(all_accumulated_output) + (text_response if text_response else "")
-                        return final_output
+                        # Include all accumulated output (final response already included in loop above)
+                        return "\n".join(all_accumulated_output)
                     else:
                         return text_response if text_response else ""
                 
@@ -855,21 +901,20 @@ class MCPGeminiHost(BaseMCPAgent):
                     
                     # Check if we have function calls to execute
                     if function_calls:
-                        # Show tool execution indicator
+                        # Show tool execution indicator to user via print (not yielded to avoid LLM contamination)
                         if accumulated_content.strip():
-                            yield "\r\x1b[K\n\n🔧 Executing function calls...\n"
+                            print(f"\r\x1b[K\n\r\n\r🔧 Using {len(function_calls)} tool(s)...", flush=True)
                         else:
-                            yield "\r\x1b[K🔧 Executing function calls...\n"
+                            print(f"\r\x1b[K🔧 Using {len(function_calls)} tool(s)...", flush=True)
                         
                         # Execute function calls using shared method
                         function_results, tool_output = await self._execute_function_calls(function_calls, True, input_handler, streaming_mode=True)  # Always interactive for streaming
 
-                        # Yield each line of the tool output so it's displayed in streaming mode
-                        for line in tool_output:
-                            yield f"\r\x1b[K{line}\n"
+                        # Don't yield tool execution details to avoid LLM hallucinations
+                        # The tool results will be included in the next iteration's prompt context
                         
-                        # Indicate we're getting the follow-up response
-                        yield "\n\n💭 Processing results and generating response...\n"
+                        # Indicate we're getting the follow-up response (via print to avoid LLM contamination)
+                        print("\n\r\n\r💭 Processing results and generating response...\n\r", flush=True)
                         
                         # Create follow-up prompt for next iteration
                         tool_results_text = "\n".join(function_results)
