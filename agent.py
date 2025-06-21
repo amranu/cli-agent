@@ -651,20 +651,20 @@ class BaseMCPAgent(ABC):
                 },
                 "client": None
             },
-            "builtin:edit_file": {
-                "server": "builtin",
-                "name": "edit_file",
-                "description": "Edit a file using unified diff format patches",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "Path to the file to edit"},
-                        "diff": {"type": "string", "description": "Unified diff format patch to apply to the file"}
-                    },
-                    "required": ["file_path", "diff"]
-                },
-                "client": None
-            },
+            # "builtin:edit_file": {
+            #     "server": "builtin",
+            #     "name": "edit_file",
+            #     "description": "Edit a file using unified diff format patches",
+            #     "schema": {
+            #         "type": "object",
+            #         "properties": {
+            #             "file_path": {"type": "string", "description": "Path to the file to edit"},
+            #             "diff": {"type": "string", "description": "Unified diff format patch to apply to the file"}
+            #         },
+            #         "required": ["file_path", "diff"]
+            #     },
+            #     "client": None
+            # },
             "builtin:webfetch": {
                 "server": "builtin",
                 "name": "webfetch",
@@ -701,8 +701,8 @@ class BaseMCPAgent(ABC):
             return self._todo_write(args)
         elif tool_name == "replace_in_file":
             return self._replace_in_file(args)
-        elif tool_name == "edit_file":
-            return self._edit_file(args)
+        # elif tool_name == "edit_file":
+        #     return self._edit_file(args)
         elif tool_name == "webfetch":
             return self._webfetch(args)
         else:
@@ -1266,9 +1266,8 @@ class BaseMCPAgent(ABC):
 **File Editing Workflow:**
 1.  **Read first:** Always read a file before you try to edit it, following the file reading strategy above.
 2.  **Greedy Grepping:** Always `grep` or look for a small section around where you want to do an edit. This is faster and more reliable than reading the whole file.
-3.  **Prefer `replace_in_file`:** For simple changes, `builtin_replace_in_file` is the best tool.
-4.  **Use `edit_file` for complexity:** For multi-line or complex changes, use `builtin_edit_file` with unified diff format.
-5.  **Chunk changes:** Break large edits into smaller, incremental changes to maintain control and clarity.
+3.  **Use `replace_in_file`:** For all file changes, use `builtin_replace_in_file` to replace text in files.
+4.  **Chunk changes:** Break large edits into smaller, incremental changes to maintain control and clarity.
 
 **Todo List Workflow:**
 - **Use the Todo list:** Use `builtin_todo_read` and `builtin_todo_write` to manage your tasks.
