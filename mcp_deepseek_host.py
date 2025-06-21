@@ -71,7 +71,10 @@ class MCPDeepseekHost(BaseMCPAgent):
     
     async def generate_response(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None) -> Union[str, Any]:
         """Generate a response using Deepseek API."""
-        return await self.chat_completion(messages, stream=True, interactive=True)
+        # For subagents, use interactive=False to avoid terminal formatting issues
+        # when output is forwarded to parent chat
+        interactive = not self.is_subagent
+        return await self.chat_completion(messages, stream=True, interactive=interactive)
     
     def convert_tools_to_llm_format(self) -> List[Dict]:
         """Convert tools to Deepseek format."""
