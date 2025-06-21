@@ -1981,7 +1981,7 @@ async def chat(ctx, server):
             from mcp_deepseek_host import MCPDeepseekHost
             host = MCPDeepseekHost(config)
         
-        # Connect to specified MCP servers
+        # Connect to additional MCP servers specified via --server option
         for server_spec in server:
             parts = server_spec.split(':')
             if len(parts) < 2:
@@ -1992,10 +1992,15 @@ async def chat(ctx, server):
             command = parts[1:]
             
             config.add_mcp_server(server_name, command)
-            
-            success = await host.start_mcp_server(server_name, config.mcp_servers[server_name])
+        
+        # Connect to all configured MCP servers (persistent + command-line)
+        for server_name, server_config in config.mcp_servers.items():
+            click.echo(f"Starting MCP server: {server_name}")
+            success = await host.start_mcp_server(server_name, server_config)
             if not success:
                 click.echo(f"Failed to start server: {server_name}")
+            else:
+                click.echo(f"✅ Connected to MCP server: {server_name}")
         
         # Start interactive chat using the host-specific function
         if hasattr(host, 'deepseek_config'):
@@ -2085,11 +2090,107 @@ async def compact(ctx):
     click.echo("Use 'python agent.py chat' and then '/tokens' or '/compact' commands.")
 
 
+@cli.group()
+def mcp():
+    """Manage MCP servers."""
+    pass
+
+
+@mcp.command()
+@click.argument('server_spec')
+@click.option('--env', multiple=True, help='Environment variable (format: KEY=VALUE)')
+def add(server_spec, env):
+    """Add a persistent MCP server configuration.
+    
+    Format: name:command:arg1:arg2:...
+    
+    Examples:
+        python agent.py mcp add digitalocean:node:/path/to/digitalocean-mcp/dist/index.js
+        python agent.py mcp add filesystem:python:-m:mcp.server.stdio:filesystem:--root:.
+    """
+    try:
+        config = load_config()
+        
+        # Parse server specification
+        parts = server_spec.split(':')
+        if len(parts) < 2:
+            click.echo("❌ Invalid server specification. Format: name:command:arg1:arg2:...")
+            return
+        
+        name = parts[0]
+        command = parts[1]
+        args = parts[2:] if len(parts) > 2 else []
+        
+        # Parse environment variables
+        env_dict = {}
+        for env_var in env:
+            if '=' in env_var:
+                key, value = env_var.split('=', 1)
+                env_dict[key] = value
+            else:
+                click.echo(f"Warning: Invalid environment variable format: {env_var}")
+        
+        # Add the server
+        config.add_mcp_server(name, [command], args, env_dict)
+        config.save_mcp_servers()
+        
+        click.echo(f"✅ Added MCP server '{name}'")
+        click.echo(f"   Command: {command} {' '.join(args)}")
+        if env_dict:
+            click.echo(f"   Environment: {env_dict}")
+        
+    except Exception as e:
+        click.echo(f"❌ Error adding MCP server: {e}")
+
+
+@mcp.command()
+def list():
+    """List all configured MCP servers."""
+    try:
+        config = load_config()
+        
+        if not config.mcp_servers:
+            click.echo("No MCP servers configured.")
+            click.echo("Add a server with: python agent.py mcp add <name:command:args...>")
+            return
+        
+        click.echo("Configured MCP servers:")
+        click.echo()
+        
+        for name, server_config in config.mcp_servers.items():
+            click.echo(f"📡 {name}")
+            click.echo(f"   Command: {' '.join(server_config.command + server_config.args)}")
+            if server_config.env:
+                click.echo(f"   Environment: {server_config.env}")
+            click.echo()
+            
+    except Exception as e:
+        click.echo(f"❌ Error listing MCP servers: {e}")
+
+
+@mcp.command()
+@click.argument('name')
+def remove(name):
+    """Remove a persistent MCP server configuration."""
+    try:
+        config = load_config()
+        
+        if config.remove_mcp_server(name):
+            config.save_mcp_servers()
+            click.echo(f"✅ Removed MCP server '{name}'")
+        else:
+            click.echo(f"❌ MCP server '{name}' not found")
+            
+    except Exception as e:
+        click.echo(f"❌ Error removing MCP server: {e}")
+
+
 def main():
     """Main entry point."""
     # Store original async callbacks
     original_chat = chat.callback
     original_ask = ask.callback
+    original_compact = compact.callback
     
     # Convert async commands to sync
     def sync_chat(**kwargs):
@@ -2098,9 +2199,13 @@ def main():
     def sync_ask(**kwargs):
         asyncio.run(original_ask(**kwargs))
     
+    def sync_compact(**kwargs):
+        asyncio.run(original_compact(**kwargs))
+    
     # Replace command callbacks
     chat.callback = sync_chat
     ask.callback = sync_ask
+    compact.callback = sync_compact
     
     cli()
 
