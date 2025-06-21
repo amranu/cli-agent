@@ -71,7 +71,7 @@ class SlashCommandManager:
             except Exception as e:
                 logger.warning(f"Failed to load command {command_file}: {e}")
     
-    async def handle_slash_command(self, command_line: str) -> Optional[str]:
+    async def handle_slash_command(self, command_line: str, messages: List[Dict[str, Any]] = None) -> Optional[str]:
         """Handle a slash command and return response if handled."""
         if not command_line.startswith('/'):
             return None
@@ -86,6 +86,8 @@ class SlashCommandManager:
             return self._handle_help()
         elif command == "clear":
             return self._handle_clear()
+        elif command == "compact":
+            return await self._handle_compact(messages)
         elif command == "model":
             return self._handle_model(args)
         elif command == "review":
@@ -108,6 +110,7 @@ class SlashCommandManager:
 Built-in Commands:
   /help           - Show this help message
   /clear          - Clear conversation history
+  /compact        - Compact conversation history into a summary
   /model [name]   - Show current model or set model
   /review [file]  - Request code review
 
@@ -134,6 +137,41 @@ Custom Commands:"""
             self.agent.conversation_history.clear()
             return "Conversation history cleared."
         return "No conversation history to clear."
+    
+    async def _handle_compact(self, messages: List[Dict[str, Any]] = None) -> str:
+        """Handle /compact command."""
+        if messages is None:
+            return "No conversation history provided to compact."
+        
+        if len(messages) <= 3:
+            return "Conversation is too short to compact (3 messages or fewer)."
+        
+        # Get token count before compacting
+        if hasattr(self.agent, 'count_conversation_tokens'):
+            tokens_before = self.agent.count_conversation_tokens(messages)
+        else:
+            tokens_before = "unknown"
+        
+        try:
+            # Use the agent's compact_conversation method
+            if hasattr(self.agent, 'compact_conversation'):
+                compacted_messages = await self.agent.compact_conversation(messages)
+                
+                # Get token count after compacting
+                if hasattr(self.agent, 'count_conversation_tokens'):
+                    tokens_after = self.agent.count_conversation_tokens(compacted_messages)
+                    result = f"✅ Conversation compacted: {len(messages)} → {len(compacted_messages)} messages\n📊 Token usage: ~{tokens_before} → ~{tokens_after} tokens"
+                else:
+                    result = f"✅ Conversation compacted: {len(messages)} → {len(compacted_messages)} messages"
+                
+                # Return both the result message and the compacted messages
+                # The interactive chat will need to update its messages list
+                return {"status": result, "compacted_messages": compacted_messages}
+            else:
+                return "❌ Conversation compacting not available for this agent type."
+                
+        except Exception as e:
+            return f"❌ Failed to compact conversation: {str(e)}"
     
     def _handle_model(self, args: str) -> str:
         """Handle /model command."""
@@ -1325,9 +1363,14 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                 # Handle slash commands
                 if user_input.strip().startswith('/'):
                     try:
-                        slash_response = await self.slash_commands.handle_slash_command(user_input.strip())
+                        slash_response = await self.slash_commands.handle_slash_command(user_input.strip(), messages)
                         if slash_response:
-                            print(f"\n{slash_response}\n")
+                            # Handle special compact command response
+                            if isinstance(slash_response, dict) and "compacted_messages" in slash_response:
+                                print(f"\n{slash_response['status']}\n")
+                                messages[:] = slash_response["compacted_messages"]  # Update messages in place
+                            else:
+                                print(f"\n{slash_response}\n")
                             continue
                     except Exception as e:
                         print(f"\nError handling slash command: {e}\n")
