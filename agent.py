@@ -20,17 +20,201 @@ from abc import ABC, abstractmethod
 
 import click
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from fastmcp.client import Client as FastMCPClient, StdioTransport
+import subprocess
+import json
 
 from config import HostConfig, load_config
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Suppress WARNING messages during interactive chat
+    level=logging.ERROR,  # Suppress WARNING messages during interactive chat
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+class SlashCommandManager:
+    """Manages slash commands similar to Claude Code's system."""
+    
+    def __init__(self, agent: 'BaseMCPAgent'):
+        self.agent = agent
+        self.custom_commands = {}
+        self.load_custom_commands()
+    
+    def load_custom_commands(self):
+        """Load custom commands from .claude/commands/ and ~/.claude/commands/"""
+        # Project-specific commands
+        project_commands_dir = Path(".claude/commands")
+        if project_commands_dir.exists():
+            self._load_commands_from_dir(project_commands_dir, "project")
+        
+        # Personal commands
+        personal_commands_dir = Path.home() / ".claude/commands"
+        if personal_commands_dir.exists():
+            self._load_commands_from_dir(personal_commands_dir, "personal")
+    
+    def _load_commands_from_dir(self, commands_dir: Path, command_type: str):
+        """Load commands from a directory."""
+        for command_file in commands_dir.glob("*.md"):
+            try:
+                with open(command_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                command_name = command_file.stem
+                self.custom_commands[command_name] = {
+                    "content": content,
+                    "type": command_type,
+                    "file": str(command_file)
+                }
+                logger.debug(f"Loaded {command_type} command: {command_name}")
+            except Exception as e:
+                logger.warning(f"Failed to load command {command_file}: {e}")
+    
+    async def handle_slash_command(self, command_line: str) -> Optional[str]:
+        """Handle a slash command and return response if handled."""
+        if not command_line.startswith('/'):
+            return None
+        
+        # Parse command and arguments
+        parts = command_line[1:].split(' ', 1)
+        command = parts[0]
+        args = parts[1] if len(parts) > 1 else ""
+        
+        # Handle built-in commands
+        if command == "help":
+            return self._handle_help()
+        elif command == "clear":
+            return self._handle_clear()
+        elif command == "model":
+            return self._handle_model(args)
+        elif command == "review":
+            return self._handle_review(args)
+        elif command.startswith("mcp__"):
+            return await self._handle_mcp_command(command, args)
+        elif ":" in command:
+            # Custom namespaced command
+            return await self._handle_custom_command(command, args)
+        elif command in self.custom_commands:
+            # Simple custom command
+            return await self._handle_custom_command(command, args)
+        else:
+            return f"Unknown command: /{command}. Type /help for available commands."
+    
+    def _handle_help(self) -> str:
+        """Handle /help command."""
+        help_text = """Available Commands:
+
+Built-in Commands:
+  /help           - Show this help message
+  /clear          - Clear conversation history
+  /model [name]   - Show current model or set model
+  /review [file]  - Request code review
+
+Custom Commands:"""
+        
+        if self.custom_commands:
+            for cmd_name, cmd_info in self.custom_commands.items():
+                help_text += f"\n  /{cmd_name}         - {cmd_info['type']} command"
+        else:
+            help_text += "\n  (No custom commands found)"
+        
+        # Add MCP commands if available
+        mcp_commands = self._get_mcp_commands()
+        if mcp_commands:
+            help_text += "\n\nMCP Commands:"
+            for cmd in mcp_commands:
+                help_text += f"\n  /{cmd}"
+        
+        return help_text
+    
+    def _handle_clear(self) -> str:
+        """Handle /clear command."""
+        if hasattr(self.agent, 'conversation_history'):
+            self.agent.conversation_history.clear()
+            return "Conversation history cleared."
+        return "No conversation history to clear."
+    
+    def _handle_model(self, args: str) -> str:
+        """Handle /model command."""
+        if not args.strip():
+            # Show current model
+            if hasattr(self.agent, 'config'):
+                if hasattr(self.agent.config, 'get_deepseek_config'):
+                    return f"Current model: {self.agent.config.get_deepseek_config().model}"
+                elif hasattr(self.agent.config, 'get_gemini_config'):
+                    return f"Current model: {self.agent.config.get_gemini_config().model}"
+            return "Current model: Unknown"
+        else:
+            return "Model switching not implemented yet. Use environment variables to change models."
+    
+    def _handle_review(self, args: str) -> str:
+        """Handle /review command."""
+        if args.strip():
+            file_path = args.strip()
+            return f"Code review requested for: {file_path}\n\nNote: Automated code review not implemented yet. Please use the agent's normal chat to request code review."
+        else:
+            return "Please specify a file to review: /review <file_path>"
+    
+    async def _handle_mcp_command(self, command: str, args: str) -> str:
+        """Handle MCP slash commands."""
+        # Parse MCP command: mcp__<server-name>__<prompt-name>
+        parts = command.split('__')
+        if len(parts) != 3 or parts[0] != "mcp":
+            return f"Invalid MCP command format: /{command}"
+        
+        server_name = parts[1]
+        prompt_name = parts[2]
+        
+        # Check if we have this MCP server
+        if hasattr(self.agent, 'available_tools'):
+            # Look for matching tools from this server
+            matching_tools = [tool for tool in self.agent.available_tools.keys() 
+                             if tool.startswith(f"{server_name}:")]
+            if not matching_tools:
+                return f"MCP server '{server_name}' not found or has no available tools."
+        
+        return f"MCP command execution not fully implemented yet.\nServer: {server_name}\nPrompt: {prompt_name}\nArgs: {args}"
+    
+    async def _handle_custom_command(self, command: str, args: str) -> str:
+        """Handle custom commands."""
+        # Handle namespaced commands (prefix:command)
+        if ":" in command:
+            prefix, cmd_name = command.split(":", 1)
+            full_command = command
+        else:
+            cmd_name = command
+            full_command = command
+        
+        if cmd_name not in self.custom_commands:
+            return f"Custom command not found: /{full_command}"
+        
+        cmd_info = self.custom_commands[cmd_name]
+        content = cmd_info["content"]
+        
+        # Replace $ARGUMENTS placeholder
+        if args:
+            content = content.replace("$ARGUMENTS", args)
+        else:
+            content = content.replace("$ARGUMENTS", "")
+        
+        return f"Executing custom command '{cmd_name}':\n\n{content}"
+    
+    def _get_mcp_commands(self) -> List[str]:
+        """Get available MCP commands."""
+        mcp_commands = []
+        if hasattr(self.agent, 'available_tools'):
+            # Group tools by server and create MCP commands
+            servers = set()
+            for tool_name in self.agent.available_tools.keys():
+                if ":" in tool_name and not tool_name.startswith("builtin:"):
+                    server_name = tool_name.split(":")[0]
+                    servers.add(server_name)
+            
+            for server in servers:
+                mcp_commands.append(f"mcp__{server}__<prompt-name>")
+        
+        return mcp_commands
 
 
 class InterruptibleInput:
@@ -300,12 +484,15 @@ class InterruptibleInput:
         
         # Check if this looks like it might be incomplete multiline content
         # (for cases where paste doesn't use bracketed paste mode)
+        # Be very conservative to avoid false positives on normal questions
         is_likely_incomplete = (
-            len(user_input) > 120 or  # Very long line
-            any(keyword in user_input.lower() for keyword in ['```', 'def ', 'class ', 'import ', 'from ', 'function ', 'const ', 'let ', 'var ']) or  # Code-like
-            user_input.endswith(':') or  # Ends with colon (Python, etc.)
-            user_input.endswith('{') or  # Ends with brace (JS, etc.)
-            user_input.endswith('\\')  # Ends with backslash (continuation)
+            len(user_input) > 300 or  # Very long line (further increased)
+            (user_input.startswith('def ') or user_input.startswith('class ')) or  # Actual code definitions
+            '```' in user_input or  # Code blocks
+            (user_input.endswith(':') and len(user_input) > 80) or  # Long lines ending with colon
+            (user_input.endswith('{') and len(user_input) > 30) or  # Likely actual code, not just mentioning braces
+            user_input.endswith('\\') or  # Backslash continuation
+            user_input.count('\n') > 0  # Already contains newlines
         )
         
         if is_likely_incomplete and '\n' not in user_input:
@@ -333,9 +520,13 @@ class BaseMCPAgent(ABC):
         self.config = config
         self.mcp_clients: Dict[str, ClientSession] = {}
         self.available_tools: Dict[str, Dict] = {}
+        self.conversation_history: List[Dict[str, Any]] = []
         
         # Add built-in tools
         self._add_builtin_tools()
+        
+        # Initialize slash command manager
+        self.slash_commands = SlashCommandManager(self)
         
         logger.info(f"Initialized Base MCP Agent with {len(self.available_tools)} built-in tools")
     
@@ -460,17 +651,17 @@ class BaseMCPAgent(ABC):
                 },
                 "client": None
             },
-            "builtin:copy_file": {
+            "builtin:edit_file": {
                 "server": "builtin",
-                "name": "copy_file",
-                "description": "Copy a file from a source path to a destination path.",
+                "name": "edit_file",
+                "description": "Edit a file using unified diff format patches",
                 "schema": {
                     "type": "object",
                     "properties": {
-                        "source_path": {"type": "string", "description": "Path to the source file to copy."},
-                        "destination_path": {"type": "string", "description": "Path to the destination to copy the file to."}
+                        "file_path": {"type": "string", "description": "Path to the file to edit"},
+                        "diff": {"type": "string", "description": "Unified diff format patch to apply to the file"}
                     },
-                    "required": ["source_path", "destination_path"]
+                    "required": ["file_path", "diff"]
                 },
                 "client": None
             },
@@ -510,6 +701,8 @@ class BaseMCPAgent(ABC):
             return self._todo_write(args)
         elif tool_name == "replace_in_file":
             return self._replace_in_file(args)
+        elif tool_name == "edit_file":
+            return self._edit_file(args)
         elif tool_name == "webfetch":
             return self._webfetch(args)
         else:
@@ -584,7 +777,9 @@ class BaseMCPAgent(ABC):
         
         try:
             # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            dir_path = os.path.dirname(file_path)
+            if dir_path:  # Only create directory if it's not empty (i.e., file is not in current dir)
+                os.makedirs(dir_path, exist_ok=True)
             
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -685,6 +880,150 @@ class BaseMCPAgent(ABC):
         except Exception as e:
             return f"Error replacing text in file: {str(e)}"
     
+    def _edit_file(self, args: Dict[str, Any]) -> str:
+        """Edit a file using unified diff format."""
+        file_path = Path(args["file_path"]).resolve()
+        diff_content = args["diff"]
+        
+        try:
+            if not file_path.exists():
+                return f"Error: File does not exist: {file_path}"
+            
+            # Read the original file
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                original_lines = f.readlines()
+            
+            # Unescape JSON escape sequences in the diff content
+            # This handles cases where Deepseek escapes \n, \", etc.
+            try:
+                # Try to decode JSON escape sequences
+                import codecs
+                unescaped_diff = codecs.decode(diff_content, 'unicode_escape')
+            except:
+                # If that fails, just use the original content
+                unescaped_diff = diff_content
+            
+            # Debug: log the diff content and first few lines
+            logger.warning(f"Applying diff to {file_path}")
+            logger.warning(f"Original diff content: {repr(diff_content[:200])}")
+            logger.warning(f"Unescaped diff content: {repr(unescaped_diff[:200])}")
+            logger.warning(f"First 3 original lines: {[repr(line) for line in original_lines[:3]]}")
+            
+            # Parse and apply the diff
+            modified_lines = self._apply_diff(original_lines, unescaped_diff)
+            
+            if modified_lines is None:
+                return "Error: Failed to apply diff - invalid diff format or patch doesn't match file content"
+            
+            # Write the modified content back
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.writelines(modified_lines)
+            
+            return f"Successfully applied diff to {file_path}. Modified {len(modified_lines)} lines."
+            
+        except Exception as e:
+            return f"Error editing file: {str(e)}"
+    
+    def _apply_diff(self, original_lines: List[str], diff_content: str) -> Optional[List[str]]:
+        """Apply a unified diff to the original lines."""
+        import re
+        
+        # Parse the diff into hunks
+        hunks = []
+        current_hunk = None
+        
+        for line in diff_content.split('\n'):
+            line = line.rstrip('\r\n')
+            
+            # Look for hunk headers (@@)
+            hunk_match = re.match(r'^@@\s*-(\d+)(?:,(\d+))?\s*\+(\d+)(?:,(\d+))?\s*@@', line)
+            if hunk_match:
+                if current_hunk:
+                    hunks.append(current_hunk)
+                
+                old_start = int(hunk_match.group(1)) - 1  # Convert to 0-based indexing
+                old_count = int(hunk_match.group(2)) if hunk_match.group(2) else 1
+                new_start = int(hunk_match.group(3)) - 1  # Convert to 0-based indexing
+                new_count = int(hunk_match.group(4)) if hunk_match.group(4) else 1
+                
+                current_hunk = {
+                    'old_start': old_start,
+                    'old_count': old_count,
+                    'new_start': new_start,
+                    'new_count': new_count,
+                    'lines': []
+                }
+            elif current_hunk is not None:
+                # Process diff lines
+                if line.startswith(' '):
+                    current_hunk['lines'].append(('context', line[1:] + '\n'))
+                elif line.startswith('-'):
+                    current_hunk['lines'].append(('remove', line[1:] + '\n'))
+                elif line.startswith('+'):
+                    current_hunk['lines'].append(('add', line[1:] + '\n'))
+                elif line.startswith('\\'):
+                    # Handle "No newline at end of file" markers
+                    continue
+        
+        if current_hunk:
+            hunks.append(current_hunk)
+        
+        if not hunks:
+            return None
+        
+        # Apply hunks in reverse order to preserve line numbers
+        result_lines = original_lines.copy()
+        
+        for hunk in reversed(hunks):
+            old_start = hunk['old_start']
+            old_count = hunk['old_count']
+            
+            # Verify the context matches
+            context_check = []
+            add_lines = []
+            remove_count = 0
+            
+            for action, content in hunk['lines']:
+                if action == 'context':
+                    context_check.append(content)
+                elif action == 'remove':
+                    context_check.append(content)
+                    remove_count += 1
+                elif action == 'add':
+                    add_lines.append(content)
+            
+            # Check if the original content matches what we expect to remove
+            try:
+                original_section = result_lines[old_start:old_start + old_count]
+                context_index = 0
+                
+                for action, content in hunk['lines']:
+                    if action in ['context', 'remove']:
+                        if context_index >= len(original_section):
+                            logger.warning(f"Diff context mismatch at line {old_start + context_index + 1}: reached end of file")
+                            logger.warning(f"Expected: {repr(content)}")
+                            return None
+                        elif original_section[context_index] != content:
+                            logger.warning(f"Diff context mismatch at line {old_start + context_index + 1}")
+                            logger.warning(f"Expected: {repr(content)}")
+                            logger.warning(f"Found: {repr(original_section[context_index])}")
+                            return None
+                        context_index += 1
+                
+                # Apply the changes
+                new_section = []
+                for action, content in hunk['lines']:
+                    if action in ['context', 'add']:
+                        new_section.append(content)
+                
+                # Replace the section
+                result_lines[old_start:old_start + old_count] = new_section
+                
+            except IndexError:
+                return None
+        
+        return result_lines
+    
     def _webfetch(self, args: Dict[str, Any]) -> str:
         """Fetch a webpage using curl and return its content."""
         url = args.get("url", "")
@@ -732,72 +1071,220 @@ class BaseMCPAgent(ABC):
         # Return the content (truncated if limit was provided)
         return content
     
-    async def start_mcp_server(self, server_name: str, command: List[str], args: List[str] = None, env: Dict[str, str] = None):
-        """Start an MCP server and add it to the client list."""
-        if server_name in self.mcp_clients:
-            logger.info(f"MCP server '{server_name}' is already running")
-            return
-        
+    async def start_mcp_server(self, server_name: str, server_config) -> bool:
+        """Start and connect to an MCP server using FastMCP."""
         try:
-            full_command = command + (args or [])
-            logger.info(f"Starting MCP server '{server_name}' with command: {' '.join(full_command)}")
+            logger.info(f"Starting MCP server: {server_name}")
             
-            server_params = StdioServerParameters(
-                command=command[0],
-                args=command[1:] + (args or []),
-                env=env
-            )
+            # Construct command and args for FastMCP client
+            command = server_config.command[0]
+            args = server_config.command[1:] + server_config.args
             
-            async with stdio_client(server_params) as (read, write):
-                session = ClientSession(read, write)
-                await session.initialize()
-                
-                # Store the session
-                self.mcp_clients[server_name] = session
-                
-                # Get available tools from this server
-                try:
-                    tools_result = await session.list_tools()
-                    for tool in tools_result.tools:
-                        tool_key = f"{server_name}:{tool.name}"
-                        self.available_tools[tool_key] = {
-                            "server": server_name,
-                            "name": tool.name,
-                            "description": tool.description,
-                            "schema": tool.inputSchema,
-                            "client": session
-                        }
-                        logger.debug(f"Added tool: {tool_key}")
-                    
-                    logger.info(f"MCP server '{server_name}' started successfully with {len(tools_result.tools)} tools")
-                    
-                except Exception as e:
-                    logger.warning(f"Could not list tools from server '{server_name}': {e}")
-                    
+            # Create FastMCP client with stdio transport
+            transport = StdioTransport(command=command, args=args, env=server_config.env)
+            client = FastMCPClient(transport=transport)
+            
+            # Enter the context manager and store it for cleanup
+            context_manager = client.__aenter__()
+            await context_manager
+            
+            # Store the client and context manager
+            self.mcp_clients[server_name] = client
+            self._mcp_contexts = getattr(self, '_mcp_contexts', {})
+            self._mcp_contexts[server_name] = client
+            
+            # Get available tools from this server
+            tools_result = await client.list_tools()
+            if tools_result and hasattr(tools_result, 'tools'):
+                for tool in tools_result.tools:
+                    tool_key = f"{server_name}:{tool.name}"
+                    self.available_tools[tool_key] = {
+                        "server": server_name,
+                        "name": tool.name,
+                        "description": tool.description,
+                        "schema": tool.inputSchema if hasattr(tool, 'inputSchema') else {},
+                        "client": client
+                    }
+                    logger.info(f"Registered tool: {tool_key}")
+            elif hasattr(tools_result, '__len__'):
+                # Handle list format
+                for tool in tools_result:
+                    tool_key = f"{server_name}:{tool.name}"
+                    self.available_tools[tool_key] = {
+                        "server": server_name,
+                        "name": tool.name,
+                        "description": tool.description,
+                        "schema": tool.inputSchema if hasattr(tool, 'inputSchema') else {},
+                        "client": client
+                    }
+                    logger.info(f"Registered tool: {tool_key}")
+            
+            logger.info(f"Successfully connected to MCP server: {server_name}")
+            return True
+            
         except Exception as e:
-            logger.error(f"Failed to start MCP server '{server_name}': {e}")
-            if server_name in self.mcp_clients:
-                del self.mcp_clients[server_name]
+            import traceback
+            logger.error(f"Failed to start MCP server {server_name}: {e}")
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            return False
     
-    def shutdown(self):
-        """Shutdown all MCP servers."""
-        logger.info("Shutting down MCP servers...")
+    async def shutdown(self):
+        """Shutdown all MCP connections."""
+        logger.info("Shutting down MCP connections...")
         
+        # Close FastMCP client sessions
         for server_name, client in self.mcp_clients.items():
             try:
-                # Note: In a real implementation, you might want to properly close the session
-                # For now, we'll just remove it from our tracking
-                logger.info(f"Shutting down MCP server: {server_name}")
+                # Exit the context manager properly
+                await client.__aexit__(None, None, None)
+                logger.info(f"Closed client session for {server_name}")
             except Exception as e:
-                logger.error(f"Error shutting down MCP server {server_name}: {e}")
+                logger.error(f"Error closing client session for {server_name}: {e}")
         
         self.mcp_clients.clear()
+        self.available_tools.clear()
+        if hasattr(self, '_mcp_contexts'):
+            self._mcp_contexts.clear()
+    
+    async def _execute_mcp_tool(self, tool_key: str, arguments: Dict[str, Any]) -> str:
+        """Execute an MCP tool (built-in or external) and return the result."""
+        try:
+            if tool_key not in self.available_tools:
+                return f"Error: Tool {tool_key} not found"
+            
+            tool_info = self.available_tools[tool_key]
+            tool_name = tool_info["name"]
+            
+            # Check if it's a built-in tool
+            if tool_info["server"] == "builtin":
+                logger.info(f"Executing built-in tool: {tool_name}")
+                return self._execute_builtin_tool(tool_name, arguments)
+            
+            # Handle external MCP tools with FastMCP
+            client = tool_info["client"]
+            if client is None:
+                return f"Error: No client session for tool {tool_key}"
+            
+            logger.info(f"Executing MCP tool: {tool_name}")
+            result = await client.call_tool(tool_name, arguments)
+            
+            # Format the result for FastMCP
+            if hasattr(result, 'content') and result.content:
+                content_parts = []
+                for content in result.content:
+                    if hasattr(content, 'text'):
+                        content_parts.append(content.text)
+                    elif hasattr(content, 'data'):
+                        content_parts.append(str(content.data))
+                    else:
+                        content_parts.append(str(content))
+                return "\n".join(content_parts)
+            elif isinstance(result, str):
+                return result
+            elif isinstance(result, dict):
+                return json.dumps(result, indent=2)
+            else:
+                return f"Tool executed successfully. Result type: {type(result)}, Content: {result}"
+                
+        except Exception as e:
+            logger.error(f"Error executing tool {tool_key}: {e}")
+            return f"Error executing tool {tool_key}: {str(e)}"
+
+    async def _execute_mcp_tool_with_keepalive(self, tool_key: str, arguments: Dict[str, Any], input_handler=None, keepalive_interval: float = 5.0) -> tuple:
+        """Execute an MCP tool with keep-alive messages, returning (result, keepalive_messages)."""
+        import asyncio
         
-        # Clear MCP tools from available tools (keep built-in tools)
-        builtin_tools = {k: v for k, v in self.available_tools.items() if k.startswith("builtin:")}
-        self.available_tools = builtin_tools
+        # Create the tool execution task
+        tool_task = asyncio.create_task(self._execute_mcp_tool(tool_key, arguments))
         
-        logger.info("MCP servers shutdown complete")
+        # Keep-alive configuration
+        keepalive_messages = []
+        start_time = asyncio.get_event_loop().time()
+        
+        # Monitor the task and collect keep-alive messages
+        while not tool_task.done():
+            try:
+                # Check for interruption before waiting
+                if input_handler and input_handler.interrupted:
+                    tool_task.cancel()
+                    keepalive_messages.append("🛑 Tool execution cancelled by user")
+                    try:
+                        await tool_task
+                    except asyncio.CancelledError:
+                        pass
+                    return "Tool execution cancelled", keepalive_messages
+                
+                # Wait for either task completion or timeout
+                await asyncio.wait_for(asyncio.shield(tool_task), timeout=keepalive_interval)
+                break  # Task completed
+            except asyncio.TimeoutError:
+                # Task is still running, send keep-alive message
+                current_time = asyncio.get_event_loop().time()
+                elapsed = current_time - start_time
+                
+                # Create a keep-alive message
+                keepalive_msg = f"⏳ Tool {tool_key} still running... ({elapsed:.1f}s elapsed)"
+                if input_handler:
+                    keepalive_msg += ", press ESC to cancel"
+                keepalive_messages.append(keepalive_msg)
+                logger.debug(f"Keep-alive: {keepalive_msg}")
+                continue
+        
+        # Get the final result
+        result = await tool_task
+        return result, keepalive_messages
+    
+    def _create_system_prompt(self, for_first_message: bool = False) -> str:
+        """Create a basic system prompt that includes tool information."""
+        tool_descriptions = []
+        
+        for tool_key, tool_info in self.available_tools.items():
+            # Use the converted name format (with underscores)
+            converted_tool_name = tool_key.replace(":", "_")
+            description = tool_info["description"]
+            tool_descriptions.append(f"- **{converted_tool_name}**: {description}")
+        
+        tools_text = "\n".join(tool_descriptions) if tool_descriptions else "No tools available"
+        
+        # Basic system prompt - subclasses can override this
+        system_prompt = f"""You are a top-tier autonomous software development agent. You are in control and responsible for completing the user's request.
+
+**Mission:** Use the available tools to solve the user's request.
+
+**Guiding Principles:**
+- **Ponder, then proceed:** Briefly outline your plan before you act. State your assumptions.
+- **Bias for action:** You are empowered to take initiative. Do not ask for permission, just do the work.
+- **Problem-solve:** If a tool fails, analyze the error and try a different approach.
+- **Break large changes into smaller chunks:** For large code changes, divide the work into smaller, manageable tasks to ensure clarity and reduce errors.
+
+**File Reading Strategy:**
+- **Be surgical:** Do not read entire files at once. It is a waste of your context window.
+- **Locate, then read:** Use tools like `grep` or `find` to locate the specific line numbers or functions you need to inspect.
+- **Read in chunks:** Read files in smaller, targeted chunks of 50-100 lines using the `offset` and `limit` parameters in the `read_file` tool.
+- **Full reads as a last resort:** Only read a full file if you have no other way to find what you are looking for.
+
+**File Editing Workflow:**
+1.  **Read first:** Always read a file before you try to edit it, following the file reading strategy above.
+2.  **Prefer `replace_in_file`:** For simple changes, `builtin_replace_in_file` is the best tool.
+3.  **Use `edit_file` for complexity:** For multi-line or complex changes, use `builtin_edit_file` with unified diff format.
+4.  **Chunk changes:** Break large edits into smaller, incremental changes to maintain control and clarity.
+
+**Todo List Workflow:**
+- **Use the Todo list:** Use `builtin_todo_read` and `builtin_todo_write` to manage your tasks.
+- **Start with a plan:** At the beginning of your session, create a todo list to outline your steps.
+- **Update as you go:** As you complete tasks, update the todo list to reflect your progress.
+
+**Workflow:**
+1.  **Reason:** Outline your plan.
+2.  **Act:** Use one or more tool calls to execute your plan. Use parallel tool calls when it makes sense.
+3.  **Respond:** When you have completed the request, provide the final answer to the user.
+
+**Available Tools:**
+{tools_text}
+
+You are the expert. Complete the task."""
+
+        return system_prompt
     
     def format_markdown(self, text: str) -> str:
         """Format markdown text for terminal display."""
@@ -954,7 +1441,7 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
         current_task = None
         
         print("Starting interactive chat. Type 'quit' or 'exit' to end, 'tools' to list available tools.")
-        print("Press ESC at any time to interrupt operations.\n")
+        print("Use /help for slash commands. Press ESC at any time to interrupt operations.\n")
         
         while True:
             try:
@@ -989,6 +1476,17 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                         print(f"  {tool_name}: {tool_info['description']}")
                     print()
                     continue
+                
+                # Handle slash commands
+                if user_input.strip().startswith('/'):
+                    try:
+                        slash_response = await self.slash_commands.handle_slash_command(user_input.strip())
+                        if slash_response:
+                            print(f"\n{slash_response}\n")
+                            continue
+                    except Exception as e:
+                        print(f"\nError handling slash command: {e}\n")
+                        continue
                 
                 if not user_input.strip():
                     # Empty input, just continue
@@ -1561,7 +2059,9 @@ async def ask(ctx, message, server):
             server_name = parts[0]
             command = parts[1:]
             config.add_mcp_server(server_name, command)
-            await host.start_mcp_server(server_name, config.mcp_servers[server_name])
+            success = await host.start_mcp_server(server_name, config.mcp_servers[server_name])
+            if not success:
+                click.echo(f"Warning: Failed to connect to MCP server '{server_name}', continuing without it...")
         
         # Get response
         messages = [{"role": "user", "content": message}]
