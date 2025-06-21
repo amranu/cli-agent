@@ -634,7 +634,7 @@ class MCPGeminiHost(BaseMCPAgent):
                 all_tool_output.append(tool_execution_msg)
             
             # Create coroutine for parallel execution
-            tool_coroutines.append(self._execute_mcp_tool(tool_name, arguments, None))
+            tool_coroutines.append(self._execute_mcp_tool(tool_name, arguments))
         
         # Execute all tools in parallel
         if tool_coroutines:
