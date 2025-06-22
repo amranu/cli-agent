@@ -752,292 +752,6 @@ class MCPDeepseekHost(BaseMCPAgent):
     
 
 
-async def interactive_chat(host: MCPDeepseekHost):
-    """Run an interactive chat session with streaming tool execution."""
-    print(f"MCP Deepseek Host - Interactive Chat")
-    print(f"Model: {host.deepseek_config.model}")
-    print(f"Available tools: {len(host.available_tools)}")
-    print("Commands: 'quit' to exit, 'tools' to list tools, 'ESC' to interrupt")
-    print("Model switching: '/switch-chat', '/switch-reason', '/switch-gemini', '/switch-gemini-pro'")
-    print("Utility: '/compact' to manually compact conversation, '/tokens' to show token count")
-    print("Input: Single Enter to send, paste multiline content automatically detected")
-    print("Navigation: Arrow keys for cursor movement, Backspace to delete")
-    print("-" * 50)
-    
-    messages = []
-    input_handler = InterruptibleInput()
-    current_task = None
-    
-    while True:
-        try:
-            # Check if we were interrupted during a previous operation
-            if input_handler.interrupted:
-                if current_task and not current_task.done():
-                    current_task.cancel()
-                    print("🛑 Operation cancelled by user")
-                input_handler.interrupted = False
-                current_task = None
-                continue
-            
-            # Get user input with smart multiline detection
-            user_input = input_handler.get_multiline_input("You: ")
-            
-            if user_input is None:  # Interrupted
-                if current_task and not current_task.done():
-                    current_task.cancel()
-                    print("🛑 Operation cancelled by user")
-                input_handler.interrupted = False
-                current_task = None
-                continue
-            
-            if user_input.lower().strip() in ['quit', 'exit', 'q']:
-                break
-            elif user_input.lower().strip() == 'tools':
-                if host.available_tools:
-                    print("\nAvailable tools:")
-                    for tool_key, tool_info in host.available_tools.items():
-                        print(f"  - {tool_key}: {tool_info['description']}")
-                else:
-                    print("No tools available")
-                continue
-            elif user_input.lower().strip() == '/switch-chat':
-                # Switch to deepseek-chat model
-                config = load_config()
-                config.deepseek_model = "deepseek-chat"
-                config.save()
-                # Update the host's config and recreate the deepseek client
-                host.config = config
-                host.deepseek_config = config.get_deepseek_config()
-                timeout_seconds = 600 if host.deepseek_config.model == "deepseek-reasoner" else 600
-                host.deepseek_client = host.deepseek_client.__class__(
-                    api_key=host.deepseek_config.api_key,
-                    base_url=host.deepseek_config.base_url,
-                    timeout=timeout_seconds
-                )
-                print(f"✅ Model switched to: {config.deepseek_model}")
-                continue
-            elif user_input.lower().strip() == '/switch-reason':
-                # Switch to deepseek-reasoner model
-                config = load_config()
-                config.deepseek_model = "deepseek-reasoner"
-                config.save()
-                # Update the host's config and recreate the deepseek client
-                host.config = config
-                host.deepseek_config = config.get_deepseek_config()
-                timeout_seconds = 600 if host.deepseek_config.model == "deepseek-reasoner" else 600
-                host.deepseek_client = host.deepseek_client.__class__(
-                    api_key=host.deepseek_config.api_key,
-                    base_url=host.deepseek_config.base_url,
-                    timeout=timeout_seconds
-                )
-                print(f"✅ Model switched to: {config.deepseek_model}")
-                continue
-            elif user_input.lower().strip() == '/switch-gemini':
-                # Switch to Gemini Flash backend
-                config = load_config()
-                config.deepseek_model = "gemini"  # Use this as a marker
-                config.gemini_model = "gemini-2.5-flash"
-                config.save()
-                print(f"✅ Backend switched to: Gemini Flash 2.5 ({config.gemini_model})")
-                print("⚠️  Note: Restart the chat session to use Gemini backend")
-                continue
-            elif user_input.lower().strip() == '/switch-gemini-pro':
-                # Switch to Gemini Pro backend
-                config = load_config()
-                config.deepseek_model = "gemini"  # Use this as a marker
-                config.gemini_model = "gemini-2.5-pro"
-                config.save()
-                print(f"✅ Backend switched to: Gemini Pro 2.5 ({config.gemini_model})")
-                print("⚠️  Note: Restart the chat session to use Gemini backend")
-                continue
-            elif user_input.lower().strip() == '/compact':
-                # Manually compact conversation
-                if len(messages) > 3:
-                    print(f"\n🗜️  Compacting conversation... ({len(messages)} messages)")
-                    try:
-                        messages = await host.compact_conversation(messages)
-                        tokens = host.count_conversation_tokens(messages)
-                        print(f"✅ Conversation compacted. Current tokens: ~{tokens}")
-                    except Exception as e:
-                        print(f"❌ Failed to compact: {e}")
-                else:
-                    print("📝 Conversation is already short, no need to compact")
-                continue
-            elif user_input.lower().strip() == '/tokens':
-                # Show token count
-                tokens = host.count_conversation_tokens(messages)
-                limit = host.get_token_limit()
-                percentage = (tokens / limit) * 100
-                print(f"\n📊 Token usage: ~{tokens}/{limit} ({percentage:.1f}%)")
-                if percentage > 80:
-                    print("⚠️  Consider using '/compact' to reduce token usage")
-                continue
-            
-            # Process the user input (no longer need buffer logic)
-            if user_input.strip():  # Only process non-empty input
-                messages.append({"role": "user", "content": user_input})
-                
-                # Check if we should auto-compact before making the API call
-                if host.should_compact(messages):
-                    tokens_before = host.count_conversation_tokens(messages)
-                    print(f"\n🗜️  Auto-compacting conversation (was ~{tokens_before} tokens)...")
-                    try:
-                        messages = await host.compact_conversation(messages)
-                        tokens_after = host.count_conversation_tokens(messages)
-                        print(f"✅ Compacted to ~{tokens_after} tokens")
-                    except Exception as e:
-                        print(f"⚠️  Auto-compact failed: {e}")
-                
-                try:
-                    # Make API call interruptible by running in a task
-                    print("\n💭 Thinking... (press ESC to interrupt)")
-                    current_task = asyncio.create_task(
-                        host.chat_completion(messages, stream=host.deepseek_config.stream, interactive=True)
-                    )
-                    
-                    # Create a background task to monitor for escape key
-                    async def monitor_escape():
-                        old_settings = None
-                        try:
-                            while not current_task.done():
-                                try:
-                                    if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0.1)[0]:
-                                        # Set up raw mode for a single character read
-                                        if old_settings is None:
-                                            old_settings = termios.tcgetattr(sys.stdin.fileno())
-                                            tty.setraw(sys.stdin.fileno())
-                                        
-                                        char = sys.stdin.read(1)
-                                        if char == '\x1b':  # Escape key
-                                            input_handler.interrupted = True
-                                            return
-                                    await asyncio.sleep(0.1)
-                                except Exception as e:
-                                    await asyncio.sleep(0.1)
-                        finally:
-                            if old_settings is not None:
-                                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
-                    
-                    monitor_task = asyncio.create_task(monitor_escape())
-                    
-                    # Wait for either completion or interruption
-                    response = None
-                    done, pending = await asyncio.wait(
-                        [current_task, monitor_task],
-                        return_when=asyncio.FIRST_COMPLETED
-                    )
-                    
-                    # Cancel any remaining tasks
-                    for task in pending:
-                        task.cancel()
-                    
-                    if input_handler.interrupted:
-                        print("\n🛑 Request cancelled by user")
-                        input_handler.interrupted = False
-                        current_task = None
-                        continue
-                    
-                    if current_task and current_task.done() and not current_task.cancelled():
-                        response = current_task.result()
-                        current_task = None
-                    else:
-                        continue  # Request was cancelled, go back to input
-                    
-                    if hasattr(response, '__aiter__'):
-                        # Streaming response with potential tool execution
-                        print("\nAssistant (press ESC to interrupt):")
-                        sys.stdout.flush()
-                        full_response = ""
-                        
-                        # Set up non-blocking input monitoring
-                        stdin_fd = sys.stdin.fileno()
-                        old_settings = termios.tcgetattr(stdin_fd)
-                        tty.setraw(stdin_fd)
-                        
-                        interrupted = False
-                        try:
-                            async for chunk in response:
-                                # Check for escape key on each chunk
-                                if select.select([sys.stdin], [], [], 0)[0]:  # Non-blocking check
-                                    char = sys.stdin.read(1)
-                                    if char == '\x1b':  # Escape key
-                                        interrupted = True
-                                        break
-                                
-                                # Check for interruption flag
-                                if input_handler.interrupted:
-                                    interrupted = True
-                                    input_handler.interrupted = False
-                                    break
-                                    
-                                if isinstance(chunk, str):
-                                    # Process chunk to ensure proper line positioning
-                                    if '\n' in chunk:
-                                        # Replace newlines to ensure next line starts at column 0
-                                        processed_chunk = chunk.replace('\n', '\n\r')
-                                        sys.stdout.write(processed_chunk)
-                                        sys.stdout.flush()
-                                    else:
-                                        print(chunk, end="", flush=True)
-                                    full_response += chunk
-                                else:
-                                    # Handle any non-string chunks if needed
-                                    chunk_str = str(chunk)
-                                    if '\n' in chunk_str:
-                                        # Replace newlines to ensure next line starts at column 0
-                                        processed_chunk = chunk_str.replace('\n', '\n\r')
-                                        sys.stdout.write(processed_chunk)
-                                        sys.stdout.flush()
-                                    else:
-                                        print(chunk_str, end="", flush=True)
-                                    full_response += chunk_str
-                        finally:
-                            # Always restore terminal settings first
-                            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
-                            
-                            # Clean up display if interrupted
-                            if interrupted:
-                                print("\n🛑 Streaming interrupted by user")
-                                sys.stdout.flush()
-                            else:
-                                print()  # Normal newline after streaming
-                                # Apply markdown formatting to the complete response
-                                if full_response.strip():
-                                    # Clear the previous unformatted output and show formatted version
-                                    lines_to_clear = full_response.count('\n') + 2  # +2 for prompt and extra line
-                                    for _ in range(lines_to_clear):
-                                        sys.stdout.write('\x1b[A\x1b[K')  # Move up and clear line
-                                    
-                                    formatted_response = host.format_markdown(full_response)
-                                    print(f"Assistant: {formatted_response}")
-                        
-                        # Add assistant response to messages
-                        if full_response:  # Only add if not interrupted
-                            messages.append({"role": "assistant", "content": full_response})
-                    else:
-                        # Non-streaming response (happens when tools are used)
-                        formatted_response = host.format_markdown(str(response))
-                        print(f"\nAssistant: {formatted_response}")
-                        messages.append({"role": "assistant", "content": response})
-                        
-                except asyncio.CancelledError:
-                    print("\n🛑 Request cancelled")
-                    current_task = None
-                except Exception as e:
-                    print(f"\nError: {e}")
-                    current_task = None
-            else:
-                # Empty input, just continue
-                continue
-            
-        except KeyboardInterrupt:
-            # Move to beginning of line and clear, then print exit message
-            sys.stdout.write('\r\x1b[KExiting...\n')
-            sys.stdout.flush()
-            break
-        except Exception as e:
-            print(f"\nError: {e}")
-
 
 @click.group()
 @click.option('--config-file', default=None, help='Path to the configuration file (default: ~/.mcp/config.json)')
@@ -1118,9 +832,8 @@ async def chat(ctx, server):
                 return
             
             # Import and create Gemini host
-            from mcp_gemini_host import MCPGeminiHost, interactive_chat_gemini
+            from mcp_gemini_host import MCPGeminiHost
             host = MCPGeminiHost(config)
-            chat_function = interactive_chat_gemini
         else:
             if not config.deepseek_api_key:
                 click.echo("Error: DEEPSEEK_API_KEY not set. Run 'init' command first and update .env file.")
@@ -1128,7 +841,6 @@ async def chat(ctx, server):
             
             # Create Deepseek host
             host = MCPDeepseekHost(config)
-            chat_function = interactive_chat
         
         # Connect to specified MCP servers
         for server_spec in server:
@@ -1146,8 +858,9 @@ async def chat(ctx, server):
             if not success:
                 click.echo(f"Failed to start server: {server_name}")
         
-        # Start interactive chat
-        await chat_function(host)
+        # Start interactive chat using centralized method
+        input_handler = InterruptibleInput()
+        await host.interactive_chat(input_handler)
         
     except KeyboardInterrupt:
         pass
