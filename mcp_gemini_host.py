@@ -293,20 +293,22 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                     except Exception as e:
                         function_results.append(f"Error executing {fc.name}: {str(e)}")
 
-                # Add function calls and results to conversation
-                # Add assistant message with function calls
-                current_messages.append({"role": "assistant", "content": text_response})
-
-                # Add function results as tool messages
-                for i, (fc, result) in enumerate(zip(function_calls, function_results)):
-                    current_messages.append(
-                        {"role": "tool", "name": fc.name, "content": result}
-                    )
-
-                # Convert back to Gemini format and make another request
-                gemini_prompt = self._convert_messages_to_gemini_format(
-                    current_messages
+                # Instead of adding tool messages to conversation, create a clean prompt
+                # that focuses on the original request and tool results
+                original_request = (
+                    original_messages[-1]["content"]
+                    if original_messages
+                    else "Continue processing"
                 )
+                tool_results_text = "\n".join(function_results)
+
+                # Create a focused prompt that avoids re-execution
+                gemini_prompt = f"""Original request: {original_request}
+
+Tool execution completed successfully. Results:
+{tool_results_text}
+
+Based on these tool results, please provide your final response. Do not re-execute any tools unless specifically needed for a different purpose."""
                 config = types.GenerateContentConfig(
                     tools=(
                         self.convert_tools_to_llm_format()
@@ -1044,9 +1046,20 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                     # Note: We don't add tool execution status messages to accumulated output
                     # as they are only for user feedback and cause LLM hallucinations
 
-                    # Create follow-up prompt with tool results and clear instruction
+                    # Create a clean follow-up prompt to avoid re-execution loops
                     tool_results_text = "\n".join(function_results)
-                    current_prompt = f"{current_prompt}\n\nTool Results:\n{tool_results_text}\n\nThe tool execution is complete. Please continue with either another tool use if needed or your response based on these results."
+                    original_request = (
+                        original_messages[-1]["content"]
+                        if original_messages
+                        else "Continue processing"
+                    )
+
+                    current_prompt = f"""Original request: {original_request}
+
+Tool execution completed successfully. Results:
+{tool_results_text}
+
+Based on these tool results, please provide your final response. Do not re-execute any tools unless specifically needed for a different purpose."""
 
                     # Continue the loop - let Gemini decide if more tools are needed
                     continue
@@ -1168,6 +1181,9 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                     has_any_content = False
                     stream_started = False
                     try:
+                        logger.debug(
+                            f"About to iterate stream_response: {type(stream_response)}"
+                        )
                         for chunk in stream_response:
                             try:
                                 chunk_count += 1
@@ -1224,9 +1240,13 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                                 # Don't yield error to user, just log and continue
                                 continue
                     except Exception as stream_error:
+                        import traceback
+
                         logger.error(
                             f"Error iterating stream after {chunk_count} chunks: {stream_error}"
                         )
+                        logger.error(f"Stream error type: {type(stream_error)}")
+                        logger.error(f"Stream error details: {traceback.format_exc()}")
                         if not stream_started:
                             logger.error(
                                 "Stream never started - this suggests Gemini API is not responding"
@@ -1385,18 +1405,21 @@ Please provide your final analysis based on these subagent results. Do not spawn
                         # Create follow-up prompt for next iteration
                         tool_results_text = "\n".join(function_results)
 
-                        # Check if prompt is getting too long and limit growth
-                        if (
-                            len(current_prompt) > 50000
-                        ):  # 50k characters - prevent exponential growth
-                            logger.warning(
-                                f"Prompt is getting very long ({len(current_prompt)} chars), truncating context"
-                            )
-                            # Keep only the original user request and recent tool results
-                            current_prompt = f"Original request: {original_messages[-1]['content']}\n\nTool execution complete. Results:\n{tool_results_text}\n\nPlease continue with your response based on these results."
-                        else:
-                            # Keep original context but add tool results for continuation
-                            current_prompt = f"{current_prompt}\n\nTool execution complete. Results:\n{tool_results_text}\n\nPlease continue with your response based on these results."
+                        # Instead of appending to the growing prompt, create a clean context
+                        # with just the original request and tool results to avoid confusion
+                        original_request = (
+                            original_messages[-1]["content"]
+                            if original_messages
+                            else "Continue processing"
+                        )
+
+                        # Create a focused prompt that prevents re-execution
+                        current_prompt = f"""Original request: {original_request}
+
+Tool execution has been completed successfully. Results:
+{tool_results_text}
+
+Based on these tool results, please provide your final response. Do not re-execute any tools unless specifically needed for a different purpose."""
 
                         logger.debug(
                             f"Updated prompt length after tool execution: {len(current_prompt)}"

@@ -447,22 +447,10 @@ Please provide your final analysis based on these subagent results. Do not spawn
                             tools=self.convert_tools_to_llm_format(),
                         )
 
-                        # Return the restarted response as string
-                        if (
-                            hasattr(response.choices[0], "message")
-                            and response.choices[0].message.content
-                        ):
-                            final_response = ""
-                            if (
-                                hasattr(
-                                    response.choices[0].message, "reasoning_content"
-                                )
-                                and response.choices[0].message.reasoning_content
-                            ):
-                                final_response += f"<reasoning>{response.choices[0].message.reasoning_content}</reasoning>\n\n"
-                            final_response += response.choices[0].message.content
-                            return final_response
-                        return response.choices[0].message.content or ""
+                        # Replace the old response and messages with the new context
+                        # and continue the loop to process this new response.
+                        current_messages = new_messages
+                        continue
 
                 # Process results
                 for i, result in enumerate(tool_results):
