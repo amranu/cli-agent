@@ -80,6 +80,8 @@ class SlashCommandManager:
             return self._handle_switch_gemini()
         elif command == "switch-gemini-pro":
             return self._handle_switch_gemini_pro()
+        elif command == "init":
+            return await self._handle_init()
         elif command.startswith("mcp__"):
             return await self._handle_mcp_command(command, args)
         elif ":" in command:
@@ -103,6 +105,7 @@ Built-in Commands:
   /model [name]   - Show current model or set model
   /review [file]  - Request code review
   /tools          - List all available tools
+  /init           - Analyze codebase and generate AGENT.md
   /quit, /exit    - Exit the interactive chat
 
 Model Switching:
@@ -312,6 +315,103 @@ Custom Commands:"""
             content = content.replace("$ARGUMENTS", "")
         
         return f"Executing custom command '{cmd_name}':\n\n{content}"
+    
+    async def _handle_init(self) -> str:
+        """Handle /init command - prompt LLM to analyze codebase and create AGENT.md."""
+        try:
+            import os
+            
+            # Get project root directory
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(os.path.dirname(current_dir))
+            
+            # Key files to analyze for comprehensive understanding
+            analysis_files = [
+                "agent.py",
+                "config.py", 
+                "mcp_deepseek_host.py",
+                "mcp_gemini_host.py",
+                "subagent.py",
+                "cli_agent/core/base_agent.py",
+                "cli_agent/core/slash_commands.py",
+                "cli_agent/core/input_handler.py",
+                "cli_agent/tools/builtin_tools.py",
+                "cli_agent/utils/tool_conversion.py",
+                "cli_agent/utils/tool_parsing.py"
+            ]
+            
+            # Check which files exist
+            existing_files = []
+            total_lines = 0
+            
+            for file_path in analysis_files:
+                full_path = os.path.join(project_root, file_path)
+                if os.path.exists(full_path):
+                    existing_files.append(file_path)
+                    try:
+                        with open(full_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                            total_lines += len(content.split('\n'))
+                    except Exception:
+                        pass
+            
+            # Create the prompt for the LLM to analyze and create AGENT.md
+            analysis_prompt = f"""Please comprehensively analyze this MCP Agent codebase and create a detailed AGENT.md file that documents the entire system architecture for other AI coding agents.
+
+## Task: Analyze Codebase and Write AGENT.md
+
+You should read and analyze these {len(existing_files)} key files (approximately {total_lines} lines total):
+{chr(10).join([f"- {path}" for path in existing_files])}
+
+Create a comprehensive AGENT.md document by:
+
+1. **Reading each file** using the read_file tool to understand the codebase structure
+2. **Analyzing the architecture** - understand how modules interact and the overall design
+3. **Writing AGENT.md** using the write_file tool with comprehensive documentation
+
+The AGENT.md should include:
+
+**1. Overview**
+- High-level description of the MCP Agent system and its capabilities
+- Core system features and benefits
+
+**2. Modular Architecture**
+- Detailed breakdown of the file structure and module responsibilities
+- How the modular design improves maintainability
+
+**3. Execution Flow**
+- Step-by-step explanation of how the system processes requests
+- Key execution paths and decision points
+
+**4. Tool Integration**
+- How built-in and external tools work together
+- Tool conversion and execution pipeline
+
+**5. Subagent System**
+- The sophisticated process-isolated subagent architecture
+- Communication protocols and lifecycle management
+
+**6. Design Patterns**
+- Key architectural decisions and patterns used
+- Why these patterns were chosen
+
+**7. Development Guidelines**
+- How to extend and work with the system
+- Best practices for adding new components
+
+Focus on making this documentation extremely helpful for AI coding agents who need to quickly understand and work with this sophisticated codebase. Include specific file paths, class names, and method references where relevant.
+
+Please start by reading the key files to understand the architecture, then write a comprehensive AGENT.md file."""
+
+            # Return the analysis prompt to be sent to LLM
+            return {
+                "status": f"🔍 Initiating codebase analysis of {len(existing_files)} files (~{total_lines} lines total)...",
+                "send_to_llm": analysis_prompt
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to create init prompt: {e}")
+            return f"❌ Failed to create codebase analysis prompt: {str(e)}"
     
     def _get_mcp_commands(self) -> List[str]:
         """Get available MCP commands."""

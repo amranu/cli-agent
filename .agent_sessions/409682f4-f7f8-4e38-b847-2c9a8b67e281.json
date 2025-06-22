@@ -1,0 +1,24 @@
+{
+  "session_id": "409682f4-f7f8-4e38-b847-2c9a8b67e281",
+  "created_at": "2025-06-22T09:09:04.357036",
+  "last_updated": "2025-06-22T09:09:04.357788",
+  "message_count": 4,
+  "messages": [
+    {
+      "role": "user",
+      "content": "How do I write a function in Python?"
+    },
+    {
+      "role": "assistant",
+      "content": "Here's how to write a function in Python:\n\n```python\ndef my_function(parameter1, parameter2):\n    # Function body\n    result = parameter1 + parameter2\n    return result\n```"
+    },
+    {
+      "role": "user",
+      "content": "Can you show me a function with default parameters?"
+    },
+    {
+      "role": "assistant",
+      "content": "Sure! Here's an example with default parameters:\n\n```python\ndef greet(name, greeting='Hello'):\n    return f'{greeting}, {name}!'\n\n# Usage:\nprint(greet('Alice'))  # Output: Hello, Alice!\nprint(greet('Bob', 'Hi'))  # Output: Hi, Bob!\n```"
+    }
+  ]
+}

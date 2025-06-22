@@ -1,0 +1,24 @@
+{
+  "session_id": "cdabb373-fbbe-4c7d-bd1a-b3908f28e8f9",
+  "created_at": "2025-06-22T09:09:04.357916",
+  "last_updated": "2025-06-22T09:09:04.359227",
+  "message_count": 4,
+  "messages": [
+    {
+      "role": "user",
+      "content": "How do I read a CSV file with pandas?"
+    },
+    {
+      "role": "assistant",
+      "content": "You can read a CSV file with pandas using pd.read_csv():\n\n```python\nimport pandas as pd\n\ndf = pd.read_csv('your_file.csv')\nprint(df.head())  # Show first 5 rows\n```"
+    },
+    {
+      "role": "user",
+      "content": "What if the CSV has no headers?"
+    },
+    {
+      "role": "assistant",
+      "content": "If your CSV has no headers, use the header parameter:\n\n```python\ndf = pd.read_csv('your_file.csv', header=None)\n# Or specify custom column names:\ndf = pd.read_csv('your_file.csv', header=None, names=['col1', 'col2', 'col3'])\n```"
+    }
+  ]
+}

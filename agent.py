@@ -16,6 +16,8 @@ import click
 from config import HostConfig, load_config
 from cli_agent.core.base_agent import BaseMCPAgent
 from cli_agent.core.input_handler import InterruptibleInput
+from streaming_json import StreamingJSONHandler
+from session_manager import SessionManager
 
 # Configure logging
 logging.basicConfig(
@@ -92,108 +94,57 @@ def switch_gemini_pro(ctx):
 
 @cli.command()
 @click.option('--server', multiple=True, help='MCP server to connect to (format: name:command:arg1:arg2)')
+@click.option('--input-format', type=click.Choice(['text', 'stream-json']), default='text', help='Input format (text or stream-json)')
+@click.option('--output-format', type=click.Choice(['text', 'stream-json']), default='text', help='Output format (text or stream-json)')
+@click.option('-c', '--continue', 'continue_session', is_flag=True, help='Continue the last conversation')
+@click.option('--resume', 'resume_session_id', help='Resume a specific session by ID')
 @click.pass_context
-async def chat(ctx, server):
+async def chat(ctx, server, input_format, output_format, continue_session, resume_session_id):
     """Start interactive chat session."""
     try:
-        # Load configuration
-        config = load_config()
+        # Initialize session manager
+        session_manager = SessionManager()
         
-        # Load configuration and create host directly
-        
-        # Check if Gemini backend should be used
-        if config.deepseek_model == "gemini":
-            if not config.gemini_api_key:
-                click.echo("Error: GEMINI_API_KEY not set. Run 'init' command first and update .env file.")
-                return
-            
-            # Import and create Gemini host
-            from mcp_gemini_host import MCPGeminiHost
-            host = MCPGeminiHost(config)
-            click.echo(f"Using model: {config.gemini_model}")
-            click.echo(f"Temperature: {config.gemini_temperature}")
+        # Handle session resumption
+        if continue_session:
+            session_id = session_manager.continue_last_session()
+            if session_id:
+                click.echo(f"Continuing session: {session_id[:8]}...")
+                messages = session_manager.get_messages()
+                click.echo(f"Restored {len(messages)} messages")
+            else:
+                click.echo("No previous session found, starting new conversation")
+                session_id = session_manager.create_new_session()
+                messages = []
+        elif resume_session_id:
+            session_id = session_manager.resume_session(resume_session_id)
+            if session_id:
+                click.echo(f"Resumed session: {session_id[:8]}...")
+                messages = session_manager.get_messages()
+                click.echo(f"Restored {len(messages)} messages")
+            else:
+                click.echo(f"Session {resume_session_id} not found, starting new conversation")
+                session_id = session_manager.create_new_session()
+                messages = []
         else:
-            if not config.deepseek_api_key:
-                click.echo("Error: DEEPSEEK_API_KEY not set. Run 'init' command first and update .env file.")
-                return
-            
-            # Create Deepseek host with new subagent system
-            from mcp_deepseek_host import MCPDeepseekHost
-            host = MCPDeepseekHost(config)
-            click.echo(f"Using model: {config.deepseek_model}")
-            click.echo(f"Temperature: {config.deepseek_temperature}")
+            # Start new session
+            session_id = session_manager.create_new_session()
+            messages = []
+            click.echo(f"Started new session: {session_id[:8]}...")
         
-        # Connect to additional MCP servers specified via --server option
-        for server_spec in server:
-            parts = server_spec.split(':')
-            if len(parts) < 2:
-                click.echo(f"Invalid server spec: {server_spec}")
-                continue
-            
-            server_name = parts[0]
-            command = parts[1:]
-            
-            config.add_mcp_server(server_name, command)
+        # Handle mixed modes or invalid combinations FIRST
+        if input_format != output_format:
+            click.echo("Error: Mixed input/output formats not supported. Both must be 'text' or both must be 'stream-json'.")
+            return
         
-        # Connect to all configured MCP servers (persistent + command-line)
-        for server_name, server_config in config.mcp_servers.items():
-            click.echo(f"Starting MCP server: {server_name}")
-            success = await host.start_mcp_server(server_name, server_config)
-            if not success:
-                click.echo(f"Failed to start server: {server_name}")
-            else:
-                click.echo(f"✅ Connected to MCP server: {server_name}")
+        # Handle streaming JSON mode
+        if input_format == 'stream-json' or output_format == 'stream-json':
+            return await handle_streaming_json_chat(server, input_format, output_format, session_manager)
         
-        # Start interactive chat with host reloading support
-        input_handler = InterruptibleInput()
-        messages = []
+        # Handle text mode (default behavior)
+        if input_format == 'text' and output_format == 'text':
+            return await handle_text_chat(server, session_manager, messages)
         
-        while True:
-            chat_result = await host.interactive_chat(input_handler, messages)
-            
-            # Check if we need to reload the host
-            if isinstance(chat_result, dict) and "reload_host" in chat_result:
-                messages = chat_result.get("messages", [])
-                reload_type = chat_result["reload_host"]
-                
-                # Shutdown current host
-                await host.shutdown()
-                
-                # Reload config and create new host
-                config = load_config()
-                
-                if reload_type == "gemini":
-                    if not config.gemini_api_key:
-                        click.echo("Error: GEMINI_API_KEY not set. Cannot switch to Gemini.")
-                        break
-                    from mcp_gemini_host import MCPGeminiHost
-                    host = MCPGeminiHost(config)
-                    click.echo(f"Switched to model: {config.gemini_model}")
-                    click.echo(f"Temperature: {config.gemini_temperature}")
-                else:  # deepseek
-                    if not config.deepseek_api_key:
-                        click.echo("Error: DEEPSEEK_API_KEY not set. Cannot switch to DeepSeek.")
-                        break
-                    from mcp_deepseek_host import MCPDeepseekHost
-                    host = MCPDeepseekHost(config)
-                    click.echo(f"Switched to model: {config.deepseek_model}")
-                    click.echo(f"Temperature: {config.deepseek_temperature}")
-                
-                # Reconnect to MCP servers
-                for server_name, server_config in config.mcp_servers.items():
-                    click.echo(f"Reconnecting to MCP server: {server_name}")
-                    success = await host.start_mcp_server(server_name, server_config)
-                    if success:
-                        click.echo(f"✅ Reconnected to MCP server: {server_name}")
-                    else:
-                        click.echo(f"⚠️  Failed to reconnect to MCP server: {server_name}")
-                
-                # Continue with the same input handler and preserved messages
-                print(f"\n🔄 Continuing chat with {len(messages)} preserved messages...\n")
-                continue
-            else:
-                # Normal exit from chat
-                break
         
     except KeyboardInterrupt:
         pass
@@ -208,10 +159,22 @@ async def chat(ctx, server):
 @cli.command()
 @click.argument('message')
 @click.option('--server', multiple=True, help='MCP server to connect to')
+@click.option('--input-format', type=click.Choice(['text', 'stream-json']), default='text', help='Input format (text or stream-json)')
+@click.option('--output-format', type=click.Choice(['text', 'stream-json']), default='text', help='Output format (text or stream-json)')
 @click.pass_context
-async def ask(ctx, message, server):
+async def ask(ctx, message, server, input_format, output_format):
     """Ask a single question."""
     try:
+        # Validate format combinations
+        if input_format != output_format:
+            click.echo("Error: Mixed input/output formats not supported. Both must be 'text' or both must be 'stream-json'.")
+            return
+        
+        # Handle streaming JSON mode for ask command
+        if input_format == 'stream-json' or output_format == 'stream-json':
+            click.echo("Error: Streaming JSON mode not supported for single question mode. Use 'chat' command instead.")
+            return
+        
         config = load_config()
         
         # Check if Gemini backend should be used
@@ -244,9 +207,10 @@ async def ask(ctx, message, server):
             if not success:
                 click.echo(f"Warning: Failed to connect to MCP server '{server_name}', continuing without it...")
         
-        # Get response
+        # Get response with AGENT.md prepended to first message
         messages = [{"role": "user", "content": message}]
-        response = await host.chat_completion(messages, stream=False)
+        enhanced_messages = host._prepend_agent_md_to_first_message(messages, is_first_message=True)
+        response = await host.chat_completion(enhanced_messages, stream=False)
         
         click.echo(response)
         
@@ -388,6 +352,75 @@ def mcp():
     pass
 
 
+@cli.group()
+def sessions():
+    """Manage conversation sessions."""
+    pass
+
+
+@sessions.command()
+def list():
+    """List recent conversation sessions."""
+    session_manager = SessionManager()
+    sessions_list = session_manager.list_sessions()
+    
+    if not sessions_list:
+        click.echo("No sessions found.")
+        return
+    
+    click.echo("Recent sessions:")
+    for i, session in enumerate(sessions_list, 1):
+        created = session['created_at'][:19].replace('T', ' ')
+        session_id = session['session_id']
+        message_count = session['message_count']
+        first_message = session.get('first_message', '')
+        
+        click.echo(f"{i}. {session_id[:8]}... ({message_count} messages) - {created}")
+        if first_message:
+            click.echo(f"   \"{first_message}\"")
+
+
+@sessions.command()
+@click.argument('session_id')
+def show(session_id):
+    """Show details of a specific session."""
+    session_manager = SessionManager()
+    summary = session_manager.get_session_summary(session_id)
+    
+    if not summary:
+        click.echo(f"Session {session_id} not found.")
+        return
+    
+    click.echo(f"Session: {summary['session_id']}")
+    click.echo(f"Created: {summary['created_at']}")
+    click.echo(f"Last Updated: {summary['last_updated']}")
+    click.echo(f"Messages: {summary['message_count']}")
+    if summary['first_message']:
+        click.echo(f"First Message: \"{summary['first_message']}\"")
+
+
+@sessions.command()
+@click.argument('session_id')
+@click.confirmation_option(prompt='Are you sure you want to delete this session?')
+def delete(session_id):
+    """Delete a conversation session."""
+    session_manager = SessionManager()
+    
+    if session_manager.delete_session(session_id):
+        click.echo(f"Deleted session: {session_id}")
+    else:
+        click.echo(f"Session {session_id} not found.")
+
+
+@sessions.command()
+@click.confirmation_option(prompt='Are you sure you want to delete all sessions?')
+def clear():
+    """Clear all conversation sessions."""
+    session_manager = SessionManager()
+    session_manager.clear_all_sessions()
+    click.echo("All sessions cleared.")
+
+
 @mcp.command()
 @click.argument('server_spec')
 @click.option('--env', multiple=True, help='Environment variable (format: KEY=VALUE)')
@@ -475,6 +508,247 @@ def remove(name):
             
     except Exception as e:
         click.echo(f"❌ Error removing MCP server: {e}")
+
+
+async def handle_streaming_json_chat(server, input_format, output_format, session_manager=None):
+    """Handle streaming JSON chat mode compatible with Claude Code."""
+    import os
+    
+    # Initialize streaming JSON handler
+    handler = StreamingJSONHandler()
+    
+    # Load configuration
+    config = load_config()
+    
+    # Create host
+    if config.deepseek_model == "gemini":
+        if not config.gemini_api_key:
+            click.echo("Error: GEMINI_API_KEY not set.")
+            return
+        from mcp_gemini_host import MCPGeminiHost
+        host = MCPGeminiHost(config)
+        model_name = config.gemini_model
+    else:
+        if not config.deepseek_api_key:
+            click.echo("Error: DEEPSEEK_API_KEY not set.")
+            return
+        from mcp_deepseek_host import MCPDeepseekHost
+        host = MCPDeepseekHost(config)
+        model_name = config.deepseek_model
+    
+    # Connect to servers
+    for server_spec in server:
+        parts = server_spec.split(':')
+        if len(parts) < 2:
+            continue
+        server_name = parts[0]
+        command = parts[1:]
+        config.add_mcp_server(server_name, command)
+        success = await host.start_mcp_server(server_name, config.mcp_servers[server_name])
+        if not success:
+            click.echo(f"Warning: Failed to connect to MCP server '{server_name}'")
+    
+    # Get available tools
+    tool_names = list(host.available_tools.keys())
+    
+    # Send system init
+    if output_format == 'stream-json':
+        handler.send_system_init(
+            cwd=os.getcwd(),
+            tools=tool_names,
+            mcp_servers=list(config.mcp_servers.keys()),
+            model=model_name
+        )
+    
+    # Main chat loop
+    try:
+        if input_format == 'stream-json':
+            # Read JSON input from stdin
+            while True:
+                input_data = handler.read_input_json()
+                if input_data is None:
+                    break
+                
+                if input_data.get('type') == 'user':
+                    message_content = input_data.get('message', {}).get('content', '')
+                    if isinstance(message_content, list) and len(message_content) > 0:
+                        # Extract text from message content
+                        text_content = ""
+                        for content in message_content:
+                            if content.get('type') == 'text':
+                                text_content = content.get('text', '')
+                                break
+                        
+                        if text_content:
+                            # Process message
+                            messages = [{"role": "user", "content": text_content}]
+                            
+                            if output_format == 'stream-json':
+                                # Stream response in JSON format
+                                await stream_json_response(host, handler, messages)
+                            else:
+                                # Regular text response
+                                response = await host.chat_completion(messages, stream=False)
+                                click.echo(response)
+        else:
+            # Regular interactive mode but with JSON output
+            input_handler = InterruptibleInput()
+            messages = []
+            
+            while True:
+                user_input = await input_handler.get_input("You: ")
+                if not user_input or user_input.lower() in ['quit', 'exit']:
+                    break
+                
+                messages.append({"role": "user", "content": user_input})
+                
+                if output_format == 'stream-json':
+                    await stream_json_response(host, handler, messages)
+                else:
+                    response = await host.chat_completion(messages, stream=False)
+                    click.echo(f"Assistant: {response}")
+                    messages.append({"role": "assistant", "content": response})
+    
+    finally:
+        await host.shutdown()
+
+
+async def stream_json_response(host, handler, messages):
+    """Stream response in JSON format."""
+    # Generate response and stream it
+    response = await host.chat_completion(messages, stream=True)
+    
+    if hasattr(response, '__aiter__'):
+        # Handle streaming response
+        full_response = ""
+        async for chunk in response:
+            if isinstance(chunk, str):
+                full_response += chunk
+                # Send partial text updates
+                handler.send_assistant_text(chunk)
+        
+        # Send final response
+        if full_response:
+            handler.send_assistant_text(full_response)
+    else:
+        # Handle non-streaming response
+        handler.send_assistant_text(str(response))
+
+
+async def handle_text_chat(server, session_manager, messages):
+    """Handle standard text-based chat mode."""
+    # Load configuration
+    config = load_config()
+    
+    # Check if Gemini backend should be used
+    if config.deepseek_model == "gemini":
+        if not config.gemini_api_key:
+            click.echo("Error: GEMINI_API_KEY not set. Run 'init' command first and update .env file.")
+            return
+        
+        # Import and create Gemini host
+        from mcp_gemini_host import MCPGeminiHost
+        host = MCPGeminiHost(config)
+        click.echo(f"Using model: {config.gemini_model}")
+        click.echo(f"Temperature: {config.gemini_temperature}")
+    else:
+        if not config.deepseek_api_key:
+            click.echo("Error: DEEPSEEK_API_KEY not set. Run 'init' command first and update .env file.")
+            return
+        
+        # Create Deepseek host with new subagent system
+        from mcp_deepseek_host import MCPDeepseekHost
+        host = MCPDeepseekHost(config)
+        click.echo(f"Using model: {config.deepseek_model}")
+        click.echo(f"Temperature: {config.deepseek_temperature}")
+    
+    # Connect to additional MCP servers specified via --server option
+    for server_spec in server:
+        parts = server_spec.split(':')
+        if len(parts) < 2:
+            click.echo(f"Invalid server spec: {server_spec}")
+            continue
+        
+        server_name = parts[0]
+        command = parts[1:]
+        
+        config.add_mcp_server(server_name, command)
+    
+    # Connect to all configured MCP servers (persistent + command-line)
+    for server_name, server_config in config.mcp_servers.items():
+        click.echo(f"Starting MCP server: {server_name}")
+        success = await host.start_mcp_server(server_name, server_config)
+        if not success:
+            click.echo(f"Failed to start server: {server_name}")
+        else:
+            click.echo(f"✅ Connected to MCP server: {server_name}")
+    
+    # Start interactive chat with host reloading support
+    input_handler = InterruptibleInput()
+    
+    try:
+        while True:
+            chat_result = await host.interactive_chat(input_handler, messages)
+            
+            # Save session after each interaction
+            if messages:
+                for msg in messages:
+                    if msg not in [m for m in session_manager.get_messages()]:
+                        session_manager.add_message(msg)
+            
+            # Check if we need to reload the host
+            if isinstance(chat_result, dict) and "reload_host" in chat_result:
+                messages = chat_result.get("messages", [])
+                # Save updated messages to session
+                session_manager.current_messages = messages
+                session_manager._save_current_session()
+                reload_type = chat_result["reload_host"]
+                
+                # Shutdown current host
+                await host.shutdown()
+                
+                # Reload config and create new host
+                config = load_config()
+                
+                if reload_type == "gemini":
+                    if not config.gemini_api_key:
+                        click.echo("Error: GEMINI_API_KEY not set. Cannot switch to Gemini.")
+                        break
+                    from mcp_gemini_host import MCPGeminiHost
+                    host = MCPGeminiHost(config)
+                    click.echo(f"Switched to model: {config.gemini_model}")
+                    click.echo(f"Temperature: {config.gemini_temperature}")
+                else:  # deepseek
+                    if not config.deepseek_api_key:
+                        click.echo("Error: DEEPSEEK_API_KEY not set. Cannot switch to DeepSeek.")
+                        break
+                    from mcp_deepseek_host import MCPDeepseekHost
+                    host = MCPDeepseekHost(config)
+                    click.echo(f"Switched to model: {config.deepseek_model}")
+                    click.echo(f"Temperature: {config.deepseek_temperature}")
+                
+                # Reconnect to MCP servers
+                for server_name, server_config in config.mcp_servers.items():
+                    click.echo(f"Reconnecting to MCP server: {server_name}")
+                    success = await host.start_mcp_server(server_name, server_config)
+                    if success:
+                        click.echo(f"✅ Reconnected to MCP server: {server_name}")
+                    else:
+                        click.echo(f"⚠️  Failed to reconnect to MCP server: {server_name}")
+                
+                # Continue with the same input handler and preserved messages
+                print(f"\n🔄 Continuing chat with {len(messages)} preserved messages...\n")
+                continue
+            else:
+                # Normal exit from chat
+                break
+    
+    finally:
+        if 'host' in locals():
+            if hasattr(host.shutdown, '__call__') and asyncio.iscoroutinefunction(host.shutdown):
+                await host.shutdown()
+            else:
+                host.shutdown()
 
 
 def main():

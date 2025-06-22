@@ -85,12 +85,92 @@ class MCPGeminiHost(BaseMCPAgent):
         function_declarations = converter.convert_tools(self.available_tools)
         return [types.Tool(function_declarations=function_declarations)]
     
-    def parse_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
+    def parse_tool_calls(self, response: Any) -> List:
         """Parse tool calls from Gemini response using shared utilities."""
-        tool_calls = GeminiToolCallParser.parse_all_formats(response, "")
-        # Convert to dict format for compatibility
-        return [{'name': tc.function.name, 'args': tc.function.arguments} for tc in tool_calls]
+        from types import SimpleNamespace
+        import json
+        
+        # Extract text content from response for text-based tool call parsing
+        text_content = ""
+        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'text') and part.text:
+                    text_content += part.text
+        elif hasattr(response, 'text') and response.text:
+            text_content = response.text
+        elif response.candidates and hasattr(response.candidates[0], 'text') and response.candidates[0].text:
+            text_content = response.candidates[0].text
+        
+        # Parse both structured and text-based tool calls
+        tool_calls = GeminiToolCallParser.parse_all_formats(response, text_content)
+        
+        # Convert to SimpleNamespace format for compatibility with _execute_function_calls
+        converted_calls = []
+        for tc in tool_calls:
+            function_call = SimpleNamespace()
+            function_call.name = tc.function.name
+            
+            # Parse arguments from JSON string to dict for proper argument extraction
+            try:
+                if isinstance(tc.function.arguments, str):
+                    function_call.args = json.loads(tc.function.arguments)
+                else:
+                    function_call.args = tc.function.arguments
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse tool call arguments for {tc.function.name}: {e}")
+                function_call.args = {}
+            
+            converted_calls.append(function_call)
+        
+        return converted_calls
     
+    def _create_system_prompt(self, for_first_message: bool = False) -> str:
+        """Create Gemini-specific system prompt that emphasizes tool usage."""
+        base_prompt = super()._create_system_prompt(for_first_message)
+        
+        # Add Gemini-specific instructions based on agent type
+        if self.is_subagent:
+            gemini_addendum = """
+
+**CRITICAL FOR GEMINI SUBAGENTS: FOCUS & EXECUTION**
+- You are a SUBAGENT - execute your specific task efficiently and provide clear results
+- When a task requires action (running commands, reading files, etc.), you MUST use the appropriate tools
+- Do NOT just describe what you would do - actually DO IT using the tools
+- Take action FIRST, then provide analysis based on the actual results
+- You CANNOT spawn other subagents - focus on your assigned task only
+
+Example: If asked to "run uname -a", do NOT respond with "I will run uname -a command" - instead immediately use builtin_bash_execute with the command and show the actual output."""
+        else:
+            gemini_addendum = """
+
+**CRITICAL FOR GEMINI: TOOL USAGE REQUIREMENTS**
+- When a task requires action (running commands, reading files, etc.), you MUST use the appropriate tools
+- Do NOT just describe what you would do - actually DO IT using the tools
+- If you need to run a command like `uname -a`, use builtin_bash_execute immediately
+- If you need to read a file, use builtin_read_file immediately  
+- Take action FIRST, then provide analysis based on the actual results
+- Your response should show tool execution results, not just intentions
+
+**CRITICAL FOR GEMINI: CONTEXT PRESERVATION**
+- Your context is LIMITED and VALUABLE - protect it aggressively
+- Before reading large files or doing complex analysis, ask: "Should I delegate this to a subagent?"
+- IMMEDIATELY use builtin_task for ANY task that involves:
+  - Reading multiple files (>2 files)
+  - Analyzing large codebases (>200 lines total)
+  - Running multiple commands in sequence
+  - Complex investigations or searches
+- Example: Instead of reading 10 files yourself, spawn a subagent: "Analyze all Python files in src/ directory for imports"
+
+**DELEGATION EXAMPLES:**
+❌ Bad: Reading entire file, then editing it yourself (wastes context)
+✅ Good: Spawn subagent to "Find the login function in auth.py and report its structure"
+
+❌ Bad: Running 5 commands yourself to gather system info
+✅ Good: Spawn subagent to "Gather complete system information: OS, memory, disk, processes"
+
+Example: If asked to "run uname -a", do NOT respond with "I will run uname -a command" - instead immediately use builtin_bash_execute with the command and show the actual output."""
+        
+        return base_prompt + gemini_addendum
     
     async def _make_gemini_request_with_retry(self, request_func, max_retries: int = 3, base_delay: float = 1.0):
         """Make a Gemini API request with exponential backoff retry logic."""
@@ -258,6 +338,8 @@ class MCPGeminiHost(BaseMCPAgent):
         # ```
         inline_pattern = r'Tool:\s*(\w+:\w+)\s*\n\s*Tool Input:\s*\n\s*```json\s*\n(.*?)\n\s*```'
         
+        # Try all patterns to catch mixed formats and parallel calls
+        
         # Try complex pattern first
         complex_matches = re.findall(complex_pattern, content, re.DOTALL)
         for match in complex_matches:
@@ -287,65 +369,69 @@ class MCPGeminiHost(BaseMCPAgent):
                 logger.warning(f"Failed to parse complex XML-style tool call: {e}")
                 continue
         
-        # Try simple pattern if no complex matches found
-        if not function_calls:
-            simple_matches = re.findall(simple_pattern, content, re.DOTALL)
-            for match in simple_matches:
+        # Try simple pattern (always try, don't skip based on previous matches)
+        simple_matches = re.findall(simple_pattern, content, re.DOTALL)
+        for match in simple_matches:
+            try:
+                tool_name = match[0]  # e.g., "builtin:bash_execute"
+                args_json = match[1].strip()
+                
+                # Convert tool name format (builtin:bash_execute -> builtin_bash_execute)
+                gemini_tool_name = tool_name.replace(":", "_")
+                
+                # Validate JSON
                 try:
-                    tool_name = match[0]  # e.g., "builtin:bash_execute"
-                    args_json = match[1].strip()
-                    
-                    # Convert tool name format (builtin:bash_execute -> builtin_bash_execute)
-                    gemini_tool_name = tool_name.replace(":", "_")
-                    
-                    # Validate JSON
-                    try:
-                        json.loads(args_json)
-                    except json.JSONDecodeError:
-                        logger.warning(f"Invalid JSON in simple XML tool call: {args_json}")
-                        continue
-                    
-                    # Create function call object
-                    function_call = SimpleNamespace()
-                    function_call.name = gemini_tool_name
-                    function_call.args = args_json
-                    
-                    function_calls.append(function_call)
-                    logger.info(f"Parsed simple XML-style tool call: {gemini_tool_name} with args: {function_call.args}")
-                    
-                except Exception as e:
-                    logger.warning(f"Failed to parse simple XML-style tool call: {e}")
+                    json.loads(args_json)
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON in simple XML tool call: {args_json}")
                     continue
+                
+                # Create function call object
+                function_call = SimpleNamespace()
+                function_call.name = gemini_tool_name
+                function_call.args = args_json
+                
+                function_calls.append(function_call)
+                logger.info(f"Parsed simple XML-style tool call: {gemini_tool_name} with args: {function_call.args}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to parse simple XML-style tool call: {e}")
+                continue
         
-        # Try inline pattern if no other matches found
-        if not function_calls:
-            inline_matches = re.findall(inline_pattern, content, re.DOTALL)
-            for match in inline_matches:
+        # Try inline pattern (always try, don't skip based on previous matches)
+        inline_matches = re.findall(inline_pattern, content, re.DOTALL)
+        for match in inline_matches:
+            try:
+                tool_name = match[0]  # e.g., "builtin:replace_in_file"
+                args_json = match[1].strip()
+                
+                # Convert tool name format (builtin:replace_in_file -> builtin_replace_in_file)
+                gemini_tool_name = tool_name.replace(":", "_")
+                
+                # Validate JSON
                 try:
-                    tool_name = match[0]  # e.g., "builtin:replace_in_file"
-                    args_json = match[1].strip()
-                    
-                    # Convert tool name format (builtin:replace_in_file -> builtin_replace_in_file)
-                    gemini_tool_name = tool_name.replace(":", "_")
-                    
-                    # Validate JSON
-                    try:
-                        json.loads(args_json)
-                    except json.JSONDecodeError:
-                        logger.warning(f"Invalid JSON in inline tool call: {args_json}")
-                        continue
-                    
-                    # Create function call object
-                    function_call = SimpleNamespace()
-                    function_call.name = gemini_tool_name
-                    function_call.args = args_json
-                    
-                    function_calls.append(function_call)
-                    logger.info(f"Parsed inline tool call: {gemini_tool_name} with args: {function_call.args}")
-                    
-                except Exception as e:
-                    logger.warning(f"Failed to parse inline tool call: {e}")
+                    json.loads(args_json)
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON in inline tool call: {args_json}")
                     continue
+                
+                # Create function call object
+                function_call = SimpleNamespace()
+                function_call.name = gemini_tool_name
+                function_call.args = args_json
+                
+                function_calls.append(function_call)
+                logger.info(f"Parsed inline tool call: {gemini_tool_name} with args: {function_call.args}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to parse inline tool call: {e}")
+                continue
+        
+        # Log summary of parsed tool calls
+        if function_calls:
+            logger.info(f"Successfully parsed {len(function_calls)} tool calls from Gemini response")
+            for i, call in enumerate(function_calls, 1):
+                logger.info(f"  {i}. {call.name}")
         
         return function_calls
 
@@ -671,8 +757,12 @@ class MCPGeminiHost(BaseMCPAgent):
 
     async def _handle_streaming_response(self, prompt: str, config: types.GenerateContentConfig, interactive: bool, original_messages: List[Dict[str, str]], input_handler=None):
         """Handle streaming response from Gemini with iterative tool calling."""
+        import asyncio
+        
         async def async_stream_generator():
             current_prompt = prompt
+            consecutive_failures = 0
+            max_retries = 3
             
             try:
                 while True:
@@ -780,17 +870,7 @@ class MCPGeminiHost(BaseMCPAgent):
                             yield f"\n⚠️ Gemini stream started but failed after {chunk_count} chunks. Error: {stream_error}\n"
                             return
                     
-                    # Check if we got any content at all from the stream
-                    if not has_any_content and not accumulated_content:
-                        if not stream_started:
-                            logger.warning("Gemini stream never started - API may be unresponsive")
-                            yield "\n⚠️ Gemini API is unresponsive. Stream never started.\n"
-                        else:
-                            logger.warning(f"No content received from Gemini stream after {chunk_count} chunks - stream ended unexpectedly")
-                            yield f"\n⚠️ No response from Gemini after {chunk_count} chunks. Ending conversation.\n"
-                        return
-                    
-                    # Parse additional function calls from text using shared method
+                    # Parse additional function calls from text using shared method BEFORE checking for failure
                     if accumulated_content:
                         python_calls = self._parse_python_style_function_calls(accumulated_content)
                         if python_calls:
@@ -799,6 +879,30 @@ class MCPGeminiHost(BaseMCPAgent):
                         xml_calls = self._parse_xml_style_tool_calls(accumulated_content)
                         if xml_calls:
                             function_calls.extend(xml_calls)
+                    
+                    # Check if we got any meaningful response (text content OR function calls)
+                    has_meaningful_response = has_any_content or accumulated_content or function_calls
+                    
+                    if not has_meaningful_response:
+                        consecutive_failures += 1
+                        if consecutive_failures > max_retries:
+                            logger.error(f"Max retries ({max_retries}) exceeded for Gemini streaming")
+                            yield f"\n⚠️ Max retries exceeded. Ending conversation after {consecutive_failures} failures.\n"
+                            return
+                        
+                        if not stream_started:
+                            logger.warning(f"Gemini stream never started - API may be unresponsive (attempt {consecutive_failures}/{max_retries})")
+                            yield f"\n⚠️ Gemini API unresponsive. Retrying... (attempt {consecutive_failures}/{max_retries})\n"
+                        else:
+                            logger.warning(f"No meaningful response from Gemini stream after {chunk_count} chunks (attempt {consecutive_failures}/{max_retries})")
+                            yield f"\n⚠️ No meaningful response from Gemini after {chunk_count} chunks. Retrying... (attempt {consecutive_failures}/{max_retries})\n"
+                        
+                        # Add a brief delay before retrying
+                        await asyncio.sleep(1.0)
+                        continue
+                    
+                    # Reset failure counter on successful response
+                    consecutive_failures = 0
                     
                     # Check if we have function calls to execute
                     if function_calls:

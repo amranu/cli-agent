@@ -48,10 +48,11 @@ class BaseMCPAgent(ABC):
             try:
                 import sys
                 import os
-                # Add current directory to path for subagent import
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                if current_dir not in sys.path:
-                    sys.path.insert(0, current_dir)
+                # Add project root directory to path for subagent import
+                # subagent.py is in the root directory, not in cli_agent/core/
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                if project_root not in sys.path:
+                    sys.path.insert(0, project_root)
                 from subagent import SubagentManager
                 self.subagent_manager = SubagentManager(config)
                 
@@ -78,6 +79,15 @@ class BaseMCPAgent(ABC):
     def _add_builtin_tools(self):
         """Add built-in tools to the available tools."""
         builtin_tools = get_all_builtin_tools()
+        
+        # Remove subagent management tools for subagents to prevent recursion
+        if self.is_subagent:
+            subagent_tools = ["builtin:task", "builtin:task_status", "builtin:task_results"]
+            for tool_key in subagent_tools:
+                if tool_key in builtin_tools:
+                    del builtin_tools[tool_key]
+                    logger.info(f"Removed {tool_key} from subagent tools")
+        
         self.available_tools.update(builtin_tools)
     
     async def _execute_builtin_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
@@ -245,7 +255,8 @@ class BaseMCPAgent(ABC):
             with open(todo_file, 'w', encoding='utf-8') as f:
                 json.dump(todos, f, indent=2)
             
-            return f"Successfully updated todo list with {len(todos)} items"
+            # Return the actual todo list data to the LLM for proper feedback
+            return f"Successfully updated todo list with {len(todos)} items. Current todo list:\n{json.dumps(todos, indent=2)}"
             
         except Exception as e:
             return f"Error writing todo list: {str(e)}"
@@ -346,8 +357,14 @@ class BaseMCPAgent(ABC):
             full_prompt += f"\n\nAdditional context: {context}"
         
         try:
+            # Track active count before and after spawning
+            initial_count = self.subagent_manager.get_active_count()
             task_id = await self.subagent_manager.spawn_subagent(description, full_prompt)
-            return f"Spawned subagent task: {task_id}\nDescription: {description}\nTask is running in the background - output will appear in the chat as it becomes available."
+            final_count = self.subagent_manager.get_active_count()
+            
+            # Display spawn confirmation with active count
+            active_info = f" (Now {final_count} active subagents)" if final_count > 1 else ""
+            return f"Spawned subagent task: {task_id}\nDescription: {description}{active_info}\nTask is running in the background - output will appear in the chat as it becomes available."
         except Exception as e:
             return f"Error spawning subagent: {e}"
             
@@ -572,49 +589,35 @@ Runtime: {runtime:.2f} seconds"""
             logger.error(f"Error handling subagent message: {e}")
     
     def _display_subagent_message_immediately(self, formatted: str, message_type: str):
-        """Display subagent message immediately with proper terminal handling."""
+        """Display subagent message immediately with proper line endings."""
         try:
-            # Handle raw terminal mode properly
             import sys
             import termios
-            import tty
             
             try:
-                # Check if terminal is in raw mode
+                # Check if we're in raw terminal mode
                 stdin_fd = sys.stdin.fileno()
                 current_attrs = termios.tcgetattr(stdin_fd)
-                
-                # Check if we're in raw mode (no echo, no canonical processing)
                 in_raw_mode = not (current_attrs[3] & termios.ECHO) and not (current_attrs[3] & termios.ICANON)
                 
                 if in_raw_mode:
-                    # Terminal is in raw mode - convert all \n to \r\n for proper display
+                    # In raw mode, we need \r\n for proper line breaks
+                    # Move to beginning of line and add proper line endings
                     formatted_with_crlf = formatted.replace('\n', '\r\n')
                     output = f"\r\n{formatted_with_crlf}\r\n"
-                    sys.stdout.write(output)
-                    sys.stdout.flush()
-                    logger.info(f"Displayed subagent message in raw mode: {message_type}")
+                    sys.stderr.write(output)
+                    sys.stderr.flush()
                 else:
-                    # Normal mode - use prompt_toolkit
-                    try:
-                        from prompt_toolkit.patch_stdout import patch_stdout
-                        from prompt_toolkit import print_formatted_text
-                        
-                        with patch_stdout():
-                            print_formatted_text(formatted)
-                        logger.info(f"Displayed subagent message via patch_stdout: {message_type}")
-                    except ImportError:
-                        # Fallback to stderr
-                        print(formatted, file=sys.stderr, flush=True)
-                        logger.info(f"Displayed subagent message via stderr: {message_type}")
-                        
+                    # Normal mode - regular print is fine
+                    print(formatted, file=sys.stderr, flush=True)
+                    
             except (OSError, termios.error):
-                # Terminal control not available - use stderr fallback
+                # Terminal control not available - use regular print
                 print(formatted, file=sys.stderr, flush=True)
-                logger.info(f"Displayed subagent message via stderr fallback: {message_type}")
                 
+            logger.debug(f"Displayed subagent message: {message_type}")
         except Exception as e:
-            logger.error(f"Error displaying subagent message immediately: {e}")
+            logger.error(f"Error displaying subagent message: {e}")
     
     async def _collect_subagent_results(self):
         """Wait for all subagents to complete and collect their results."""
@@ -832,8 +835,31 @@ Runtime: {runtime:.2f} seconds"""
         
         tools_text = "\n".join(tool_descriptions) if tool_descriptions else "No tools available"
         
+        # Customize prompt based on whether this is a subagent
+        if self.is_subagent:
+            agent_role = "You are a focused subagent responsible for executing a specific task efficiently."
+            subagent_strategy = "**SUBAGENT FOCUS:** You are a subagent with a specific task. Complete your assigned task using the available tools and provide clear results. You cannot spawn other subagents."
+        else:
+            agent_role = "You are a top-tier autonomous software development agent. You are in control and responsible for completing the user's request."
+            subagent_strategy = """**Context Management & Subagent Strategy:**
+- **Preserve your context:** Your context window is precious - don't waste it on tasks that can be delegated.
+- **Delegate context-heavy tasks:** Use `builtin_task` to spawn subagents for tasks that would consume significant context:
+  - Large file analysis or searches across multiple files
+  - Complex investigations requiring reading many files
+  - Running multiple commands or gathering system information
+  - Any task that involves reading >200 lines of code
+- **Parallel execution:** For complex investigations requiring multiple independent tasks, spawn multiple subagents simultaneously by making multiple `builtin_task` calls in the same response.
+- **Stay focused:** Keep your main context for planning, coordination, and final synthesis of results.
+- **Automatic coordination:** After spawning subagents, the main agent automatically pauses, waits for all subagents to complete, then restarts with their combined results.
+- **Do not poll status:** Avoid calling `builtin_task_status` repeatedly - the system handles coordination automatically.
+- **Single response spawning:** To spawn multiple subagents, include all `builtin_task` calls in one response, not across multiple responses.
+
+**When to Use Subagents:**
+✅ **DO delegate:** File searches, large code analysis, running commands, gathering information
+❌ **DON'T delegate:** Simple edits, single file reads <50 lines, quick tool calls"""
+        
         # Basic system prompt - subclasses can override this
-        system_prompt = f"""You are a top-tier autonomous software development agent. You are in control and responsible for completing the user's request.
+        system_prompt = f"""{agent_role}
 
 **Mission:** Use the available tools to solve the user's request.
 
@@ -860,11 +886,7 @@ Runtime: {runtime:.2f} seconds"""
 - **Start with a plan:** At the beginning of your session, create a todo list to outline your steps.
 - **Update as you go:** As you complete tasks, update the todo list to reflect your progress.
 
-**Subagent Workflow:**
-- **Parallel execution:** For complex investigations requiring multiple independent tasks, spawn multiple subagents simultaneously by making multiple `builtin_task` calls in the same response.
-- **Automatic coordination:** After spawning subagents, the main agent automatically pauses, waits for all subagents to complete, then restarts with their combined results.
-- **Do not poll status:** Avoid calling `builtin_task_status` repeatedly - the system handles coordination automatically.
-- **Single response spawning:** To spawn multiple subagents, include all `builtin_task` calls in one response, not across multiple responses.
+{subagent_strategy}
 
 **Workflow:**
 1.  **Reason:** Outline your plan.
@@ -878,6 +900,61 @@ You are the expert. Complete the task."""
 
         return system_prompt
     
+    def _read_agent_md(self) -> str:
+        """Read the AGENT.md file for prepending to first messages."""
+        try:
+            import os
+            # Get the project root directory (where AGENT.md should be)
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(os.path.dirname(current_dir))
+            agent_md_path = os.path.join(project_root, 'AGENT.md')
+            
+            if os.path.exists(agent_md_path):
+                with open(agent_md_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                return content
+            else:
+                logger.warning(f"AGENT.md not found at {agent_md_path}")
+                return ""
+        except Exception as e:
+            logger.error(f"Error reading AGENT.md: {e}")
+            return ""
+    
+    def _prepend_agent_md_to_first_message(self, messages: List[Dict[str, str]], is_first_message: bool = False) -> List[Dict[str, str]]:
+        """Prepend AGENT.md content to the first user message if this is the first message of the session."""
+        if not is_first_message or not messages:
+            return messages
+        
+        # Only prepend to the first user message
+        first_user_msg_index = None
+        for i, msg in enumerate(messages):
+            if msg.get("role") == "user":
+                first_user_msg_index = i
+                break
+        
+        if first_user_msg_index is not None:
+            agent_md_content = self._read_agent_md()
+            if agent_md_content:
+                # Create a copy of messages to avoid modifying the original
+                messages_copy = messages.copy()
+                original_content = messages_copy[first_user_msg_index]["content"]
+                
+                # Prepend AGENT.md with a clear separator
+                enhanced_content = f"""<AGENT_ARCHITECTURE_CONTEXT>
+{agent_md_content}
+</AGENT_ARCHITECTURE_CONTEXT>
+
+{original_content}"""
+                
+                messages_copy[first_user_msg_index] = {
+                    **messages_copy[first_user_msg_index],
+                    "content": enhanced_content
+                }
+                
+                logger.info("Prepended AGENT.md to first user message")
+                return messages_copy
+        
+        return messages
 
     def format_markdown(self, text: str) -> str:
         """Format markdown text for terminal display."""
@@ -1212,11 +1289,19 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                                 elif "reload_host" in slash_response:
                                     print(f"\n{slash_response['status']}")
                                     return {"reload_host": slash_response["reload_host"], "messages": messages}
+                                elif "send_to_llm" in slash_response:
+                                    # Special case: send the content to LLM for processing
+                                    if "status" in slash_response:
+                                        print(f"\n{slash_response['status']}\n")
+                                    user_input = slash_response["send_to_llm"]
+                                    # Don't continue - fall through to normal LLM processing
                                 else:
                                     print(f"\n{slash_response.get('status', str(slash_response))}\n")
                             else:
                                 print(f"\n{slash_response}\n")
-                            continue
+                            # Only continue if we're not sending to LLM
+                            if not (isinstance(slash_response, dict) and "send_to_llm" in slash_response):
+                                continue
                     except Exception as e:
                         print(f"\nError handling slash command: {e}\n")
                         continue
@@ -1228,13 +1313,17 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                 # Add user message
                 messages.append({"role": "user", "content": user_input})
                 
+                # Check if this is the first message and prepend AGENT.md if so
+                is_first_message = len(messages) == 1
+                enhanced_messages = self._prepend_agent_md_to_first_message(messages, is_first_message)
+                
                 # Show thinking message
                 print("\nThinking...")
                 
                 # Create response task
                 tools_list = self.convert_tools_to_llm_format()
                 current_task = asyncio.create_task(
-                    self.generate_response(messages, tools_list)
+                    self.generate_response(enhanced_messages, tools_list)
                 )
                 
                 # Wait for response with simple interruption handling

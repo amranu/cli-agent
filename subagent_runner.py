@@ -77,16 +77,16 @@ async def run_subagent_task(task_file_path: str):
         emit_output_with_id(f"Executing task with {len(host.available_tools)} tools available...")
         
         # Execute the task with custom tool execution monitoring
-        # Add summary instructions to ensure subagent provides comprehensive results
+        # Add explicit tool usage instructions for Gemini
         enhanced_prompt = f"""{prompt}
 
-IMPORTANT: After completing your investigation/task, provide a clear and concise summary of your findings. Your summary should include:
-1. What you investigated or accomplished
-2. Key findings or results
-3. Any important observations or insights
-4. Conclusions or recommendations if applicable
-
-Please structure your response so that the main findings are easily extractable for analysis."""
+CRITICAL INSTRUCTIONS:
+- You are a subagent focused on executing tasks.
+- You MUST ONLY USE THE PROVIDED TOOLS.
+- Do not output any text, reasoning, or explanations.
+- When the task is complete, use the 'emit_result' function to return the final result.
+- Your response should be only the tool call, followed by the result.
+"""
         
         messages = [{"role": "user", "content": enhanced_prompt}]
         

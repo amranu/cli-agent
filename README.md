@@ -192,6 +192,8 @@ You: What's the disk usage of this folder?
 
 ## 🤝 Contributing
 
+Please read our [CONTRIBUTING.md](CONTRIBUTING.md) file for more details on our code of conduct and the process for submitting pull requests.
+
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature-name`
 3. Make your changes
