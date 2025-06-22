@@ -79,6 +79,20 @@ class BaseMCPAgent(ABC):
         # Initialize slash command manager
         self.slash_commands = SlashCommandManager(self)
 
+        # Initialize tool permission manager
+        try:
+            from cli_agent.core.tool_permissions import ToolPermissionManager, ToolPermissionConfig
+            
+            # Create default permission config (prompts for all tools by default)
+            # Set empty session file to ensure no persistent approvals across sessions
+            permission_config = ToolPermissionConfig()
+            permission_config.session_permissions_file = ""  # Disable persistent storage
+            self.permission_manager = ToolPermissionManager(permission_config)
+            logger.info("Initialized tool permission manager")
+        except ImportError as e:
+            logger.warning(f"Failed to import tool permission manager: {e}")
+            self.permission_manager = None
+
         logger.info(
             f"Initialized Base MCP Agent with {len(self.available_tools)} built-in tools"
         )
@@ -968,7 +982,7 @@ Runtime: {runtime:.2f} seconds"""
             tool_name = tool_info["name"]
 
             # Check tool permissions (both main agent and subagents)
-            if hasattr(self, "permission_manager"):
+            if hasattr(self, "permission_manager") and self.permission_manager:
                 from cli_agent.core.tool_permissions import (
                     ToolDeniedReturnToPrompt,
                     ToolPermissionResult,
@@ -1307,6 +1321,236 @@ You are the expert. Complete the task."""
                 return messages_copy
 
         return messages
+
+    def _format_chunk_safely(self, chunk: str) -> str:
+        """Apply basic formatting to streaming chunks without losing spaces."""
+        if not chunk:
+            return chunk
+            
+        try:
+            # Don't try to format chunks that are just whitespace or very short
+            if len(chunk.strip()) < 2:
+                return chunk
+                
+            # Only apply formatting if the chunk contains complete markdown patterns
+            if self._chunk_has_complete_markdown(chunk):
+                return self._apply_simple_formatting(chunk)
+            else:
+                return chunk
+                
+        except Exception:
+            # Always fall back to original chunk to preserve spaces
+            return chunk
+            
+    def _apply_simple_formatting(self, chunk: str) -> str:
+        """Apply simple visible formatting that definitely works."""
+        import re
+        
+        formatted = chunk
+        
+        # Make bold text UPPERCASE and remove asterisks
+        formatted = re.sub(r'\*\*([^*]+)\*\*', lambda m: m.group(1).upper(), formatted)
+        
+        # Make italic text with underscores and remove asterisks
+        formatted = re.sub(r'(?<!\*)\*([^*]+)\*(?!\*)', r'_\1_', formatted)
+        
+        # Make code text with brackets and remove backticks
+        formatted = re.sub(r'`([^`]+)`', r'[\1]', formatted)
+        
+        return formatted
+
+    
+    def _apply_rich_console_formatting(self, chunk: str) -> str:
+        """Use Rich Console to apply formatting directly to stdout."""
+        import re
+        import sys
+        from rich.console import Console
+        from rich.text import Text
+        from io import StringIO
+        
+        # Create a console that writes directly to our stdout
+        console = Console(
+            file=sys.stdout,
+            force_terminal=True,
+            width=None,
+            legacy_windows=False,
+            no_color=False,
+            color_system="auto"
+        )
+        
+        # Create formatted text
+        text = Text()
+        last_pos = 0
+        
+        # Find all markdown patterns
+        patterns = [
+            (r'\*\*([^*]+)\*\*', 'bold red'),
+            (r'(?<!\*)\*([^*]+)\*(?!\*)', 'italic blue'),
+            (r'`([^`]+)`', 'dim yellow'),
+        ]
+        
+        matches = []
+        for pattern, style in patterns:
+            for match in re.finditer(pattern, chunk):
+                matches.append((match.start(), match.end(), match.group(1), style))
+        
+        # Sort by position
+        matches.sort()
+        
+        # Build styled text
+        for start, end, inner_text, style in matches:
+            # Add text before match
+            if start > last_pos:
+                text.append(chunk[last_pos:start])
+            # Add styled text
+            text.append(inner_text, style=style)
+            last_pos = end
+        
+        # Add remaining text
+        if last_pos < len(chunk):
+            text.append(chunk[last_pos:])
+        
+        # Print directly and capture what was printed
+        with StringIO() as capture:
+            temp_console = Console(file=capture, force_terminal=True, width=200)
+            temp_console.print(text, end="")
+            return capture.getvalue()
+
+    def _apply_direct_ansi_formatting(self, chunk: str) -> str:
+        """Apply ANSI formatting with proper terminal handling."""
+        import re
+        import os
+        import sys
+        
+        # Force color support
+        os.environ['FORCE_COLOR'] = '1'
+        os.environ['TERM'] = 'xterm-256color'
+        
+        # ANSI escape codes - using proper sequences
+        BOLD = '\x1b[1m'
+        ITALIC = '\x1b[3m' 
+        DIM = '\x1b[2m'
+        CYAN = '\x1b[96m'  # Bright cyan
+        YELLOW = '\x1b[93m'  # Bright yellow
+        RESET = '\x1b[0m'
+        
+        formatted = chunk
+        
+        # Replace **bold** with ANSI bold
+        formatted = re.sub(r'\*\*([^*]+)\*\*', f'{BOLD}\\1{RESET}', formatted)
+        
+        # Replace *italic* with ANSI italic
+        formatted = re.sub(r'(?<!\*)\*([^*]+)\*(?!\*)', f'{ITALIC}\\1{RESET}', formatted)
+        
+        # Replace `code` with ANSI colored background
+        formatted = re.sub(r'`([^`]+)`', f'{YELLOW}\\1{RESET}', formatted)
+        
+        # Ensure output is flushed immediately
+        sys.stdout.flush()
+        
+        return formatted
+
+    def _chunk_has_complete_markdown(self, chunk: str) -> bool:
+        """Check if chunk contains complete markdown patterns that are safe to format."""
+        # Only format chunks with complete, simple markdown patterns
+        complete_patterns = [
+            r'\*\*[^*]+\*\*',  # Complete bold: **text**
+            r'\*[^*]+\*',      # Complete italic: *text*
+            r'`[^`]+`',        # Complete code: `text`
+            r'~~[^~]+~~',      # Complete strikethrough: ~~text~~
+        ]
+        
+        import re
+        for pattern in complete_patterns:
+            if re.search(pattern, chunk):
+                return True
+        return False
+    
+    def _apply_basic_markdown_to_text(self, text, chunk: str):
+        """Apply basic markdown styling to Rich Text object."""
+        import re
+        from rich.text import Text
+        
+        # Create a new Text object and manually build it with styling
+        styled_text = Text()
+        last_end = 0
+        
+        # Find all markdown patterns and their positions
+        patterns = [
+            (r'\*\*([^*]+)\*\*', 'bold'),      # **text**
+            (r'`([^`]+)`', 'dim cyan'),        # `text`
+            (r'\*([^*]+)\*', 'italic'),        # *text*
+        ]
+        
+        # Collect all matches with their positions
+        matches = []
+        for pattern, style in patterns:
+            for match in re.finditer(pattern, chunk):
+                matches.append((match.start(), match.end(), match.group(1), style, match.group(0)))
+        
+        # Sort matches by position
+        matches.sort(key=lambda x: x[0])
+        
+        # Build the styled text
+        for start, end, inner_text, style, full_match in matches:
+            # Add any text before this match
+            if start > last_end:
+                styled_text.append(chunk[last_end:start])
+            
+            # Add the styled text (without markdown syntax)
+            styled_text.append(inner_text, style=style)
+            
+            last_end = end
+        
+        # Add any remaining text
+        if last_end < len(chunk):
+            styled_text.append(chunk[last_end:])
+        
+        return styled_text
+
+    def _find_safe_markdown_boundary(self, text: str, start_pos: int) -> int:
+        """Find a safe position to apply markdown formatting without breaking syntax."""
+        if start_pos >= len(text):
+            return start_pos
+            
+        # Look for safe boundaries from the current position
+        search_text = text[start_pos:]
+        safe_boundaries = [
+            # Sentence endings with space
+            '. ',
+            '.\n',
+            '! ',
+            '!\n', 
+            '? ',
+            '?\n',
+            # Paragraph breaks
+            '\n\n',
+            # End of code blocks
+            '```\n',
+            '```\r\n',
+            # End of lists (line ending after list item)
+            '\n\n',
+            # Word boundaries after reasonable length
+        ]
+        
+        # Find the latest safe boundary
+        latest_boundary = start_pos
+        for boundary in safe_boundaries:
+            pos = search_text.find(boundary)
+            if pos != -1:
+                boundary_end = start_pos + pos + len(boundary)
+                if boundary_end > latest_boundary:
+                    latest_boundary = boundary_end
+        
+        # If no boundary found but we have substantial text, find a word boundary
+        if latest_boundary == start_pos and len(search_text) > 50:
+            # Look for word boundaries (space after word) in the last part
+            for i in range(min(50, len(search_text) - 1), 10, -1):
+                if search_text[i] == ' ' and search_text[i-1].isalnum():
+                    latest_boundary = start_pos + i + 1
+                    break
+        
+        return latest_boundary
 
     def format_markdown(self, text: str) -> str:
         """Format markdown text for terminal display using Rich."""
@@ -1906,6 +2150,7 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
         self, input_handler, existing_messages: List[Dict[str, Any]] = None
     ):
         """Interactive chat session with shared functionality."""
+        import sys
         from cli_agent.core.input_handler import InterruptibleInput
 
         # Store input handler for tool permission prompts
@@ -2052,6 +2297,8 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                     print("\nAssistant (press ESC to interrupt):")
                     sys.stdout.flush()
                     full_response = ""
+                    currently_in_tool_execution = False
+                    post_tool_buffer = ""  # Buffer for text after tool execution
 
                     # Set up non-blocking input monitoring
                     stdin_fd = sys.stdin.fileno()
@@ -2077,28 +2324,72 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                                 break
 
                             if isinstance(chunk, str):
-                                # Apply markdown formatting for terminal display
-                                formatted_chunk = self.format_markdown(chunk)
-                                # Convert \n to \r\n for proper terminal display in raw mode
-                                display_chunk = formatted_chunk.replace("\n", "\r\n")
-                                print(display_chunk, end="", flush=True)
+                                # Check if this chunk indicates tool calls are starting
+                                tool_start = ("🔧 Executing" in chunk or "Tool 1" in chunk or "Tool 2" in chunk or 
+                                            "tool_calls" in chunk or "function\":" in chunk)
+                                
+                                # Check if tool execution is ending
+                                tool_end = ("✅ Tool execution complete" in chunk or "Result:" in chunk or 
+                                          "Tool " in chunk and "Result:" in chunk)
+                                
+                                if tool_start and not currently_in_tool_execution:
+                                    # Tool execution starting - output buffered content with formatting
+                                    currently_in_tool_execution = True
+                                    if full_response:
+                                        formatted_response = self.format_markdown(full_response)
+                                        print(formatted_response, end="", flush=True)
+                                    
+                                elif tool_end and currently_in_tool_execution:
+                                    # Tool execution ending - prepare to buffer again
+                                    currently_in_tool_execution = False
+                                    # Output this chunk (the tool result) and continue
+                                    display_chunk = chunk.replace("\n", "\r\n")
+                                    print(display_chunk, end="", flush=True)
+                                    full_response += chunk
+                                    continue
+                                    
+                                # Output behavior based on current mode
+                                if currently_in_tool_execution:
+                                    # In tool execution - stream directly
+                                    display_chunk = chunk.replace("\n", "\r\n")
+                                    print(display_chunk, end="", flush=True)
+                                else:
+                                    # Buffer for later formatting
+                                    pass  # We'll format and output at the end
+                                    
                                 full_response += chunk
                             else:
                                 # Handle any non-string chunks if needed
-                                formatted_chunk = self.format_markdown(str(chunk))
+                                chunk_str = str(chunk)
+                                formatted_chunk = self._format_chunk_safely(chunk_str)
                                 display_chunk = formatted_chunk.replace("\n", "\r\n")
                                 print(display_chunk, end="", flush=True)
-                                full_response += str(chunk)
+                                full_response += chunk_str
                     finally:
                         # Always restore terminal settings first
                         termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
-
-                        # Clean up display if interrupted
-                        if interrupted:
+                        
+                        # Apply Rich markdown formatting to the complete response (only if not already output)
+                        if not interrupted and full_response and not currently_in_tool_execution:
+                            # Move to new line, then clear and rewrite the response with Rich formatting
+                            print()  # New line after streaming
+                            print(f"\033[1A\033[KAssistant: ", end="")  # Move up one line, clear it, write "Assistant: "
+                            
+                            # Apply Rich markdown formatting to the complete response
+                            formatted_response = self.format_markdown(full_response)
+                            
+                            # Display the formatted response
+                            print(formatted_response)
+                            sys.stdout.flush()
+                        elif not interrupted and has_tool_calls:
+                            # For responses with tool calls, just add a newline (already displayed during streaming)
+                            print()
+                        elif interrupted:
                             print("\n🛑 Streaming interrupted by user")
                             sys.stdout.flush()
                         else:
-                            print()  # Normal newline after streaming
+                            print()  # Just a newline if no response
+
 
                     # Add assistant response to messages
                     if full_response:  # Only add if not interrupted

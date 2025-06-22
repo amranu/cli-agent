@@ -64,6 +64,10 @@ class ToolPermissionManager:
 
     def _load_session_permissions(self):
         """Load persistent session permissions from file."""
+        # Skip loading if session permissions file is disabled
+        if not self.config.session_permissions_file:
+            return
+            
         try:
             permissions_file = Path(self.config.session_permissions_file)
             if permissions_file.exists():
@@ -77,6 +81,10 @@ class ToolPermissionManager:
 
     def _save_session_permissions(self):
         """Save persistent session permissions to file."""
+        # Skip saving if session permissions file is disabled
+        if not self.config.session_permissions_file:
+            return
+            
         try:
             permissions_file = Path(self.config.session_permissions_file)
             permissions_file.parent.mkdir(parents=True, exist_ok=True)
