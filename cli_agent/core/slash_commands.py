@@ -2,7 +2,10 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from cli_agent.core.base_agent import BaseMCPAgent
 
 # Configure logging
 logger = logging.getLogger(__name__)

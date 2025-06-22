@@ -242,14 +242,6 @@ async def chat(
 
     except KeyboardInterrupt:
         pass
-    finally:
-        if "host" in locals():
-            if hasattr(host.shutdown, "__call__") and asyncio.iscoroutinefunction(
-                host.shutdown
-            ):
-                await host.shutdown()
-            else:
-                host.shutdown()
 
 
 @cli.command()
@@ -396,12 +388,13 @@ async def ask(
 
     finally:
         if "host" in locals():
-            if hasattr(host.shutdown, "__call__") and asyncio.iscoroutinefunction(
-                host.shutdown
+            host_instance = locals()["host"]
+            if hasattr(host_instance.shutdown, "__call__") and asyncio.iscoroutinefunction(
+                host_instance.shutdown
             ):
-                await host.shutdown()
+                await host_instance.shutdown()
             else:
-                host.shutdown()
+                host_instance.shutdown()
 
 
 @cli.command()
@@ -1028,12 +1021,13 @@ async def handle_text_chat(
 
     finally:
         if "host" in locals():
-            if hasattr(host.shutdown, "__call__") and asyncio.iscoroutinefunction(
-                host.shutdown
+            host_instance = locals()["host"]
+            if hasattr(host_instance.shutdown, "__call__") and asyncio.iscoroutinefunction(
+                host_instance.shutdown
             ):
-                await host.shutdown()
+                await host_instance.shutdown()
             else:
-                host.shutdown()
+                host_instance.shutdown()
 
 
 def main():
