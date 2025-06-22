@@ -389,9 +389,9 @@ async def ask(
     finally:
         if "host" in locals():
             host_instance = locals()["host"]
-            if hasattr(host_instance.shutdown, "__call__") and asyncio.iscoroutinefunction(
-                host_instance.shutdown
-            ):
+            if hasattr(
+                host_instance.shutdown, "__call__"
+            ) and asyncio.iscoroutinefunction(host_instance.shutdown):
                 await host_instance.shutdown()
             else:
                 host_instance.shutdown()
@@ -1022,9 +1022,9 @@ async def handle_text_chat(
     finally:
         if "host" in locals():
             host_instance = locals()["host"]
-            if hasattr(host_instance.shutdown, "__call__") and asyncio.iscoroutinefunction(
-                host_instance.shutdown
-            ):
+            if hasattr(
+                host_instance.shutdown, "__call__"
+            ) and asyncio.iscoroutinefunction(host_instance.shutdown):
                 await host_instance.shutdown()
             else:
                 host_instance.shutdown()
