@@ -4,44 +4,89 @@ This document provides a technical overview of the MCP Agent codebase, designed 
 
 ## 1. Overview
 
-The MCP Agent is an extensible framework for creating language model-powered agents that can interact with a variety of tools. It provides a core set of functionalities, including a command-line interface (CLI), interactive chat, tool management, and conversation handling. The agent is designed to be model-agnostic, with specific implementations for different language models like Deepseek and Google Gemini.
+The MCP Agent is an extensible framework for creating language model-powered agents that can interact with a variety of tools. The codebase has been refactored from a monolithic structure into a clean modular architecture for improved maintainability and extensibility.
+
+The system provides:
+- **Command-line interface (CLI)** for interactive and programmatic usage
+- **Interactive chat** with advanced features like multiline input and interruption
+- **Tool management** with built-in and MCP protocol integration  
+- **Conversation handling** with automatic compaction and token management
+- **Model-agnostic design** supporting multiple LLM backends
 
 The key features of the agent are:
 
-- **Extensible Tool Integration:** The agent can use both built-in tools and external tools through the **Multi-Capability Peripheral (MCP) protocol**.
-- **Model Agnosticism:** The agent's core logic is separated from the language model implementation, allowing for easy integration of new models.
-- **Interactive and Non-Interactive Modes:** The agent can be used in an interactive chat mode or for single-turn "ask" requests.
-- **Advanced Chat Features:** The interactive chat includes features like multiline input, command history, and the ability to interrupt ongoing operations.
-- **Conversation Management:** The agent can automatically compact long conversations to stay within the language model's context window.
+- **Modular Architecture:** Clean separation of concerns across focused modules
+- **Extensible Tool Integration:** Built-in tools and external tools via MCP protocol
+- **Model Agnosticism:** Core logic independent of LLM implementation
+- **Interactive and Non-Interactive Modes:** Chat sessions and single-turn requests
+- **Advanced Chat Features:** Multiline input, slash commands, interruption handling
+- **Conversation Management:** Automatic compaction within token limits
+- **Subagent System:** Spawn background tasks with event-driven communication
 
-## 2. Core Components
+## 2. Modular Architecture
 
-The codebase is structured around a few key components:
+The codebase is organized into a clean modular structure:
 
-### `agent.py`: The Core Agent Framework
+### `cli_agent/` Package: Modular Core Framework
 
-This file contains the foundational `BaseMCPAgent` class, which is an abstract base class that defines the core agent functionality.
+The main functionality has been extracted into focused modules:
 
-- **`BaseMCPAgent` class:**
-    - **Initialization:** The constructor (`__init__`) initializes the agent's configuration, loads built-in tools, and sets up the MCP client management system.
+#### `cli_agent/core/base_agent.py`: The Core Agent Framework
+
+Contains the foundational `BaseMCPAgent` class - an abstract base class defining core agent functionality.
+
+- **`BaseMCPAgent` class (1,891 lines):**
+    - **Initialization:** Loads configuration, built-in tools, and centralized subagent management
     - **Tool Management:**
-        - `_add_builtin_tools()`: Registers a set of built-in tools, such as `bash_execute`, `read_file`, `write_file`, and more.
-        - `_execute_builtin_tool()`: Executes the built-in tools.
-        - `start_mcp_server()`: Starts and connects to external MCP tool servers.
-        - `_execute_mcp_tool()`: Executes both built-in and external tools.
+        - Uses `cli_agent.tools.builtin_tools` for tool definitions
+        - `_execute_mcp_tool()`: Unified execution for built-in and external tools
+        - `start_mcp_server()`: Connects to external MCP tool servers
     - **Conversation Management:**
-        - `conversation_history`: Stores the conversation as a list of messages.
-        - `compact_conversation()`: Summarizes the conversation to reduce token usage.
+        - `conversation_history`: Message storage with token tracking
+        - `compact_conversation()`: Intelligent conversation summarization
+        - `get_token_limit()`: Centralized token limit management with model configuration
+    - **Interactive Chat:**
+        - `interactive_chat()`: Centralized chat session management
+        - Integrates with `SlashCommandManager` for command handling
+        - Subagent task spawning and result integration
+    - **Centralized Methods** (newly consolidated):
+        - `generate_response()`: Centralized LLM response generation with streaming support
+        - Tool conversion helpers: `normalize_tool_name()`, `generate_default_description()`, etc.
     - **Abstract Methods:**
-        - `generate_response()`: Must be implemented by subclasses to generate a response from a specific language model.
-        - `convert_tools_to_llm_format()`: Must be implemented by subclasses to format tools for the specific language model's API.
-        - `parse_tool_calls()`: Must be implemented by subclasses to parse tool calls from the model's response.
-- **`SlashCommandManager` class:**
-  - Manages slash commands like `/help`, `/clear`, and `/model` to control the agent during a chat session.
-- **`InterruptibleInput` class:**
-  - Provides a robust input handler for the interactive chat, with support for multiline input and interruption.
-- **CLI:**
-  - The file also defines the command-line interface using the `click` library, with commands like `chat`, `ask`, and `mcp` for managing servers.
+        - `convert_tools_to_llm_format()`: Format tools for specific LLM APIs
+        - `parse_tool_calls()`: Parse tool calls from LLM responses
+        - `chat_completion()`: LLM-specific API integration
+
+#### `cli_agent/core/slash_commands.py`: Command System
+
+- **`SlashCommandManager` class (330 lines):**
+  - Manages slash commands like `/help`, `/clear`, `/compact`, `/tokens`
+  - Model switching: `/switch-chat`, `/switch-reason`, `/switch-gemini`
+  - Custom command loading from `.claude/commands/` directories
+  - MCP command integration with `mcp__<server>__<command>` format
+
+#### `cli_agent/core/input_handler.py`: Terminal Interaction
+
+- **`InterruptibleInput` class (194 lines):**
+  - Professional terminal input with prompt_toolkit integration
+  - Multiline input detection and smart handling
+  - ESC key interruption support during operations
+  - Asyncio-compatible threading for event loop safety
+
+#### `cli_agent/tools/builtin_tools.py`: Tool Definitions
+
+- **Built-in Tool Registry (292 lines):**
+  - Complete tool schemas: `bash_execute`, `read_file`, `write_file`, `webfetch`
+  - Task management: `task`, `task_status`, `task_results`
+  - Utility tools: `todo_read`, `todo_write`, `replace_in_file`
+  - Centralized tool access functions
+
+### `agent.py`: CLI Interface (505 lines)
+
+- **Streamlined Entry Point:** Main CLI using Click framework
+- **Commands:** `chat`, `ask`, `init`, `mcp`, model switching commands
+- **Integration:** Imports from modular `cli_agent` package
+- **Host Selection:** Dynamic selection between DeepSeek and Gemini backends
 
 ### `mcp_deepseek_host.py`: Deepseek Model Implementation
 
@@ -75,28 +120,44 @@ This file provides the `MCPGeminiHost` class, which is a concrete implementation
 
 ## 3. Execution Flow
 
-The agent's execution flow can be summarized as follows:
+The modular architecture provides a streamlined execution flow:
 
 1.  **Initialization:**
-    - The `main` function in `agent.py` is the entry point.
-    - The appropriate host class (`MCPDeepseekHost` or `MCPGeminiHost`) is instantiated based on the configuration.
-    - MCP servers are started, and the available tools are registered.
-2.  **User Input:**
-    - In interactive mode, the `interactive_chat` function captures user input.
-    - In non-interactive mode, the `ask` command takes a single message as input.
+    - CLI entry point in `agent.py` using Click framework
+    - Host class selection (`MCPDeepseekHost` or `MCPGeminiHost`) based on configuration
+    - `BaseMCPAgent.__init__()` loads built-in tools from `cli_agent.tools.builtin_tools`
+    - Centralized subagent management system initialization
+    - MCP server connections established
+
+2.  **User Input Handling:**
+    - **Interactive mode:** `InterruptibleInput` class captures user input with multiline support
+    - **Slash commands:** `SlashCommandManager` processes commands like `/help`, `/compact`, `/switch-*`
+    - **Non-interactive mode:** Direct message processing via `ask` command
+
 3.  **Message Processing:**
-    - The user's message is added to the conversation history.
-    - The `chat_completion` method of the host class is called.
+    - User messages added to conversation history
+    - Automatic conversation compaction when approaching token limits
+    - Centralized `generate_response()` method called with streaming/interactive settings
+
 4.  **Model-Specific Processing:**
-    - The host class formats the tools for the specific language model.
-    - It sends the conversation history and tools to the language model's API.
-5.  **Response Handling:**
-    - The host class receives the response from the model.
-    - If the response contains tool calls, the `parse_tool_calls` method is used to extract them.
-    - The agent executes the requested tools and captures their output.
-    - The tool output is added to the conversation history, and the process is repeated until the model generates a final response without tool calls.
-6.  **Output:**
-    - The final response is streamed to the user in interactive mode or printed to the console in non-interactive mode.
+    - `convert_tools_to_llm_format()` formats tools for specific LLM APIs
+    - `chat_completion()` handles LLM-specific API integration
+    - Tools and conversation history sent to language model
+
+5.  **Tool Execution:**
+    - `parse_tool_calls()` extracts tool requests from LLM responses
+    - `_execute_mcp_tool()` provides unified execution for built-in and external tools
+    - Tool results added to conversation, process repeats until final response
+
+6.  **Streaming Output:**
+    - Real-time response streaming with ESC interruption support
+    - Subagent result integration during streaming pauses
+    - Professional terminal output handling via `InterruptibleInput`
+
+7.  **Subagent Integration:**
+    - Background task spawning via `task` tool or `/task` command
+    - Event-driven communication with subprocess subagents
+    - Automatic result collection and conversation integration
 
 ## 4. Tool Integration
 
@@ -107,13 +168,60 @@ The agent's tool integration is a core feature and is based on the following pri
 - **Tool Abstraction:** The `BaseMCPAgent` class provides a unified interface for executing both built-in and external tools, making the tool execution process transparent to the agent's core logic.
 - **Model-Specific Formatting:** Each model implementation is responsible for formatting the tool specifications in the way that its API expects.
 
-## 5. Key Design Patterns
+## 5. Modular Architecture Benefits
 
-The codebase employs several key design patterns:
+The refactoring from a monolithic 3,237-line file to a modular architecture provides significant benefits:
 
-- **Abstract Base Classes:** The use of `BaseMCPAgent` as an abstract base class allows for a clear separation of concerns between the core agent logic and the model-specific implementations.
-- **Strategy Pattern:** The different model implementations (`MCPDeepseekHost`, `MCPGeminiHost`) can be seen as different strategies for generating responses. The main application can switch between these strategies based on the configuration.
-- **Command Pattern:** The CLI is implemented using the `click` library, which follows the command pattern to encapsulate actions as objects.
-- **Asynchronous Programming:** The agent uses `asyncio` to handle I/O-bound operations, such as making API requests and communicating with MCP servers, in a non-blocking way.
+### Before & After Comparison
+- **Before:** Single `agent.py` file (3,237 lines)
+- **After:** Focused modules with clear responsibilities
+  - `base_agent.py`: 1,891 lines (core functionality)
+  - `slash_commands.py`: 330 lines (command system)  
+  - `input_handler.py`: 194 lines (terminal handling)
+  - `builtin_tools.py`: 292 lines (tool definitions)
+  - `agent.py`: 505 lines (CLI interface only)
 
-This document should provide a solid foundation for any coding agent to understand and work with this codebase.
+### Key Improvements
+- **Maintainability**: Each module has a single, clear responsibility
+- **Testability**: Components can be unit tested independently
+- **Reusability**: Core modules work across different LLM implementations
+- **Scalability**: New features can be added without touching entire codebase
+- **Developer Experience**: Much easier to navigate and understand
+- **Code Quality**: Enforced separation of concerns and reduced coupling
+
+## 6. Key Design Patterns
+
+The modular codebase employs several key design patterns:
+
+- **Abstract Base Classes:** `BaseMCPAgent` enforces clear separation between core logic and LLM-specific implementations
+- **Strategy Pattern:** Interchangeable model implementations (`MCPDeepseekHost`, `MCPGeminiHost`) as different response generation strategies
+- **Command Pattern:** 
+  - CLI implementation using Click library
+  - Slash command system in `SlashCommandManager`
+- **Template Method:** `interactive_chat()` defines the flow, subclasses customize specific steps
+- **Dependency Injection:** Configuration and tool injection into agent constructors
+- **Event-Driven Architecture:** Subagent communication via asyncio queues
+- **Module Pattern:** Clean separation of concerns across focused modules
+- **Asynchronous Programming:** Non-blocking I/O operations for API requests and MCP communication
+
+## 7. Development Guidelines
+
+### Adding New Components
+- **New LLM Backend:** Extend `BaseMCPAgent` and implement abstract methods
+- **New Tools:** Add to `cli_agent/tools/builtin_tools.py` or create MCP server
+- **New Commands:** Add handlers to `SlashCommandManager` or create custom command files
+- **New Utilities:** Add to `cli_agent/utils/` for shared functionality
+
+### Import Patterns
+```python
+# Core components
+from cli_agent.core.base_agent import BaseMCPAgent
+from cli_agent.core.input_handler import InterruptibleInput
+from cli_agent.tools.builtin_tools import get_all_builtin_tools
+
+# LLM implementations  
+from mcp_deepseek_host import MCPDeepseekHost
+from mcp_gemini_host import MCPGeminiHost
+```
+
+This modular architecture provides a solid, maintainable foundation for any coding agent to understand and extend the MCP Agent system.
