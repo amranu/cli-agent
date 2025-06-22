@@ -7,6 +7,7 @@ import logging
 import sys
 import select
 import termios
+import time
 import tty
 from typing import Any, Dict, List, Optional, Union
 
@@ -68,6 +69,30 @@ class MCPGeminiHost(BaseMCPAgent):
                 logger.error(f"Failed to create even default Gemini client: {fallback_error}")
                 raise
         
+        # New subagent management system (same as DeepSeek host)
+        if not is_subagent:
+            try:
+                import sys
+                import os
+                # Add current directory to path for subagent import
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                if current_dir not in sys.path:
+                    sys.path.insert(0, current_dir)
+                from subagent import SubagentManager
+                self.subagent_manager = SubagentManager(config)
+                
+                # Event-driven message handling
+                self.subagent_message_queue = asyncio.Queue()
+                self.subagent_manager.add_message_callback(self._on_subagent_message)
+                logger.info("Added subagent message callback")
+            except ImportError as e:
+                logger.warning(f"Failed to import subagent manager: {e}")
+                self.subagent_manager = None
+                self.subagent_message_queue = None
+        else:
+            self.subagent_manager = None
+            self.subagent_message_queue = None
+        
         logger.info(f"Initialized MCP Gemini Host with model: {self.gemini_config.model}")
     
     def get_token_limit(self) -> int:
@@ -77,6 +102,230 @@ class MCPGeminiHost(BaseMCPAgent):
         else:
             return 64000   # Gemini Flash
     
+    def _on_subagent_message(self, message):
+        """Callback for when a subagent message is received - display during yield period."""
+        try:
+            # Get task_id for identification (if available in message data)
+            task_id = message.data.get('task_id', 'unknown') if hasattr(message, 'data') and message.data else 'unknown'
+            
+            if message.type == 'output':
+                formatted = f"🤖 [SUBAGENT-{task_id}] {message.content}"
+            elif message.type == 'status':
+                formatted = f"📋 [SUBAGENT-{task_id}] {message.content}"
+            elif message.type == 'error':
+                formatted = f"❌ [SUBAGENT-{task_id}] {message.content}"
+            elif message.type == 'result':
+                formatted = f"✅ [SUBAGENT-{task_id}] Result: {message.content}"
+            else:
+                formatted = f"[SUBAGENT-{task_id} {message.type}] {message.content}"
+            
+            # Only display immediately if we're in yielding mode (subagents active)
+            # This ensures clean separation between main agent and subagent output
+            if self.subagent_manager and self.subagent_manager.get_active_count() > 0:
+                # Subagents are active - display immediately during yield period
+                self._display_subagent_message_immediately(formatted, message.type)
+            else:
+                # No active subagents - just log for now (main agent controls display)
+                logger.info(f"Subagent message logged: {message.type} - {message.content[:50]}")
+                
+        except Exception as e:
+            logger.error(f"Error handling subagent message: {e}")
+            # Emergency fallback - at least log it
+            logger.error(f"MESSAGE CONTENT: {message.type} - {message.content}")
+    
+    def _display_subagent_message_immediately(self, formatted: str, message_type: str):
+        """Display subagent message immediately with proper terminal handling."""
+        try:
+            # Handle raw terminal mode properly
+            import sys
+            import termios
+            import tty
+            
+            try:
+                # Check if terminal is in raw mode
+                stdin_fd = sys.stdin.fileno()
+                current_attrs = termios.tcgetattr(stdin_fd)
+                
+                # Check if we're in raw mode (no echo, no canonical processing)
+                in_raw_mode = not (current_attrs[3] & termios.ECHO) and not (current_attrs[3] & termios.ICANON)
+                
+                if in_raw_mode:
+                    # Terminal is in raw mode - convert all \n to \r\n for proper display
+                    formatted_with_crlf = formatted.replace('\n', '\r\n')
+                    output = f"\r\n{formatted_with_crlf}\r\n"
+                    sys.stdout.write(output)
+                    sys.stdout.flush()
+                    logger.info(f"Displayed subagent message in raw mode: {message_type}")
+                else:
+                    # Normal mode - use prompt_toolkit
+                    try:
+                        from prompt_toolkit.patch_stdout import patch_stdout
+                        from prompt_toolkit import print_formatted_text
+                        
+                        with patch_stdout():
+                            print_formatted_text(formatted)
+                        logger.info(f"Displayed subagent message via patch_stdout: {message_type}")
+                    except ImportError:
+                        # Fallback to stderr
+                        print(formatted, file=sys.stderr, flush=True)
+                        logger.info(f"Displayed subagent message via stderr: {message_type}")
+                        
+            except (OSError, termios.error):
+                # Terminal control not available - use stderr fallback
+                print(formatted, file=sys.stderr, flush=True)
+                logger.info(f"Displayed subagent message via stderr fallback: {message_type}")
+                
+        except Exception as e:
+            logger.error(f"Error displaying subagent message immediately: {e}")
+    
+    async def _collect_subagent_results(self):
+        """Wait for all subagents to complete and collect their results."""
+        if not self.subagent_manager:
+            return []
+        
+        results = []
+        max_wait_time = 300  # 5 minutes max wait
+        start_time = time.time()
+        
+        # Wait for all active subagents to complete
+        while self.subagent_manager.get_active_count() > 0:
+            if time.time() - start_time > max_wait_time:
+                logger.error("Timeout waiting for subagents to complete")
+                break
+            await asyncio.sleep(0.5)
+        
+        # Collect results from completed subagents
+        logger.info(f"Checking {len(self.subagent_manager.subagents)} subagents for results")
+        for task_id, subagent in self.subagent_manager.subagents.items():
+            logger.info(f"Subagent {task_id}: completed={subagent.completed}, has_result={subagent.result is not None}")
+            if subagent.completed and subagent.result:
+                results.append({
+                    'task_id': task_id,
+                    'description': subagent.description,
+                    'content': subagent.result,
+                    'runtime': time.time() - subagent.start_time
+                })
+                logger.info(f"Collected result from {task_id}: {len(subagent.result)} chars")
+            elif subagent.completed:
+                logger.warning(f"Subagent {task_id} completed but has no result stored")
+            else:
+                logger.info(f"Subagent {task_id} not yet completed")
+        
+        logger.info(f"Collected {len(results)} results from {len(self.subagent_manager.subagents)} subagents")
+        return results
+
+    async def _task(self, args: Dict[str, Any]) -> str:
+        """Spawn a new subagent task."""
+        if not self.subagent_manager:
+            return "Error: Subagent management not available"
+        
+        description = args.get("description", "Investigation task")
+        prompt = args.get("prompt", "")
+        context = args.get("context", "")
+        
+        if not prompt:
+            return "Error: prompt is required"
+        
+        # Add context to prompt if provided
+        full_prompt = prompt
+        if context:
+            full_prompt += f"\n\nAdditional context: {context}"
+        
+        try:
+            task_id = await self.subagent_manager.spawn_subagent(description, full_prompt)
+            return f"Spawned subagent task: {task_id}\nDescription: {description}\nTask is running in the background - output will appear in the chat as it becomes available."
+        except Exception as e:
+            return f"Error spawning subagent: {e}"
+    
+    def _task_status(self, args: Dict[str, Any]) -> str:
+        """Check status of subagent tasks."""
+        if not self.subagent_manager:
+            return "Error: Subagent management not available"
+        
+        active_count = self.subagent_manager.get_active_count()
+        total_count = len(self.subagent_manager.subagents)
+        completed_count = total_count - active_count
+        
+        if total_count == 0:
+            return "No subagent tasks found. Use the 'task' tool to spawn subagents."
+        
+        status_lines = [f"Subagent Status: {active_count} active, {completed_count} completed, {total_count} total"]
+        
+        specific_task_id = args.get("task_id")
+        if specific_task_id:
+            if specific_task_id in self.subagent_manager.subagents:
+                subagent = self.subagent_manager.subagents[specific_task_id]
+                runtime = time.time() - subagent.start_time
+                status = "completed" if subagent.completed else "running"
+                result_info = f" | Result: {subagent.result[:100]}..." if subagent.completed and subagent.result else ""
+                status_lines.append(f"Task {specific_task_id}: {status} (runtime: {runtime:.1f}s){result_info}")
+            else:
+                status_lines.append(f"Task {specific_task_id}: not found")
+        else:
+            # Show all tasks grouped by status
+            active_tasks = []
+            completed_tasks = []
+            
+            for task_id, subagent in self.subagent_manager.subagents.items():
+                runtime = time.time() - subagent.start_time
+                task_info = f"  {task_id}: {runtime:.1f}s - {subagent.description}"
+                
+                if subagent.completed:
+                    completed_tasks.append(task_info + " ✅")
+                else:
+                    active_tasks.append(task_info + " 🔄")
+            
+            if active_tasks:
+                status_lines.append("\nActive Tasks:")
+                status_lines.extend(active_tasks)
+            
+            if completed_tasks:
+                status_lines.append("\nCompleted Tasks:")
+                status_lines.extend(completed_tasks)
+        
+        return "\n".join(status_lines)
+    
+    def _task_results(self, args: Dict[str, Any]) -> str:
+        """Get results from completed tasks."""
+        if not self.subagent_manager:
+            return "Error: Subagent management not available"
+        
+        task_id = args.get("task_id")
+        if not task_id:
+            return "Error: task_id is required"
+        
+        if task_id not in self.subagent_manager.subagents:
+            return f"Error: Task {task_id} not found"
+        
+        subagent = self.subagent_manager.subagents[task_id]
+        if not subagent.completed:
+            return f"Task {task_id} is still running"
+        
+        if subagent.result:
+            return f"Task {task_id} result:\n{subagent.result}"
+        else:
+            return f"Task {task_id} completed but no result captured"
+
+    async def _execute_builtin_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
+        """Execute a built-in tool, with new subagent system for task tools."""
+        logger.info(f"NEW SUBAGENT SYSTEM: _execute_builtin_tool called with {tool_name}")
+        if tool_name == "task":
+            logger.info(f"NEW SUBAGENT SYSTEM: Handling task tool with new system")
+            return await self._task(args)
+        elif tool_name == "task_status":
+            return self._task_status(args)
+        elif tool_name == "task_results":
+            return self._task_results(args)
+        else:
+            # Delegate to parent class for other builtin tools
+            return await super()._execute_builtin_tool(tool_name, args)
+
+    async def shutdown(self):
+        """Shutdown the host and clean up subagents."""
+        if self.subagent_manager:
+            await self.subagent_manager.terminate_all()
+        await super().shutdown()
+
     async def generate_response(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None) -> Union[str, Any]:
         """Generate a response using Gemini API."""
         # For subagents, use interactive=False to avoid terminal formatting issues
@@ -774,6 +1023,7 @@ class MCPGeminiHost(BaseMCPAgent):
             else:
                 return f"Error: {error_details}"
     
+
     async def _handle_streaming_response(self, prompt: str, config: types.GenerateContentConfig, interactive: bool, original_messages: List[Dict[str, str]], input_handler=None):
         """Handle streaming response from Gemini with iterative tool calling."""
         async def async_stream_generator():
@@ -839,41 +1089,60 @@ class MCPGeminiHost(BaseMCPAgent):
                     # Process streaming chunks
                     chunk_count = 0
                     has_any_content = False
-                    for chunk in stream_response:
-                        try:
-                            chunk_count += 1
-                            logger.debug(f"Processing chunk {chunk_count}")
-                            
-                            if chunk is None:
-                                logger.warning(f"Chunk {chunk_count} is None, skipping")
-                                continue
-                            
-                            if hasattr(chunk, 'text') and chunk.text:
-                                accumulated_content += chunk.text
-                                has_any_content = True
-                                yield chunk.text
-                            
-                            # Check for function calls in chunk
-                            if hasattr(chunk, 'candidates') and chunk.candidates:
-                                try:
-                                    if chunk.candidates[0] and hasattr(chunk.candidates[0], 'content') and chunk.candidates[0].content:
-                                        if hasattr(chunk.candidates[0].content, 'parts') and chunk.candidates[0].content.parts:
-                                            for part in chunk.candidates[0].content.parts:
-                                                if hasattr(part, 'function_call') and part.function_call:
-                                                    function_calls.append(part.function_call)
-                                except (IndexError, AttributeError) as e:
-                                    logger.warning(f"Error processing chunk {chunk_count} candidates: {e}")
+                    stream_started = False
+                    try:
+                        for chunk in stream_response:
+                            try:
+                                chunk_count += 1
+                                stream_started = True
+                                logger.debug(f"Processing chunk {chunk_count}")
+                                
+                                if chunk is None:
+                                    logger.warning(f"Chunk {chunk_count} is None, skipping")
                                     continue
+                                
+                                if hasattr(chunk, 'text') and chunk.text:
+                                    accumulated_content += chunk.text
+                                    has_any_content = True
+                                    
+                                    # Yield content normally first
+                                    yield chunk.text
                             
-                        except Exception as e:
-                            logger.error(f"Error processing chunk {chunk_count}: {e}")
-                            # Don't yield error to user, just log and continue
-                            continue
+                                # Check for function calls in chunk
+                                if hasattr(chunk, 'candidates') and chunk.candidates:
+                                    try:
+                                        if chunk.candidates[0] and hasattr(chunk.candidates[0], 'content') and chunk.candidates[0].content:
+                                            if hasattr(chunk.candidates[0].content, 'parts') and chunk.candidates[0].content.parts:
+                                                for part in chunk.candidates[0].content.parts:
+                                                    if hasattr(part, 'function_call') and part.function_call:
+                                                        function_calls.append(part.function_call)
+                                    except (IndexError, AttributeError) as e:
+                                        logger.warning(f"Error processing chunk {chunk_count} candidates: {e}")
+                                        continue
+                                
+                            except Exception as e:
+                                logger.error(f"Error processing chunk {chunk_count}: {e}")
+                                # Don't yield error to user, just log and continue
+                                continue
+                    except Exception as stream_error:
+                        logger.error(f"Error iterating stream after {chunk_count} chunks: {stream_error}")
+                        if not stream_started:
+                            logger.error("Stream never started - this suggests Gemini API is not responding")
+                            yield f"\n⚠️ Gemini API is not responding. Stream never started. Error: {stream_error}\n"
+                            return
+                        elif not has_any_content:
+                            logger.error("Stream started but produced no content")
+                            yield f"\n⚠️ Gemini stream started but failed after {chunk_count} chunks. Error: {stream_error}\n"
+                            return
                     
                     # Check if we got any content at all from the stream
                     if not has_any_content and not accumulated_content:
-                        logger.warning("No content received from Gemini stream - this may indicate the stream ended unexpectedly")
-                        yield "\n⚠️ No response from Gemini. Ending conversation.\n"
+                        if not stream_started:
+                            logger.warning("Gemini stream never started - API may be unresponsive")
+                            yield "\n⚠️ Gemini API is unresponsive. Stream never started.\n"
+                        else:
+                            logger.warning(f"No content received from Gemini stream after {chunk_count} chunks - stream ended unexpectedly")
+                            yield f"\n⚠️ No response from Gemini after {chunk_count} chunks. Ending conversation.\n"
                         return
                     
                     # Parse additional function calls from text using shared method
@@ -897,6 +1166,61 @@ class MCPGeminiHost(BaseMCPAgent):
                         # Execute function calls using shared method
                         function_results, tool_output = await self._execute_function_calls(function_calls, True, input_handler, streaming_mode=True)  # Always interactive for streaming
 
+                        # Check if we just spawned subagents and should interrupt immediately
+                        if self.subagent_manager and self.subagent_manager.get_active_count() > 0:
+                            # Check if any of the function calls were "task" tools (subagent spawning)
+                            task_tools_executed = any("task" in fc.name for fc in function_calls)
+                            if task_tools_executed:
+                                # Interrupt immediately after spawning subagents
+                                yield f"\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
+                                
+                                # Wait for all subagents to complete and collect results
+                                subagent_results = await self._collect_subagent_results()
+                                
+                                if subagent_results:
+                                    # Add subagent results to the conversation and restart
+                                    yield f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n"
+                                    
+                                    # Create new message with subagent results
+                                    results_summary = "\n".join([
+                                        f"**Subagent Task: {result['description']}**\n{result['content']}"
+                                        for result in subagent_results
+                                    ])
+                                    
+                                    # Create a new conversation context that includes the original request and subagent results
+                                    # but frames it as analysis rather than a new spawning request
+                                    continuation_message = {
+                                        "role": "user", 
+                                        "content": f"""I requested: {original_messages[-1]['content']}
+
+You spawned subagents and they have completed their tasks. Here are the results:
+
+{results_summary}
+
+Please provide your final analysis based on these subagent results. Do not spawn any new subagents - just analyze the provided data."""
+                                    }
+                                    
+                                    # Replace conversation with just the continuation context
+                                    new_messages = [continuation_message]
+                                    
+                                    # Restart the conversation with subagent results
+                                    yield f"\n🔄 Restarting conversation with subagent results...\n"
+                                    new_response = await self.chat_completion(new_messages, stream=True, interactive=interactive)
+                                    
+                                    # Yield the new response (check if it's a generator or string)
+                                    if hasattr(new_response, '__aiter__'):
+                                        async for new_chunk in new_response:
+                                            yield new_chunk
+                                    else:
+                                        # If it's a string, yield it directly
+                                        yield str(new_response)
+                                    
+                                    # Exit since we've restarted
+                                    return
+                                else:
+                                    yield f"\n⚠️ No results collected from subagents.\n"
+                                    return
+
                         # Don't yield tool execution details to avoid LLM hallucinations
                         # The tool results will be included in the next iteration's prompt context
                         
@@ -905,16 +1229,18 @@ class MCPGeminiHost(BaseMCPAgent):
                         
                         # Create follow-up prompt for next iteration
                         tool_results_text = "\n".join(function_results)
-                        #current_prompt = f"{current_prompt}\n\nTool Results:\n{tool_results_text}\n\nThe tool execution is complete. Please continue with your response based on these results."
-                        current_prompt = f"Tool Results:\n{tool_results_text}\n\nThe tool execution is complete. Please continue with your response based on these results."
+                        
+                        # Check if prompt is getting too long and limit growth
+                        if len(current_prompt) > 50000:  # 50k characters - prevent exponential growth
+                            logger.warning(f"Prompt is getting very long ({len(current_prompt)} chars), truncating context")
+                            # Keep only the original user request and recent tool results
+                            current_prompt = f"Original request: {original_messages[-1]['content']}\n\nTool execution complete. Results:\n{tool_results_text}\n\nPlease continue with your response based on these results."
+                        else:
+                            # Keep original context but add tool results for continuation
+                            current_prompt = f"{current_prompt}\n\nTool execution complete. Results:\n{tool_results_text}\n\nPlease continue with your response based on these results."
                         
                         logger.debug(f"Updated prompt length after tool execution: {len(current_prompt)}")
                         logger.debug(f"Tool results length: {len(tool_results_text)}")
-                        
-                        # Check if prompt is getting too long
-#                        if len(current_prompt) > 200000:  # 100k characters
-#                            logger.warning(f"Prompt is very long ({len(current_prompt)} chars), this might cause issues")
-#                            yield f"\n⚠️ Conversation is getting very long. Consider using '/compact' to reduce length.\n"
                         
                         # Continue the loop - let Gemini decide if more tools are needed
                         continue
@@ -923,6 +1249,56 @@ class MCPGeminiHost(BaseMCPAgent):
                         # Yield any accumulated content before exiting
                         if accumulated_content.strip():
                             yield accumulated_content
+                        
+                        # Check for subagent interrupts before ending
+                        if self.subagent_manager and self.subagent_manager.get_active_count() > 0:
+                            # INTERRUPT STREAMING - collect subagent results and restart
+                            yield f"\n🔄 Subagents active - interrupting main stream to collect results...\n"
+                            
+                            # Wait for all subagents to complete and collect results
+                            subagent_results = await self._collect_subagent_results()
+                            
+                            if subagent_results:
+                                # Add subagent results to the conversation and restart
+                                yield f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n"
+                                
+                                # Create new message with subagent results
+                                results_summary = "\n".join([
+                                    f"**Subagent Task: {result['description']}**\n{result['content']}"
+                                    for result in subagent_results
+                                ])
+                                
+                                # Create a new conversation context that includes the original request and subagent results
+                                # but frames it as analysis rather than a new spawning request
+                                continuation_message = {
+                                    "role": "user", 
+                                    "content": f"""I requested: {original_messages[-1]['content']}
+
+You spawned subagents and they have completed their tasks. Here are the results:
+
+{results_summary}
+
+Please provide your final analysis based on these subagent results. Do not spawn any new subagents - just analyze the provided data."""
+                                }
+                                
+                                # Replace conversation with just the continuation context
+                                new_messages = [continuation_message]
+                                
+                                # Restart the conversation with subagent results
+                                yield f"\n🔄 Restarting conversation with subagent results...\n"
+                                new_response = await self.chat_completion(new_messages, stream=True, interactive=interactive)
+                                
+                                # Yield the new response (check if it's a generator or string)
+                                if hasattr(new_response, '__aiter__'):
+                                    async for new_chunk in new_response:
+                                        yield new_chunk
+                                else:
+                                    # If it's a string, yield it directly
+                                    yield str(new_response)
+                                
+                                # Exit since we've restarted
+                                return
+                        
                         return
                         
             except GeneratorExit:

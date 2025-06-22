@@ -657,7 +657,7 @@ class BaseMCPAgent(ABC):
             "builtin:task": {
                 "server": "builtin",
                 "name": "task",
-                "description": "Spawn a subagent to investigate a specific task and return a comprehensive summary",
+                "description": "Spawn a subagent to investigate a specific task and return a comprehensive summary. IMPORTANT: To spawn multiple subagents simultaneously, make multiple tool calls to 'builtin_task' in the same response - do not wait for results between calls. The main agent will automatically pause after spawning subagents, wait for all to complete, then restart with their combined results.",
                 "schema": {
                     "type": "object",
                     "properties": {
@@ -1123,7 +1123,15 @@ class BaseMCPAgent(ABC):
 TASK: {description}
 
 INSTRUCTIONS:
-{prompt}"""
+{prompt}
+
+IMPORTANT: After completing your investigation/task, provide a clear and concise summary of your findings. Your summary should include:
+1. What you investigated or accomplished
+2. Key findings or results
+3. Any important observations or insights
+4. Conclusions or recommendations if applicable
+
+Please structure your response so that the main findings are easily extractable for analysis."""
             
             if context:
                 task_prompt += f"""
@@ -1231,19 +1239,27 @@ The subagent is now running independently and will report progress. You can cont
                 if process.returncode is not None:
                     break
                 
-                # Read available output
+                # Read available output with shorter timeout for real-time display
                 try:
-                    stdout_data = await asyncio.wait_for(process.stdout.read(1024), timeout=0.1)
+                    stdout_data = await asyncio.wait_for(process.stdout.read(1024), timeout=0.01)
                     if stdout_data:
                         output = stdout_data.decode('utf-8', errors='ignore')
-                        # Display subagent output with proper formatting
-                        formatted_output = output.replace('\n', '\n\r')
-                        print(f"{formatted_output}", end='', flush=True)
+                        # Store output for buffer
                         task_info["output_buffer"] += output
+                        
+                        # Store output for streaming integration
+                        if "display_messages" not in task_info:
+                            task_info["display_messages"] = []
+                        task_info["display_messages"].append(f"🤖 [SUBAGENT {task_id}] {output}")
+                        
+                        # Print immediately for non-streaming contexts (fallback)
+                        formatted_output = output.replace('\n', '\n\r')
+                        print(f"🤖 [SUBAGENT {task_id}] {formatted_output}", end='', flush=True)
                 except asyncio.TimeoutError:
                     pass
                 
-                await asyncio.sleep(0.1)
+                # Shorter sleep for more responsive output
+                await asyncio.sleep(0.01)
             
             # Process completed, get final output
             try:
@@ -1293,6 +1309,15 @@ The subagent is now running independently and will report progress. You can cont
         except Exception as e:
             logger.error(f"Error monitoring task {task_id}: {e}")
             print(f"\n\r🤖 [SUBAGENT ERROR {task_id}]: Monitoring failed: {e}\r")
+    
+    def get_pending_subagent_messages(self):
+        """Get all pending display messages from running subagents."""
+        messages = []
+        for task_id, task_info in self.running_tasks.items():
+            if "display_messages" in task_info and task_info["display_messages"]:
+                messages.extend(task_info["display_messages"])
+                task_info["display_messages"].clear()  # Clear after retrieving
+        return messages
     
     async def _handle_subagent_communication(self, task_id: str):
         """Handle communication from subagent for tool execution forwarding."""
@@ -1370,8 +1395,15 @@ The subagent is now running independently and will report progress. You can cont
                 asyncio.create_task(self._handle_subagent_tool_request(task_id, message))
                 
             elif msg_type == "display_message":
-                # Handle display messages from subagent - print immediately in main process
+                # Handle display messages from subagent - store for streaming integration
                 display_msg = message.get("message", "")
+                # Store in task info for streaming integration
+                if task_id in self.running_tasks:
+                    task_info = self.running_tasks[task_id]
+                    if "display_messages" not in task_info:
+                        task_info["display_messages"] = []
+                    task_info["display_messages"].append(display_msg)
+                # Also print immediately for non-streaming contexts
                 print(display_msg, flush=True)
                 
             elif msg_type == "tool_execution":
@@ -1457,6 +1489,32 @@ The subagent is now running independently and will report progress. You can cont
                     "result": result  # Full result for subagent to continue its work
                 }
                 
+            except SystemExit as e:
+                # Handle Click's sys.exit() gracefully
+                if e.code == 0:
+                    # Successful exit, treat as success
+                    result = "Command completed successfully"
+                    result_preview = str(result)[:300] + "..." if len(str(result)) > 300 else str(result)
+                    print(f"✅ [SUBAGENT {task_id}] Result: {result_preview}", flush=True)
+                    
+                    response = {
+                        "type": "tool_execution_response", 
+                        "request_id": request_id,
+                        "success": True,
+                        "result": result
+                    }
+                else:
+                    # Non-zero exit, treat as error
+                    error_msg = f"Tool exited with code {e.code}"
+                    logger.error(f"Tool execution error for subagent {task_id}: {error_msg}")
+                    print(f"❌ [SUBAGENT {task_id}] Tool error: {error_msg}", flush=True)
+                    
+                    response = {
+                        "type": "tool_execution_response",
+                        "request_id": request_id,
+                        "success": False,
+                        "error": error_msg
+                    }
             except Exception as e:
                 error_msg = f"Error executing tool {tool_name}: {str(e)}"
                 logger.error(f"Tool execution error for subagent {task_id}: {e}")
@@ -2012,6 +2070,12 @@ Output Buffer Size: {len(task_info["output_buffer"])} characters"""
 - **Start with a plan:** At the beginning of your session, create a todo list to outline your steps.
 - **Update as you go:** As you complete tasks, update the todo list to reflect your progress.
 
+**Subagent Workflow:**
+- **Parallel execution:** For complex investigations requiring multiple independent tasks, spawn multiple subagents simultaneously by making multiple `builtin_task` calls in the same response.
+- **Automatic coordination:** After spawning subagents, the main agent automatically pauses, waits for all subagents to complete, then restarts with their combined results.
+- **Do not poll status:** Avoid calling `builtin_task_status` repeatedly - the system handles coordination automatically.
+- **Single response spawning:** To spawn multiple subagents, include all `builtin_task` calls in one response, not across multiple responses.
+
 **Workflow:**
 1.  **Reason:** Outline your plan.
 2.  **Act:** Use one or more tool calls to execute your plan. Use parallel tool calls when it makes sense.
@@ -2443,6 +2507,8 @@ async def chat(ctx, server):
         # Load configuration
         config = load_config()
         
+        # Load configuration and create host directly
+        
         # Check if Gemini backend should be used
         if config.deepseek_model == "gemini":
             if not config.gemini_api_key:
@@ -2459,7 +2525,7 @@ async def chat(ctx, server):
                 click.echo("Error: DEEPSEEK_API_KEY not set. Run 'init' command first and update .env file.")
                 return
             
-            # Create Deepseek host
+            # Create Deepseek host with new subagent system
             from mcp_deepseek_host import MCPDeepseekHost
             host = MCPDeepseekHost(config)
             click.echo(f"Using model: {config.deepseek_model}")
