@@ -134,8 +134,10 @@ Desktop.ini
 *~
 .#*
 
-# Test files and debugging
+# Test files and debugging (but not in tests/ directory)
 test_*.py
+!tests/
+!tests/**/*.py
 debug_*.py
 verify_*.py
 example_*.py
