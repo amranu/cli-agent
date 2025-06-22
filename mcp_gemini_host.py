@@ -11,7 +11,6 @@ import time
 import tty
 from typing import Any, Dict, List, Optional, Union
 
-import click
 from google import genai
 from google.genai import types
 
@@ -1072,23 +1071,3 @@ Please provide your final analysis based on these subagent results. Do not spawn
 
 
 
-# CLI commands would be added to the main mcp_deepseek_host.py file
-if __name__ == "__main__":
-    async def test_gemini():
-        """Test Gemini integration."""
-        config = load_config()
-        
-        if not config.gemini_api_key:
-            print("Error: GEMINI_API_KEY not set. Please update .env file.")
-            return
-        
-        host = MCPGeminiHost(config)
-        
-        # Test a simple conversation
-        messages = [{"role": "user", "content": "Hello! Can you tell me what 2+2 is?"}]
-        response = await host.chat_completion(messages, stream=False)
-        print(f"Gemini response: {response}")
-        
-        await host.shutdown()
-    
-    asyncio.run(test_gemini())
