@@ -497,6 +497,30 @@ class BaseMCPAgent(ABC):
         # Communication socket for subagent forwarding (set by parent process)
         self.comm_socket = None
         
+        # Centralized subagent management system
+        if not is_subagent:
+            try:
+                import sys
+                import os
+                # Add current directory to path for subagent import
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                if current_dir not in sys.path:
+                    sys.path.insert(0, current_dir)
+                from subagent import SubagentManager
+                self.subagent_manager = SubagentManager(config)
+                
+                # Event-driven message handling
+                self.subagent_message_queue = asyncio.Queue()
+                self.subagent_manager.add_message_callback(self._on_subagent_message)
+                logger.info("Initialized centralized subagent management system")
+            except ImportError as e:
+                logger.warning(f"Failed to import subagent manager: {e}")
+                self.subagent_manager = None
+                self.subagent_message_queue = None
+        else:
+            self.subagent_manager = None
+            self.subagent_message_queue = None
+        
         # Add built-in tools
         self._add_builtin_tools()
         
@@ -1862,7 +1886,216 @@ Output Buffer Size: {len(task_info["output_buffer"])} characters"""
         self.available_tools.clear()
         if hasattr(self, '_mcp_contexts'):
             self._mcp_contexts.clear()
+        
+        # Shutdown subagent manager if present
+        if hasattr(self, 'subagent_manager') and self.subagent_manager:
+            await self.subagent_manager.terminate_all()
     
+    # Centralized Subagent Management Methods
+    def _on_subagent_message(self, message):
+        """Callback for when a subagent message is received - display during yield period."""
+        try:
+            # Get task_id for identification (if available in message data)
+            task_id = message.data.get('task_id', 'unknown') if hasattr(message, 'data') and message.data else 'unknown'
+            
+            if message.type == 'output':
+                formatted = f"🤖 [SUBAGENT-{task_id}] {message.content}"
+            elif message.type == 'status':
+                formatted = f"📋 [SUBAGENT-{task_id}] {message.content}"
+            elif message.type == 'error':
+                formatted = f"❌ [SUBAGENT-{task_id}] {message.content}"
+            elif message.type == 'result':
+                formatted = f"✅ [SUBAGENT-{task_id}] Result: {message.content}"
+            else:
+                formatted = f"[SUBAGENT-{task_id} {message.type}] {message.content}"
+            
+            # Only display immediately if we're in yielding mode (subagents active)
+            # This ensures clean separation between main agent and subagent output
+            if self.subagent_manager and self.subagent_manager.get_active_count() > 0:
+                # Subagents are active - display immediately during yield period
+                self._display_subagent_message_immediately(formatted, message.type)
+            else:
+                # No active subagents - just log for now (main agent controls display)
+                logger.info(f"Subagent message logged: {message.type} - {message.content[:50]}")
+                
+        except Exception as e:
+            logger.error(f"Error handling subagent message: {e}")
+    
+    def _display_subagent_message_immediately(self, formatted: str, message_type: str):
+        """Display subagent message immediately with proper terminal handling."""
+        try:
+            # Handle raw terminal mode properly
+            import sys
+            import termios
+            import tty
+            
+            try:
+                # Check if terminal is in raw mode
+                stdin_fd = sys.stdin.fileno()
+                current_attrs = termios.tcgetattr(stdin_fd)
+                
+                # Check if we're in raw mode (no echo, no canonical processing)
+                in_raw_mode = not (current_attrs[3] & termios.ECHO) and not (current_attrs[3] & termios.ICANON)
+                
+                if in_raw_mode:
+                    # Terminal is in raw mode - convert all \n to \r\n for proper display
+                    formatted_with_crlf = formatted.replace('\n', '\r\n')
+                    output = f"\r\n{formatted_with_crlf}\r\n"
+                    sys.stdout.write(output)
+                    sys.stdout.flush()
+                    logger.info(f"Displayed subagent message in raw mode: {message_type}")
+                else:
+                    # Normal mode - use prompt_toolkit
+                    try:
+                        from prompt_toolkit.patch_stdout import patch_stdout
+                        from prompt_toolkit import print_formatted_text
+                        
+                        with patch_stdout():
+                            print_formatted_text(formatted)
+                        logger.info(f"Displayed subagent message via patch_stdout: {message_type}")
+                    except ImportError:
+                        # Fallback to stderr
+                        print(formatted, file=sys.stderr, flush=True)
+                        logger.info(f"Displayed subagent message via stderr: {message_type}")
+                        
+            except (OSError, termios.error):
+                # Terminal control not available - use stderr fallback
+                print(formatted, file=sys.stderr, flush=True)
+                logger.info(f"Displayed subagent message via stderr fallback: {message_type}")
+                
+        except Exception as e:
+            logger.error(f"Error displaying subagent message immediately: {e}")
+    
+    async def _collect_subagent_results(self):
+        """Wait for all subagents to complete and collect their results."""
+        if not self.subagent_manager:
+            return []
+        
+        import time
+        results = []
+        max_wait_time = 300  # 5 minutes max wait
+        start_time = time.time()
+        
+        # Wait for all active subagents to complete
+        while self.subagent_manager.get_active_count() > 0:
+            if time.time() - start_time > max_wait_time:
+                logger.error("Timeout waiting for subagents to complete")
+                break
+            await asyncio.sleep(0.5)
+        
+        # Collect results from completed subagents
+        logger.info(f"Checking {len(self.subagent_manager.subagents)} subagents for results")
+        for task_id, subagent in self.subagent_manager.subagents.items():
+            logger.info(f"Subagent {task_id}: completed={subagent.completed}, has_result={subagent.result is not None}")
+            if subagent.completed and subagent.result:
+                results.append({
+                    'task_id': task_id,
+                    'description': subagent.description,
+                    'content': subagent.result,
+                    'runtime': time.time() - subagent.start_time
+                })
+                logger.info(f"Collected result from {task_id}: {len(subagent.result)} chars")
+            elif subagent.completed:
+                logger.warning(f"Subagent {task_id} completed but has no result stored")
+            else:
+                logger.info(f"Subagent {task_id} not yet completed")
+        
+        logger.info(f"Collected {len(results)} results from {len(self.subagent_manager.subagents)} subagents")
+        return results
+
+    async def _task(self, args: Dict[str, Any]) -> str:
+        """Spawn a new subagent task."""
+        if not self.subagent_manager:
+            return "Error: Subagent management not available"
+        
+        description = args.get("description", "Investigation task")
+        prompt = args.get("prompt", "")
+        context = args.get("context", "")
+        
+        if not prompt:
+            return "Error: prompt is required"
+        
+        # Add context to prompt if provided
+        full_prompt = prompt
+        if context:
+            full_prompt += f"\n\nAdditional context: {context}"
+        
+        try:
+            task_id = await self.subagent_manager.spawn_subagent(description, full_prompt)
+            return f"Spawned subagent task: {task_id}\nDescription: {description}\nTask is running in the background - output will appear in the chat as it becomes available."
+        except Exception as e:
+            return f"Error spawning subagent: {e}"
+    
+    def _task_status(self, args: Dict[str, Any]) -> str:
+        """Check status of subagent tasks."""
+        if not self.subagent_manager:
+            return "Error: Subagent management not available"
+        
+        import time
+        active_count = self.subagent_manager.get_active_count()
+        total_count = len(self.subagent_manager.subagents)
+        completed_count = total_count - active_count
+        
+        if total_count == 0:
+            return "No subagent tasks found. Use the 'task' tool to spawn subagents."
+        
+        status_lines = [f"Subagent Status: {active_count} active, {completed_count} completed, {total_count} total"]
+        
+        specific_task_id = args.get("task_id")
+        if specific_task_id:
+            if specific_task_id in self.subagent_manager.subagents:
+                subagent = self.subagent_manager.subagents[specific_task_id]
+                runtime = time.time() - subagent.start_time
+                status = "completed" if subagent.completed else "running"
+                result_info = f" | Result: {subagent.result[:100]}..." if subagent.completed and subagent.result else ""
+                status_lines.append(f"Task {specific_task_id}: {status} (runtime: {runtime:.1f}s){result_info}")
+            else:
+                status_lines.append(f"Task {specific_task_id}: not found")
+        else:
+            # Show all tasks grouped by status
+            active_tasks = []
+            completed_tasks = []
+            
+            for task_id, subagent in self.subagent_manager.subagents.items():
+                runtime = time.time() - subagent.start_time
+                task_info = f"  {task_id}: {runtime:.1f}s - {subagent.description}"
+                
+                if subagent.completed:
+                    completed_tasks.append(task_info + " ✅")
+                else:
+                    active_tasks.append(task_info + " 🔄")
+            
+            if active_tasks:
+                status_lines.append("\nActive Tasks:")
+                status_lines.extend(active_tasks)
+            
+            if completed_tasks:
+                status_lines.append("\nCompleted Tasks:")
+                status_lines.extend(completed_tasks)
+        
+        return "\n".join(status_lines)
+    
+    def _task_results(self, args: Dict[str, Any]) -> str:
+        """Get results from completed tasks."""
+        if not self.subagent_manager:
+            return "Error: Subagent management not available"
+        
+        task_id = args.get("task_id")
+        if not task_id:
+            return "Error: task_id is required"
+        
+        if task_id not in self.subagent_manager.subagents:
+            return f"Error: Task {task_id} not found"
+        
+        subagent = self.subagent_manager.subagents[task_id]
+        if not subagent.completed:
+            return f"Task {task_id} is still running"
+        
+        if subagent.result:
+            return f"Task {task_id} result:\n{subagent.result}"
+        else:
+            return f"Task {task_id} completed but no result captured"
+
     async def _execute_mcp_tool(self, tool_key: str, arguments: Dict[str, Any]) -> str:
         """Execute an MCP tool (built-in or external) and return the result."""
         try:
@@ -2185,8 +2418,53 @@ You are the expert. Complete the task."""
     
     def get_token_limit(self) -> int:
         """Get the context token limit for the current model."""
-        # Default limits - subclasses can override
-        return 32000  # Conservative estimate
+        # Enhanced centralized token limit management with model configuration support
+        model_limits = self._get_model_token_limits()
+        
+        # Try to get model name from config
+        model_name = self._get_current_model_name()
+        
+        if model_name and model_name in model_limits:
+            return model_limits[model_name]
+        
+        # Fallback: check for model patterns
+        if model_name:
+            for pattern, limit in model_limits.items():
+                if pattern in model_name.lower():
+                    return limit
+        
+        # Conservative default - subclasses can override
+        return 32000
+    
+    def _get_model_token_limits(self) -> Dict[str, int]:
+        """Define token limits for known models. Subclasses can extend this."""
+        return {
+            # DeepSeek models
+            "deepseek-reasoner": 128000,
+            "deepseek-chat": 64000,
+            
+            # Gemini models  
+            "gemini-pro": 128000,
+            "pro": 128000,  # Pattern matching for any "pro" model
+            "gemini-flash": 64000,
+            "flash": 64000,  # Pattern matching for any "flash" model
+            
+            # Common defaults
+            "gpt-4": 128000,
+            "gpt-3.5": 16000,
+            "claude": 200000,
+        }
+    
+    def _get_current_model_name(self) -> Optional[str]:
+        """Get the current model name. Subclasses should override to provide specific model."""
+        # Try common config patterns
+        for attr_name in ['deepseek_config', 'gemini_config', 'openai_config']:
+            if hasattr(self, attr_name):
+                config = getattr(self, attr_name)
+                if hasattr(config, 'model'):
+                    return config.model
+        
+        return None
     
     def should_compact(self, messages: List[Dict[str, Any]]) -> bool:
         """Determine if conversation should be compacted."""
@@ -2259,10 +2537,55 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
             fallback.extend(messages[-5:])
             return fallback
     
-    @abstractmethod
     async def generate_response(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None) -> Union[str, Any]:
-        """Generate a response using the specific LLM. Must be implemented by subclasses."""
-        pass
+        """Generate a response using the specific LLM. Centralized implementation."""
+        # For subagents, use interactive=False to avoid terminal formatting issues
+        interactive = not self.is_subagent
+        
+        # Default to streaming behavior, but allow subclasses to override
+        stream = getattr(self, 'stream', True)
+        
+        # Call the concrete implementation's chat_completion method
+        return await self.chat_completion(messages, stream=stream, interactive=interactive)
+    
+    # Tool conversion and parsing helper methods
+    def normalize_tool_name(self, tool_key: str) -> str:
+        """Normalize tool name by replacing colons with underscores."""
+        return tool_key.replace(":", "_")
+    
+    def generate_default_description(self, tool_info: dict) -> str:
+        """Generate a default description for a tool if none exists."""
+        return tool_info.get("description") or f"Execute {tool_info['name']} tool"
+    
+    def get_tool_schema(self, tool_info: dict) -> dict:
+        """Get tool schema with fallback to basic object schema."""
+        return tool_info.get("schema") or {"type": "object", "properties": {}}
+    
+    def validate_json_arguments(self, args_json: str) -> bool:
+        """Validate that a string contains valid JSON."""
+        try:
+            json.loads(args_json)
+            return True
+        except (json.JSONDecodeError, TypeError):
+            return False
+    
+    def validate_tool_name(self, tool_name: str) -> bool:
+        """Validate tool name format."""
+        return tool_name and (tool_name.startswith("builtin_") or "_" in tool_name)
+    
+    def create_tool_call_object(self, name: str, args: str, call_id: str = None):
+        """Create a standardized tool call object."""
+        import types
+        
+        # Create a SimpleNamespace object similar to OpenAI's format
+        tool_call = types.SimpleNamespace()
+        tool_call.function = types.SimpleNamespace()
+        tool_call.function.name = name
+        tool_call.function.arguments = args
+        tool_call.id = call_id or f"call_{name}_{int(time.time())}"
+        tool_call.type = "function"
+        
+        return tool_call
     
     @abstractmethod
     def convert_tools_to_llm_format(self) -> List[Dict]:

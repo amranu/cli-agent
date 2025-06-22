@@ -7,6 +7,7 @@ import logging
 import re
 import sys
 import termios
+import time
 import tty
 import select
 from typing import Any, Dict, List, Optional, Union
@@ -19,7 +20,7 @@ from agent import BaseMCPAgent, InterruptibleInput
 
 # Configure logging
 logging.basicConfig(
-    level=logging.WARNING,  # Changed from DEBUG to WARNING to suppress DEBUG and INFO messages
+    level=logging.INFO,  # Changed to INFO to see subagent messages
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -32,8 +33,12 @@ class MCPDeepseekHost(BaseMCPAgent):
         super().__init__(config, is_subagent)
         self.deepseek_config = config.get_deepseek_config()
         
+        
         # Store last reasoning content for deepseek-reasoner
         self.last_reasoning_content: Optional[str] = None
+        
+        # Set streaming preference for centralized generate_response method
+        self.stream = self.deepseek_config.stream
         
         # Initialize Deepseek client with appropriate timeout for reasoner model
         timeout_seconds = 600 if self.deepseek_config.model == "deepseek-reasoner" else 600
@@ -45,12 +50,20 @@ class MCPDeepseekHost(BaseMCPAgent):
         
         logger.info(f"Initialized MCP Deepseek Host with model: {self.deepseek_config.model}")
     
-    def get_token_limit(self) -> int:
-        """Get the context token limit for DeepSeek models."""
-        if self.deepseek_config.model == "deepseek-reasoner":
-            return 128000  # DeepSeek-R1 has 128k context
-        else:
-            return 64000   # DeepSeek-Chat has 64k context
+    async def _get_subagent_messages(self) -> List:
+        """Get all pending subagent messages from the event queue."""
+        messages = []
+        if not self.subagent_message_queue:
+            return messages
+            
+        try:
+            while True:
+                message = self.subagent_message_queue.get_nowait()
+                messages.append(message)
+        except asyncio.QueueEmpty:
+            pass
+        return messages
+    
     
     def _extract_text_before_tool_calls(self, content: str) -> str:
         """Extract any text that appears before tool calls in the response."""
@@ -69,12 +82,6 @@ class MCPDeepseekHost(BaseMCPAgent):
         
         return ""
     
-    async def generate_response(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None) -> Union[str, Any]:
-        """Generate a response using Deepseek API."""
-        # For subagents, use interactive=False to avoid terminal formatting issues
-        # when output is forwarded to parent chat
-        interactive = not self.is_subagent
-        return await self.chat_completion(messages, stream=True, interactive=interactive)
     
     def convert_tools_to_llm_format(self) -> List[Dict]:
         """Convert tools to Deepseek format."""
@@ -226,9 +233,12 @@ class MCPDeepseekHost(BaseMCPAgent):
         # Prepare tools for Deepseek
         tools = self._convert_tools_to_deepseek_format() if self.available_tools else None
         
-        # For interactive mode, use streaming to handle tool calls properly
-        if interactive:
-            stream = True
+        # Use configured streaming mode, but force streaming for interactive mode with tools
+        # to handle tool calls properly
+#        if interactive and tools:
+#            stream = True
+#        else:
+        stream = self.deepseek_config.stream
         
         try:
             # Make request to Deepseek
@@ -242,7 +252,7 @@ class MCPDeepseekHost(BaseMCPAgent):
             )
             
             if stream:
-                return self._handle_streaming_response(response, enhanced_messages)
+                return self._handle_streaming_response(response, enhanced_messages, interactive)
             else:
                 return await self._handle_complete_response(response, enhanced_messages, interactive)
                 
@@ -318,7 +328,15 @@ class MCPDeepseekHost(BaseMCPAgent):
                 
             if tool_calls:
                 if interactive:
-                    print(f"\n🔧 Using {len(tool_calls)} tool(s)...", flush=True)
+                    print(f"\n🔧 Executing {len(tool_calls)} tool(s):", flush=True)
+                    for i, tc in enumerate(tool_calls, 1):
+                        tool_name = tc.function.name.replace("_", ":", 1)
+                        try:
+                            args = json.loads(tc.function.arguments)
+                            args_preview = str(args)[:100] + "..." if len(str(args)) > 100 else str(args)
+                            print(f"   {i}. {tool_name} - {args_preview}", flush=True)
+                        except:
+                            print(f"   {i}. {tool_name}", flush=True)
                 
                 # Add assistant message with tool calls
                 current_messages.append({
@@ -398,7 +416,7 @@ class MCPDeepseekHost(BaseMCPAgent):
                 
                 # If interactive, we need to handle the new streaming response
                 if interactive:
-                    return self._handle_streaming_response(response, current_messages)
+                    return self._handle_streaming_response(response, current_messages, interactive)
 
                 
                 # Continue the loop to check if the new response has more tool calls
@@ -423,11 +441,24 @@ class MCPDeepseekHost(BaseMCPAgent):
         # If we hit the max rounds, return what we have
         return response.choices[0].message.content or ""
     
-    def _handle_streaming_response(self, response, original_messages: List[Dict[str, str]] = None):
+    def _handle_streaming_response(self, response, original_messages: List[Dict[str, str]] = None, interactive: bool = False):
         """Handle streaming response from Deepseek with tool call support."""
         async def async_stream_generator():
             current_messages = original_messages.copy() if original_messages else []
             current_response = response  # Store the initial response
+            
+            # Helper function to yield any pending subagent messages
+            async def yield_subagent_messages():
+                subagent_messages = await self._get_subagent_messages()
+                for msg in subagent_messages:
+                    if msg.type == 'output':
+                        yield f"\n🤖 [SUBAGENT] {msg.content}"
+                    elif msg.type == 'status':
+                        yield f"\n📋 [SUBAGENT] {msg.content}"
+                    elif msg.type == 'error':
+                        yield f"\n❌ [SUBAGENT] {msg.content}"
+                    elif msg.type == 'result':
+                        yield f"\n✅ [SUBAGENT] Result: {msg.content}"
             
             round_num = 0
             while True:
@@ -438,20 +469,67 @@ class MCPDeepseekHost(BaseMCPAgent):
                 current_tool_call = None
                 
                 # Process the current streaming response
+                subagent_interrupt_processed = False
                 for chunk in current_response:
+                    # Check if we should interrupt for subagents
+                    if self.subagent_manager and self.subagent_manager.get_active_count() > 0 and not subagent_interrupt_processed:
+                        # INTERRUPT STREAMING - collect subagent results and restart
+                        yield f"\n🔄 Subagents active - interrupting main stream to collect results...\n"
+                        
+                        # Wait for all subagents to complete and collect results
+                        subagent_results = await self._collect_subagent_results()
+                        
+                        if subagent_results:
+                            # Add subagent results to the conversation and restart
+                            yield f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n"
+                            
+                            # Create new message with subagent results
+                            results_summary = "\n".join([
+                                f"**Subagent Task: {result['description']}**\n{result['content']}"
+                                for result in subagent_results
+                            ])
+                            
+                            subagent_message = {
+                                "role": "user", 
+                                "content": f"SUBAGENT RESULTS:\n\n{results_summary}\n\nPlease continue your analysis incorporating these subagent findings."
+                            }
+                            
+                            # Add to messages and restart conversation
+                            new_messages = current_messages + [subagent_message]
+                            
+                            # Restart the conversation with subagent results
+                            yield f"\n🔄 Restarting conversation with subagent results...\n"
+                            new_response = await self.chat_completion(new_messages, stream=True, interactive=interactive)
+                            
+                            # Yield the new response (check if it's a generator or string)
+                            if hasattr(new_response, '__aiter__'):
+                                async for new_chunk in new_response:
+                                    yield new_chunk
+                            else:
+                                # If it's a string, yield it directly
+                                yield str(new_response)
+                            
+                            # Exit the current loop since we've restarted
+                            return
+                        
+                        subagent_interrupt_processed = True
+                    
                     if chunk.choices:
                         delta = chunk.choices[0].delta
                         
                         # Handle reasoning content (deepseek-reasoner)
                         if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
                             accumulated_reasoning_content += delta.reasoning_content
-                            # Stream reasoning content immediately as it arrives
-                            yield delta.reasoning_content
+                            # Only yield if no active subagents
+                            if not self.subagent_manager or self.subagent_manager.get_active_count() == 0:
+                                yield delta.reasoning_content
                         
                         # Handle regular content
                         if delta.content:
                             accumulated_content += delta.content
-                            yield delta.content
+                            # Only yield if no active subagents
+                            if not self.subagent_manager or self.subagent_manager.get_active_count() == 0:
+                                yield delta.content
                         
                         # Handle tool calls in streaming
                         if hasattr(delta, 'tool_calls') and delta.tool_calls:
@@ -539,7 +617,9 @@ class MCPDeepseekHost(BaseMCPAgent):
                         tool_name = tool_call.function.name.replace("_", ":", 1)
                         try:
                             arguments = json.loads(tool_call.function.arguments)
-                            yield f"\n{i}. Executing {tool_name}...\n"
+                            # Show tool name and abbreviated parameters
+                            args_preview = str(arguments)[:100] + "..." if len(str(arguments)) > 100 else str(arguments)
+                            yield f"\n🔧 Tool {i}: {tool_name}\n📝 Parameters: {args_preview}\n"
                             
                             tool_coroutines.append(
                                 self._execute_mcp_tool_with_keepalive(tool_name, arguments, keepalive_interval=self.deepseek_config.keepalive_interval)
@@ -558,7 +638,7 @@ class MCPDeepseekHost(BaseMCPAgent):
                     
                     # Execute all tools with real-time streaming
                     if tool_coroutines:
-                        yield f"\n🔧 Executing {len(tool_coroutines)} tool(s) in parallel...\n"
+                        yield f"\n⚡ Executing {len(tool_coroutines)} tool(s) in parallel...\n"
                         
                         # Create tasks with identifiers for real-time completion tracking
                         tasks_to_tools = {}
@@ -597,6 +677,8 @@ class MCPDeepseekHost(BaseMCPAgent):
                                         for msg in keepalive_messages:
                                             yield f"{msg}\n"
                                         
+                                        # Subagent messages displayed immediately via callback - no duplication needed
+                                        
                                         # Check if tool failed and add appropriate notice
                                         tool_failed = tool_result.startswith("Error:") or "error" in tool_result.lower()[:100]
                                         result_msg = f"Result: {tool_result}"
@@ -630,11 +712,30 @@ class MCPDeepseekHost(BaseMCPAgent):
                             messages=current_messages,
                             temperature=self.deepseek_config.temperature,
                             max_tokens=self.deepseek_config.max_tokens,
-                            stream=True,
+                            stream=self.deepseek_config.stream,
                             tools=tools
                         )
-                        # Continue to next round with new response
-                        continue
+                        # Handle both streaming and non-streaming responses
+                        if self.deepseek_config.stream:
+                            # Continue to next round with new streaming response
+                            continue
+                        else:
+                            # Handle non-streaming response and break out of streaming generator
+                            if hasattr(current_response, 'choices') and current_response.choices:
+                                choice = current_response.choices[0]
+                                message = choice.message
+                                
+                                # Handle reasoning content if present
+                                if hasattr(message, 'reasoning_content') and message.reasoning_content:
+                                    yield f"<reasoning>{message.reasoning_content}</reasoning>\n\n"
+                                
+                                # Yield the content and exit
+                                if message.content:
+                                    yield message.content
+                                break
+                            else:
+                                yield "Error: Invalid response format\n"
+                                break
                         
                     except Exception as e:
                         yield f"Error continuing conversation after tool execution: {e}\n"
@@ -791,7 +892,7 @@ async def interactive_chat(host: MCPDeepseekHost):
                     # Make API call interruptible by running in a task
                     print("\n💭 Thinking... (press ESC to interrupt)")
                     current_task = asyncio.create_task(
-                        host.chat_completion(messages, stream=True, interactive=True)
+                        host.chat_completion(messages, stream=host.deepseek_config.stream, interactive=True)
                     )
                     
                     # Create a background task to monitor for escape key
