@@ -544,6 +544,11 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
             logger.info("Chat completion interrupted by user")
             raise
         except Exception as e:
+            # Re-raise tool permission denials so they can be handled at the chat level
+            from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+            if isinstance(e, ToolDeniedReturnToPrompt):
+                raise  # Re-raise the exception to bubble up to interactive chat
+            
             import traceback
             logger.error(f"Error in Gemini chat completion: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
@@ -618,6 +623,11 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                     
                     # Handle exceptions
                     if isinstance(tool_result, Exception):
+                        # Re-raise tool permission denials so they can be handled at the chat level
+                        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+                        if isinstance(tool_result, ToolDeniedReturnToPrompt):
+                            raise tool_result  # Re-raise the exception to bubble up to interactive chat
+                        
                         tool_success = False
                         tool_result = f"Exception during execution: {str(tool_result)}"
                     elif isinstance(tool_result, str):
@@ -706,8 +716,8 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                     if interactive:
                         print(f"\r\x1b[K\n\r{self.display_tool_execution_start(len(function_calls), self.is_subagent, interactive=not self.is_subagent)}", flush=True)
                     
-                    # Execute function calls
-                    function_results, tool_output = await self._execute_function_calls(function_calls, interactive)
+                    # Execute function calls using centralized method
+                    function_results, tool_output = await self.execute_function_calls(function_calls, interactive)
                     
                     # Note: We don't add tool execution status messages to accumulated output
                     # as they are only for user feedback and cause LLM hallucinations
@@ -912,8 +922,8 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                         else:
                             print(f"\r\x1b[K{self.display_tool_execution_start(len(function_calls), self.is_subagent, interactive=not self.is_subagent)}", flush=True)
                         
-                        # Execute function calls using shared method
-                        function_results, tool_output = await self._execute_function_calls(function_calls, True, input_handler, streaming_mode=True)  # Always interactive for streaming
+                        # Execute function calls using centralized method
+                        function_results, tool_output = await self.execute_function_calls(function_calls, True, input_handler, streaming_mode=True)  # Always interactive for streaming
 
                         # Check if we just spawned subagents and should interrupt immediately
                         if self.subagent_manager and self.subagent_manager.get_active_count() > 0:
@@ -1054,6 +1064,11 @@ Please provide your final analysis based on these subagent results. Do not spawn
                 logger.debug("Stream generator closed by client")
                 return
             except Exception as e:
+                # Re-raise tool permission denials so they can be handled at the chat level
+                from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+                if isinstance(e, ToolDeniedReturnToPrompt):
+                    raise  # Re-raise the exception to bubble up to interactive chat
+                
                 error_msg = f"Error in streaming: {str(e)}"
                 logger.error(error_msg)
                 yield error_msg

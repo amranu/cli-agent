@@ -67,6 +67,11 @@ class HostConfig(BaseSettings):
     # MCP servers configuration
     mcp_servers: Dict[str, MCPServerConfig] = Field(default_factory=dict)
     
+    # Tool permission configuration
+    allowed_tools: List[str] = Field(default_factory=list, alias="ALLOWED_TOOLS")
+    disallowed_tools: List[str] = Field(default_factory=list, alias="DISALLOWED_TOOLS")
+    auto_approve_tools: bool = Field(default=False, alias="AUTO_APPROVE_TOOLS")
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -95,6 +100,15 @@ class HostConfig(BaseSettings):
             stream=self.gemini_stream,
             force_function_calling=self.gemini_force_function_calling,
             function_calling_mode=self.gemini_function_calling_mode
+        )
+    
+    def get_tool_permission_config(self):
+        """Get tool permission configuration."""
+        from cli_agent.core.tool_permissions import ToolPermissionConfig
+        return ToolPermissionConfig(
+            allowed_tools=self.allowed_tools,
+            disallowed_tools=self.disallowed_tools,
+            auto_approve_session=self.auto_approve_tools
         )
     
     def add_mcp_server(self, name: str, command: List[str], args: List[str] = None, env: Dict[str, str] = None):

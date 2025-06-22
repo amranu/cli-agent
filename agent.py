@@ -16,8 +16,25 @@ import click
 from config import HostConfig, load_config
 from cli_agent.core.base_agent import BaseMCPAgent
 from cli_agent.core.input_handler import InterruptibleInput
-from streaming_json import StreamingJSONHandler
-from session_manager import SessionManager
+
+# Import local modules with error handling for different environments
+try:
+    from streaming_json import StreamingJSONHandler
+except ImportError:
+    # Try importing from current directory if package import fails
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from streaming_json import StreamingJSONHandler
+
+try:
+    from session_manager import SessionManager
+except ImportError:
+    # Try importing from current directory if package import fails
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from session_manager import SessionManager
 
 # Configure logging
 logging.basicConfig(
@@ -98,10 +115,27 @@ def switch_gemini_pro(ctx):
 @click.option('--output-format', type=click.Choice(['text', 'stream-json']), default='text', help='Output format (text or stream-json)')
 @click.option('-c', '--continue', 'continue_session', is_flag=True, help='Continue the last conversation')
 @click.option('--resume', 'resume_session_id', help='Resume a specific session by ID')
+@click.option('--allowed-tools', multiple=True, help='Comma or space-separated list of tool names to allow (e.g. "Bash(git:*) Edit")')
+@click.option('--disallowed-tools', multiple=True, help='Comma or space-separated list of tool names to deny (e.g. "Bash(git:*) Edit")')
+@click.option('--auto-approve-tools', is_flag=True, help='Auto-approve all tool executions for this session')
 @click.pass_context
-async def chat(ctx, server, input_format, output_format, continue_session, resume_session_id):
+async def chat(ctx, server, input_format, output_format, continue_session, resume_session_id, 
+               allowed_tools, disallowed_tools, auto_approve_tools):
     """Start interactive chat session."""
     try:
+        # Parse tool permissions from CLI arguments
+        def parse_tool_list(tool_args):
+            """Parse comma or space-separated tool lists."""
+            tools = []
+            for arg in tool_args:
+                # Split by comma or space and clean up
+                parts = [t.strip() for t in arg.replace(',', ' ').split() if t.strip()]
+                tools.extend(parts)
+            return tools
+        
+        parsed_allowed_tools = parse_tool_list(allowed_tools)
+        parsed_disallowed_tools = parse_tool_list(disallowed_tools)
+        
         # Initialize session manager
         session_manager = SessionManager()
         
@@ -143,7 +177,8 @@ async def chat(ctx, server, input_format, output_format, continue_session, resum
         
         # Handle text mode (default behavior)
         if input_format == 'text' and output_format == 'text':
-            return await handle_text_chat(server, session_manager, messages)
+            return await handle_text_chat(server, session_manager, messages, 
+                                        parsed_allowed_tools, parsed_disallowed_tools, auto_approve_tools)
         
         
     except KeyboardInterrupt:
@@ -161,8 +196,11 @@ async def chat(ctx, server, input_format, output_format, continue_session, resum
 @click.option('--server', multiple=True, help='MCP server to connect to')
 @click.option('--input-format', type=click.Choice(['text', 'stream-json']), default='text', help='Input format (text or stream-json)')
 @click.option('--output-format', type=click.Choice(['text', 'stream-json']), default='text', help='Output format (text or stream-json)')
+@click.option('--allowed-tools', multiple=True, help='Comma or space-separated list of tool names to allow (e.g. "Bash(git:*) Edit")')
+@click.option('--disallowed-tools', multiple=True, help='Comma or space-separated list of tool names to deny (e.g. "Bash(git:*) Edit")')
+@click.option('--auto-approve-tools', is_flag=True, help='Auto-approve all tool executions for this session')
 @click.pass_context
-async def ask(ctx, message, server, input_format, output_format):
+async def ask(ctx, message, server, input_format, output_format, allowed_tools, disallowed_tools, auto_approve_tools):
     """Ask a single question."""
     try:
         # Validate format combinations
@@ -193,6 +231,37 @@ async def ask(ctx, message, server, input_format, output_format):
             
             from mcp_deepseek_host import MCPDeepseekHost
             host = MCPDeepseekHost(config)
+        
+        # Parse tool permissions from CLI arguments
+        def parse_tool_list(tool_args):
+            """Parse comma or space-separated tool lists."""
+            tools = []
+            for arg in tool_args:
+                # Split by comma or space and clean up
+                parts = [t.strip() for t in arg.replace(',', ' ').split() if t.strip()]
+                tools.extend(parts)
+            return tools
+        
+        parsed_allowed_tools = parse_tool_list(allowed_tools)
+        parsed_disallowed_tools = parse_tool_list(disallowed_tools)
+        
+        # Initialize tool permission manager
+        from cli_agent.core.tool_permissions import ToolPermissionConfig, ToolPermissionManager
+        
+        # Merge CLI args with config
+        final_allowed_tools = list(config.allowed_tools) + parsed_allowed_tools
+        final_disallowed_tools = list(config.disallowed_tools) + parsed_disallowed_tools
+        final_auto_approve = config.auto_approve_tools or auto_approve_tools
+        
+        permission_config = ToolPermissionConfig(
+            allowed_tools=final_allowed_tools,
+            disallowed_tools=final_disallowed_tools,
+            auto_approve_session=final_auto_approve
+        )
+        permission_manager = ToolPermissionManager(permission_config)
+        
+        # Set the permission manager on the host (no input handler for ask command)
+        host.permission_manager = permission_manager
         
         # Connect to servers
         for server_spec in server:
@@ -292,6 +361,23 @@ async def execute_task_subprocess(task_file_path: str):
         else:
             print(f"🤖 [SUBAGENT {task_id}] WARNING: No communication socket - tools will execute locally")
         
+        # Set up tool permission manager for subagent (inherits main agent settings)
+        from cli_agent.core.tool_permissions import ToolPermissionConfig, ToolPermissionManager
+        from cli_agent.core.input_handler import InterruptibleInput
+        
+        permission_config = ToolPermissionConfig(
+            allowed_tools=list(config.allowed_tools),
+            disallowed_tools=list(config.disallowed_tools),
+            auto_approve_session=config.auto_approve_tools
+        )
+        permission_manager = ToolPermissionManager(permission_config)
+        subagent.permission_manager = permission_manager
+        
+        # Set up input handler for subagent to enable permission prompts
+        subagent._input_handler = InterruptibleInput()
+        
+        print(f"🤖 [SUBAGENT {task_id}] Tool permission manager and input handler configured")
+        
         # Connect to MCP servers
         for server_name, server_config in config.mcp_servers.items():
             try:
@@ -358,8 +444,8 @@ def sessions():
     pass
 
 
-@sessions.command()
-def list():
+@sessions.command('list')
+def list_sessions():
     """List recent conversation sessions."""
     session_manager = SessionManager()
     sessions_list = session_manager.list_sessions()
@@ -468,8 +554,8 @@ def add(server_spec, env):
         click.echo(f"❌ Error adding MCP server: {e}")
 
 
-@mcp.command()
-def list():
+@mcp.command('list')
+def list_mcp_servers():
     """List all configured MCP servers."""
     try:
         config = load_config()
@@ -635,7 +721,7 @@ async def stream_json_response(host, handler, messages):
         handler.send_assistant_text(str(response))
 
 
-async def handle_text_chat(server, session_manager, messages):
+async def handle_text_chat(server, session_manager, messages, allowed_tools=None, disallowed_tools=None, auto_approve_tools=False):
     """Handle standard text-based chat mode."""
     # Load configuration
     config = load_config()
@@ -661,6 +747,24 @@ async def handle_text_chat(server, session_manager, messages):
         host = MCPDeepseekHost(config)
         click.echo(f"Using model: {config.deepseek_model}")
         click.echo(f"Temperature: {config.deepseek_temperature}")
+    
+    # Initialize tool permission manager
+    from cli_agent.core.tool_permissions import ToolPermissionConfig, ToolPermissionManager
+    
+    # Merge CLI args with config
+    final_allowed_tools = list(config.allowed_tools) + (allowed_tools or [])
+    final_disallowed_tools = list(config.disallowed_tools) + (disallowed_tools or [])
+    final_auto_approve = config.auto_approve_tools or auto_approve_tools
+    
+    permission_config = ToolPermissionConfig(
+        allowed_tools=final_allowed_tools,
+        disallowed_tools=final_disallowed_tools,
+        auto_approve_session=final_auto_approve
+    )
+    permission_manager = ToolPermissionManager(permission_config)
+    
+    # Set the permission manager on the host
+    host.permission_manager = permission_manager
     
     # Connect to additional MCP servers specified via --server option
     for server_spec in server:

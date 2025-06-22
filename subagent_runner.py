@@ -46,7 +46,10 @@ async def run_subagent_task(task_file_path: str):
             task_data = json.load(f)
         
         task_id = task_data['task_id']
-        current_task_id = task_id  # Set global for emit functions
+        
+        # Set global task_id for emit functions
+        global current_task_id
+        current_task_id = task_id
         description = task_data['description']
         prompt = task_data['prompt']
         
@@ -64,6 +67,76 @@ async def run_subagent_task(task_file_path: str):
             from mcp_deepseek_host import MCPDeepseekHost
             host = MCPDeepseekHost(config, is_subagent=True)
             emit_output_with_id("Created DeepSeek subagent")
+        
+        # Set up tool permission manager for subagent (inherits main agent settings)
+        from cli_agent.core.tool_permissions import ToolPermissionConfig, ToolPermissionManager
+        from cli_agent.core.input_handler import InterruptibleInput
+        
+        permission_config = ToolPermissionConfig(
+            allowed_tools=list(config.allowed_tools),
+            disallowed_tools=list(config.disallowed_tools),
+            auto_approve_session=config.auto_approve_tools
+        )
+        permission_manager = ToolPermissionManager(permission_config)
+        host.permission_manager = permission_manager
+        
+        # Create custom input handler for subagent that connects to main terminal
+        class SubagentInputHandler(InterruptibleInput):
+            def __init__(self, task_id):
+                super().__init__()
+                self.subagent_context = task_id
+            
+            def get_input(self, prompt_text: str, multiline_mode: bool = False, allow_escape_interrupt: bool = False):
+                # For subagents, emit a permission request and wait for response via a temp file
+                try:
+                    import tempfile
+                    import os
+                    import time
+                    import uuid
+                    
+                    # Create unique request ID
+                    request_id = str(uuid.uuid4())
+                    
+                    # Create temp file for response
+                    temp_dir = tempfile.gettempdir()
+                    response_file = os.path.join(temp_dir, f"subagent_response_{request_id}.txt")
+                    
+                    # Emit permission request to main process
+                    emit_message('permission_request', prompt_text, 
+                               task_id=current_task_id, 
+                               request_id=request_id,
+                               response_file=response_file)
+                    
+                    # Wait for response file to be created by main process
+                    timeout = 60  # 60 seconds timeout
+                    start_time = time.time()
+                    
+                    while not os.path.exists(response_file):
+                        if time.time() - start_time > timeout:
+                            emit_output_with_id("Permission request timeout, defaulting to allow")
+                            return 'y'
+                        time.sleep(0.1)
+                    
+                    # Read response from file
+                    with open(response_file, 'r') as f:
+                        response = f.read().strip()
+                    
+                    # Clean up temp file
+                    try:
+                        os.remove(response_file)
+                    except:
+                        pass
+                    
+                    return response
+                    
+                except Exception as e:
+                    emit_output_with_id(f"Permission request error, defaulting to allow: {e}")
+                    return 'y'
+        
+        # Set up input handler for subagent with task context
+        host._input_handler = SubagentInputHandler(task_id)
+        
+        emit_output_with_id("Tool permission manager and input handler configured")
         
         # Connect to MCP servers (inherit from parent config)
         for server_name, server_config in config.mcp_servers.items():

@@ -181,6 +181,11 @@ class MCPDeepseekHost(BaseMCPAgent):
                 return await self._handle_complete_response(response, enhanced_messages, interactive)
                 
         except Exception as e:
+            # Re-raise tool permission denials so they can be handled at the chat level
+            from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+            if isinstance(e, ToolDeniedReturnToPrompt):
+                raise  # Re-raise the exception to bubble up to interactive chat
+            
             logger.error(f"Error in chat completion: {e}")
             return f"Error: {str(e)}"
     
@@ -304,6 +309,10 @@ class MCPDeepseekHost(BaseMCPAgent):
                 for i, result in enumerate(tool_results):
                     tool_call = tool_calls[i]
                     if isinstance(result, Exception):
+                        # Re-raise tool permission denials so they can be handled at the chat level
+                        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+                        if isinstance(result, ToolDeniedReturnToPrompt):
+                            raise result  # Re-raise the exception to bubble up to interactive chat
                         tool_result_content = f"Error executing tool: {result}"
                     else:
                         # Handle tuple return from keep-alive version
@@ -587,6 +596,11 @@ class MCPDeepseekHost(BaseMCPAgent):
                                     result = task.result()
                                     
                                     if isinstance(result, Exception):
+                                        # Re-raise tool permission denials so they can be handled at the chat level
+                                        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+                                        if isinstance(result, ToolDeniedReturnToPrompt):
+                                            raise result  # Re-raise the exception to bubble up to interactive chat
+                                        
                                         error_msg = f"Error executing tool: {str(result)} ⚠️  Command failed - take this into account for your next action."
                                         yield f"\nTool {completed_count} Result: {error_msg}\n"
                                         current_messages.append({

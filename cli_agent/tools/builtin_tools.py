@@ -228,6 +228,24 @@ def get_task_results_tool() -> Dict[str, Any]:
     }
 
 
+def get_emit_result_tool() -> Dict[str, Any]:
+    """Return the emit_result tool definition (subagents only)."""
+    return {
+        "server": "builtin",
+        "name": "emit_result",
+        "description": "Emit the final result of a subagent task and terminate the subagent (subagents only)",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "result": {"type": "string", "description": "The final result to emit"},
+                "summary": {"type": "string", "description": "Optional brief summary of what was accomplished"}
+            },
+            "required": ["result"]
+        },
+        "client": None
+    }
+
+
 def get_all_builtin_tools() -> Dict[str, Dict[str, Any]]:
     """
     Return a dictionary of all built-in tools with their full qualified names as keys.
@@ -247,7 +265,8 @@ def get_all_builtin_tools() -> Dict[str, Dict[str, Any]]:
         "builtin:webfetch": get_web_fetch_tool(),
         "builtin:task": get_task_tool(),
         "builtin:task_status": get_task_status_tool(),
-        "builtin:task_results": get_task_results_tool()
+        "builtin:task_results": get_task_results_tool(),
+        "builtin:emit_result": get_emit_result_tool()
     }
 
 
@@ -288,5 +307,6 @@ BUILTIN_TOOL_NAMES = [
     "webfetch",
     "task",
     "task_status",
-    "task_results"
+    "task_results",
+    "emit_result"
 ]

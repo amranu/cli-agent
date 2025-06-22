@@ -72,6 +72,8 @@ class SlashCommandManager:
             return self._handle_quit()
         elif command == "tools":
             return self._handle_tools()
+        elif command == "permissions":
+            return self._handle_permissions(args)
         elif command == "switch-chat":
             return self._handle_switch_chat()
         elif command == "switch-reason":
@@ -105,6 +107,7 @@ Built-in Commands:
   /model [name]   - Show current model or set model
   /review [file]  - Request code review
   /tools          - List all available tools
+  /permissions    - Manage tool execution permissions
   /init           - Analyze codebase and generate AGENT.md
   /quit, /exit    - Exit the interactive chat
 
@@ -428,3 +431,70 @@ Please start by reading the key files to understand the architecture, then write
                 mcp_commands.append(f"mcp__{server}__<prompt-name>")
         
         return mcp_commands
+    
+    def _handle_permissions(self, args: str) -> str:
+        """Handle tool permissions command."""
+        if not hasattr(self.agent, 'permission_manager'):
+            return "❌ Tool permission system not available."
+        
+        permission_manager = self.agent.permission_manager
+        
+        parts = args.split()
+        if not parts:
+            # Show current status
+            status = permission_manager.get_session_status()
+            
+            result = "🔧 Tool Permission Status:\n\n"
+            
+            if status['auto_approve']:
+                result += "🟢 Auto-approval: ENABLED for all tools\n\n"
+            else:
+                result += "🔴 Auto-approval: DISABLED\n\n"
+            
+            if status['config_allowed']:
+                result += f"✅ Configuration allowed tools: {', '.join(status['config_allowed'])}\n"
+            
+            if status['config_disallowed']:
+                result += f"❌ Configuration disallowed tools: {', '.join(status['config_disallowed'])}\n"
+            
+            if status['approved_tools']:
+                result += f"✅ Session approved tools: {', '.join(status['approved_tools'])}\n"
+            
+            if status['denied_tools']:
+                result += f"❌ Session denied tools: {', '.join(status['denied_tools'])}\n"
+            
+            if not any([status['config_allowed'], status['config_disallowed'], 
+                       status['approved_tools'], status['denied_tools']]):
+                result += "ℹ️ No specific tool permissions configured.\n"
+            
+            result += "\nCommands:\n"
+            result += "  /permissions reset     - Reset session permissions\n"
+            result += "  /permissions allow <tool>  - Allow tool for session\n"
+            result += "  /permissions deny <tool>   - Deny tool for session\n"
+            result += "  /permissions auto      - Enable auto-approval for session\n"
+            
+            return result
+        
+        command = parts[0].lower()
+        
+        if command == "reset":
+            permission_manager.reset_session_permissions()
+            return "✅ Session permissions reset."
+        
+        elif command == "allow" and len(parts) > 1:
+            tool_name = parts[1]
+            permission_manager.add_session_approval(tool_name)
+            return f"✅ Tool '{tool_name}' approved for this session."
+        
+        elif command == "deny" and len(parts) > 1:
+            tool_name = parts[1]
+            permission_manager.add_session_denial(tool_name)
+            return f"❌ Tool '{tool_name}' denied for this session."
+        
+        elif command == "auto":
+            permission_manager.session_auto_approve = True
+            permission_manager._save_session_permissions()
+            return "✅ Auto-approval enabled for all tools in this session."
+        
+        else:
+            return "❌ Invalid permissions command. Use: reset, allow <tool>, deny <tool>, or auto"

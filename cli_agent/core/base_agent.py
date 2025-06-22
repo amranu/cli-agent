@@ -80,13 +80,19 @@ class BaseMCPAgent(ABC):
         """Add built-in tools to the available tools."""
         builtin_tools = get_all_builtin_tools()
         
-        # Remove subagent management tools for subagents to prevent recursion
+        # Configure tools based on agent type
         if self.is_subagent:
+            # Remove subagent management tools for subagents to prevent recursion
             subagent_tools = ["builtin:task", "builtin:task_status", "builtin:task_results"]
             for tool_key in subagent_tools:
                 if tool_key in builtin_tools:
                     del builtin_tools[tool_key]
                     logger.info(f"Removed {tool_key} from subagent tools")
+        else:
+            # Remove emit_result tool for main agents (subagents only)
+            if "builtin:emit_result" in builtin_tools:
+                del builtin_tools["builtin:emit_result"]
+                logger.info("Removed emit_result from main agent tools")
         
         self.available_tools.update(builtin_tools)
     
@@ -116,8 +122,37 @@ class BaseMCPAgent(ABC):
             return self._task_status(args)
         elif tool_name == "task_results":
             return self._task_results(args)
+        elif tool_name == "emit_result":
+            return await self._emit_result(args)
         else:
             return f"Unknown built-in tool: {tool_name}"
+    
+    async def _emit_result(self, args: Dict[str, Any]) -> str:
+        """Emit the final result of a subagent task and terminate (subagents only)."""
+        if not self.is_subagent:
+            return "Error: emit_result can only be used by subagents"
+        
+        result = args.get("result", "")
+        summary = args.get("summary", "")
+        
+        try:
+            # Import emit functions
+            from subagent import emit_result
+            
+            # Emit the final result
+            if summary:
+                full_result = f"{result}\n\nSummary: {summary}"
+            else:
+                full_result = result
+            
+            emit_result(full_result)
+            
+            # Exit the subagent process to terminate cleanly
+            import sys
+            sys.exit(0)
+            
+        except Exception as e:
+            return f"Error emitting result: {str(e)}"
     
     def _bash_execute(self, args: Dict[str, Any]) -> str:
         """Execute a bash command and return the output."""
@@ -559,6 +594,49 @@ Runtime: {runtime:.2f} seconds"""
             await self.subagent_manager.terminate_all()
     
     # Centralized Subagent Management Methods
+    def _handle_subagent_permission_request(self, message, task_id):
+        """Handle permission request from subagent."""
+        try:
+            import asyncio
+            import threading
+            
+            # Get request details from message data
+            request_id = message.data.get('request_id')
+            response_file = message.data.get('response_file')
+            prompt_text = message.content
+            
+            if not request_id or not response_file:
+                logger.error("Invalid permission request from subagent: missing request_id or response_file")
+                return
+            
+            # Display the permission request to user
+            print(f"\n🤖 [SUBAGENT-{task_id}] {prompt_text}", end='', flush=True)
+            
+            # Get user input
+            input_handler = getattr(self, '_input_handler', None)
+            if input_handler:
+                try:
+                    # Get user response
+                    response = input_handler.get_input("")
+                    if response is None:
+                        response = 'n'  # Default to deny if interrupted
+                except Exception as e:
+                    logger.error(f"Error getting user input for subagent permission: {e}")
+                    response = 'n'  # Default to deny on error
+            else:
+                # No input handler, default to deny
+                response = 'n'
+            
+            # Write response to temp file for subagent to read
+            try:
+                with open(response_file, 'w') as f:
+                    f.write(response)
+            except Exception as e:
+                logger.error(f"Error writing permission response: {e}")
+                
+        except Exception as e:
+            logger.error(f"Error handling subagent permission request: {e}")
+
     def _on_subagent_message(self, message):
         """Callback for when a subagent message is received - display during yield period."""
         try:
@@ -573,6 +651,10 @@ Runtime: {runtime:.2f} seconds"""
                 formatted = f"❌ [SUBAGENT-{task_id}] {message.content}"
             elif message.type == 'result':
                 formatted = f"✅ [SUBAGENT-{task_id}] Result: {message.content}"
+            elif message.type == 'permission_request':
+                # Handle permission request from subagent
+                self._handle_subagent_permission_request(message, task_id)
+                return  # Don't display permission requests, handle them directly
             else:
                 formatted = f"[SUBAGENT-{task_id} {message.type}] {message.content}"
             
@@ -656,6 +738,119 @@ Runtime: {runtime:.2f} seconds"""
         logger.info(f"Collected {len(results)} results from {len(self.subagent_manager.subagents)} subagents")
         return results
 
+    async def execute_function_calls(self, function_calls: List, interactive: bool = True, input_handler=None, streaming_mode: bool = False) -> tuple:
+        """Centralized function call execution for all host implementations."""
+        function_results = []
+        all_tool_output = []
+        
+        # Prepare tool info for parallel execution
+        tool_info_list = []
+        tool_coroutines = []
+        
+        # Check for interruption before starting any tool execution
+        if input_handler and input_handler.interrupted:
+            all_tool_output.append("🛑 Tool execution interrupted by user")
+            return function_results, all_tool_output
+        
+        for i, function_call in enumerate(function_calls, 1):
+            tool_name = function_call.name.replace("_", ":", 1)  # Convert back to MCP format
+            
+            # Parse arguments from function call
+            arguments = {}
+            if hasattr(function_call, 'args') and function_call.args:
+                try:
+                    import json
+                    # First try to access as dict directly
+                    if hasattr(function_call.args, 'items'):
+                        arguments = dict(function_call.args)
+                    elif hasattr(function_call.args, '__iter__'):
+                        arguments = dict(function_call.args)
+                    else:
+                        # If args is a string, try to parse as JSON
+                        if isinstance(function_call.args, str):
+                            arguments = json.loads(function_call.args)
+                        else:
+                            arguments = {}
+                except json.JSONDecodeError as e:
+                    logger.warning(f"JSON decode error in function call args: {e}")
+                    logger.warning(f"Raw args: {function_call.args}")
+                    arguments = {}
+                except Exception as e:
+                    logger.warning(f"Error parsing function call args: {e}")
+                    logger.warning(f"Raw args: {function_call.args}")
+                    arguments = {}
+            
+            # Store tool info for processing
+            tool_info_list.append((i, tool_name, arguments))
+            
+            # Display tool execution step
+            tool_execution_msg = self.display_tool_execution_step(i, tool_name, arguments, self.is_subagent, interactive=interactive)
+            if interactive and not streaming_mode:
+                print(f"\r\x1b[K{tool_execution_msg}", flush=True)
+            elif interactive and streaming_mode:
+                print(f"\r\x1b[K{tool_execution_msg}", flush=True)
+            else:
+                all_tool_output.append(tool_execution_msg)
+            
+            # Create coroutine for parallel execution
+            tool_coroutines.append(self._execute_mcp_tool(tool_name, arguments))
+        
+        # Execute all tools in parallel
+        if tool_coroutines:
+            try:
+                # Execute all tool calls concurrently
+                tool_results = await asyncio.gather(*tool_coroutines, return_exceptions=True)
+                
+                # Process results in order
+                for (i, tool_name, arguments), tool_result in zip(tool_info_list, tool_results):
+                    tool_success = True
+                    
+                    # Handle exceptions
+                    if isinstance(tool_result, Exception):
+                        # Re-raise tool permission denials so they can be handled at the chat level
+                        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+                        if isinstance(tool_result, ToolDeniedReturnToPrompt):
+                            raise tool_result  # Re-raise the exception to bubble up to interactive chat
+                        
+                        tool_success = False
+                        tool_result = f"Exception during execution: {str(tool_result)}"
+                    elif isinstance(tool_result, str):
+                        # Check if tool result indicates an error
+                        if tool_result.startswith("Error:") or "error" in tool_result.lower()[:100]:
+                            tool_success = False
+                    else:
+                        # Convert non-string results to string
+                        tool_result = str(tool_result)
+                    
+                    # Format result with success/failure status
+                    status = "SUCCESS" if tool_success else "FAILED"
+                    result_content = f"Tool {tool_name} {status}: {tool_result}"
+                    if not tool_success:
+                        result_content += "\n⚠️  Command failed - take this into account for your next action."
+                    function_results.append(result_content)
+                    
+                    # Use unified tool result display
+                    tool_result_msg = self.display_tool_execution_result(tool_result, not tool_success, self.is_subagent, interactive=interactive)
+                    if interactive and not streaming_mode:
+                        print(f"\r\x1b[K{tool_result_msg}", flush=True)
+                    elif interactive and streaming_mode:
+                        print(f"\r\x1b[K{tool_result_msg}", flush=True)
+                    else:
+                        all_tool_output.append(tool_result_msg)
+            
+            except Exception as e:
+                # Handle any errors during parallel execution
+                from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+                if isinstance(e, ToolDeniedReturnToPrompt):
+                    raise  # Re-raise permission denials
+                
+                error_msg = f"Error during tool execution: {str(e)}"
+                logger.error(error_msg)
+                all_tool_output.append(error_msg)
+                function_results.append(f"Tool execution FAILED: {error_msg}")
+        
+        return function_results, all_tool_output
+
     async def _execute_mcp_tool(self, tool_key: str, arguments: Dict[str, Any]) -> str:
         """Execute an MCP tool (built-in or external) and return the result."""
         try:
@@ -666,6 +861,23 @@ Runtime: {runtime:.2f} seconds"""
             
             tool_info = self.available_tools[tool_key]
             tool_name = tool_info["name"]
+            
+            # Check tool permissions (both main agent and subagents)
+            if hasattr(self, 'permission_manager'):
+                from cli_agent.core.tool_permissions import ToolPermissionResult, ToolDeniedReturnToPrompt
+                
+                input_handler = getattr(self, '_input_handler', None)
+                permission_result = await self.permission_manager.check_tool_permission(
+                    tool_name, arguments, input_handler
+                )
+                
+                if not permission_result.allowed:
+                    if permission_result.return_to_prompt and not self.is_subagent:
+                        # Only return to prompt for main agent, not subagents
+                        raise ToolDeniedReturnToPrompt(permission_result.reason)
+                    else:
+                        # For subagents or config-based denials, return error message
+                        return f"Tool execution denied: {permission_result.reason}"
             
             # Forward to parent if this is a subagent (except for subagent management tools)
             import sys
@@ -710,6 +922,11 @@ Runtime: {runtime:.2f} seconds"""
                 return f"Tool executed successfully. Result type: {type(result)}, Content: {result}"
                 
         except Exception as e:
+            # Re-raise tool permission denials so they can be handled at the chat level
+            from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+            if isinstance(e, ToolDeniedReturnToPrompt):
+                raise  # Re-raise the exception to bubble up to interactive chat
+            
             logger.error(f"Error executing tool {tool_key}: {e}")
             return f"Error executing tool {tool_key}: {str(e)}"
 
@@ -1240,6 +1457,9 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
         """Interactive chat session with shared functionality."""
         from cli_agent.core.input_handler import InterruptibleInput
         
+        # Store input handler for tool permission prompts
+        self._input_handler = input_handler
+        
         messages = existing_messages or []
         current_task = None
         
@@ -1335,9 +1555,19 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                     current_task = None
                     continue
                 except Exception as e:
-                    print(f"\nError generating response: {e}")
-                    current_task = None
-                    continue
+                    # Check if this is a tool permission denial that should return to prompt
+                    from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+                    if isinstance(e, ToolDeniedReturnToPrompt):
+                        # Tool denial message already printed by permission manager
+                        # Remove the last user message since we're not processing it
+                        if messages and messages[-1]["role"] == "user":
+                            messages.pop()
+                        current_task = None
+                        continue
+                    else:
+                        print(f"\nError generating response: {e}")
+                        current_task = None
+                        continue
                 
                 # Get the response
                 response = current_task.result()
