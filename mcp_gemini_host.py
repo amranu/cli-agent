@@ -18,7 +18,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from config import HostConfig, load_config, create_sample_env, GeminiConfig
-from agent import BaseMCPAgent, InterruptibleInput
+from cli_agent.core.base_agent import BaseMCPAgent
+from cli_agent.core.input_handler import InterruptibleInput
 
 
 # Configure logging
