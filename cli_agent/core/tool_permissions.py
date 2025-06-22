@@ -169,11 +169,11 @@ class ToolPermissionManager:
                         skip_prompt=True
                     )
             
-            # If allowed tools are specified but no match found, deny
+            # If allowed tools are specified but no match found, prompt user
             return ToolPermissionResult(
-                allowed=False,
+                allowed=True,  # Default to allow but require prompt
                 reason=f"Tool '{tool_name}' is not in the allowed tools list",
-                skip_prompt=True
+                skip_prompt=False  # Require user prompt
             )
         
         # No specific configuration, allow with prompt

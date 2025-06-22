@@ -187,7 +187,7 @@ CRITICAL INSTRUCTIONS:
         host._execute_mcp_tool = emit_tool_execution
         
         try:
-            response = await host.chat_completion(messages, stream=False, interactive=False)
+            response = await host.generate_response(messages)
         finally:
             # Restore original method
             host._execute_mcp_tool = original_execute_mcp_tool

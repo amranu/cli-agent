@@ -95,6 +95,10 @@ class BaseMCPAgent(ABC):
                 logger.info("Removed emit_result from main agent tools")
         
         self.available_tools.update(builtin_tools)
+        
+        # Debug: Log available tools for subagents
+        if self.is_subagent:
+            logger.info(f"Subagent initialized with {len(self.available_tools)} tools: {list(self.available_tools.keys())}")
     
     async def _execute_builtin_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Execute a built-in tool."""
@@ -736,6 +740,25 @@ Runtime: {runtime:.2f} seconds"""
                 logger.info(f"Subagent {task_id} not yet completed")
         
         logger.info(f"Collected {len(results)} results from {len(self.subagent_manager.subagents)} subagents")
+        
+        # Clean up completed subagents that provided results
+        if results:
+            completed_task_ids = [result['task_id'] for result in results]
+            for task_id in completed_task_ids:
+                if task_id in self.subagent_manager.subagents:
+                    del self.subagent_manager.subagents[task_id]
+                    logger.info(f"Cleaned up completed subagent: {task_id}")
+            
+            # Also clear any accumulated messages in the queue since they've been integrated
+            if self.subagent_message_queue:
+                # Clear any remaining messages in the queue
+                try:
+                    while True:
+                        self.subagent_message_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                logger.info("Cleared subagent message queue after collecting results")
+        
         return results
 
     async def execute_function_calls(self, function_calls: List, interactive: bool = True, input_handler=None, streaming_mode: bool = False) -> tuple:
@@ -1174,48 +1197,42 @@ You are the expert. Complete the task."""
         return messages
 
     def format_markdown(self, text: str) -> str:
-        """Format markdown text for terminal display."""
+        """Format markdown text for terminal display using Rich."""
         if not text:
             return text
             
-        # Simple terminal-friendly markdown formatting
-        lines = text.split('\n')
-        formatted_lines = []
-        
-        for line in lines:
-            # Headers
-            if line.startswith('# '):
-                formatted_lines.append(f"\n\033[1m\033[4m{line[2:]}\033[0m")  # Bold + underline
-            elif line.startswith('## '):
-                formatted_lines.append(f"\n\033[1m{line[3:]}\033[0m")  # Bold
-            elif line.startswith('### '):
-                formatted_lines.append(f"\n\033[1m{line[4:]}\033[0m")  # Bold
+        try:
+            from rich.console import Console
+            from rich.markdown import Markdown
+            from io import StringIO
             
-            # Code blocks
-            elif line.strip().startswith('```'):
-                if line.strip() == '```':
-                    formatted_lines.append("\033[2m" + line + "\033[0m")  # Dim
-                else:
-                    formatted_lines.append("\033[2m" + line + "\033[0m")  # Dim
+            # Create a console that outputs to a string buffer
+            console = Console(file=StringIO(), force_terminal=True, width=80)
             
-            # Lists
-            elif re.match(r'^\s*[-*+]\s', line):
-                formatted_lines.append(f"\033[36m•\033[0m{line[line.index(' ', line.index('-') if '-' in line else line.index('*') if '*' in line else line.index('+')):]}")
-            elif re.match(r'^\s*\d+\.\s', line):
-                formatted_lines.append(f"\033[36m{line.split('.')[0]}.\033[0m{line[line.index('.') + 1:]}")
+            # Parse and render markdown
+            md = Markdown(text)
+            console.print(md)
             
-            # Regular line - process inline formatting
-            else:
-                # Bold
-                line = re.sub(r'\*\*(.*?)\*\*', r'\033[1m\1\033[0m', line)
-                # Italic (using dim since true italic isn't widely supported)
-                line = re.sub(r'\*(.*?)\*', r'\033[3m\1\033[0m', line)
-                # Inline code
-                line = re.sub(r'`(.*?)`', r'\033[47m\033[30m\1\033[0m', line)
-                
-                formatted_lines.append(line)
-        
-        return '\n'.join(formatted_lines)
+            # Get the formatted output
+            formatted = console.file.getvalue()
+            
+            # Clean up any extra newlines at the end
+            return formatted.rstrip()
+            
+        except ImportError:
+            # Fallback to basic formatting if Rich is not available
+            logger.warning("Rich library not available, using basic markdown formatting")
+            return self._basic_markdown_format(text)
+    
+    def _basic_markdown_format(self, text: str) -> str:
+        """Basic fallback markdown formatting."""
+        if not text:
+            return text
+            
+        # Simple bold and code formatting as fallback
+        text = re.sub(r'\*\*(.*?)\*\*', r'\033[1m\1\033[0m', text)  # Bold
+        text = re.sub(r'`(.*?)`', r'\033[47m\033[30m\1\033[0m', text)  # Inline code
+        return text
     
     def display_tool_execution_start(self, tool_count: int, is_subagent: bool = False, interactive: bool = True) -> str:
         """Display tool execution start message."""
@@ -1389,15 +1406,17 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
             return fallback
     
     async def generate_response(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None) -> Union[str, Any]:
-        """Generate a response using the specific LLM. Centralized implementation."""
+        """Generate a response using the specific LLM. Centralized implementation with subagent yielding."""
         # For subagents, use interactive=False to avoid terminal formatting issues
         interactive = not self.is_subagent
         
         # Default to streaming behavior, but allow subclasses to override
-        stream = getattr(self, 'stream', True)
+        # Subagents should not stream to avoid generator issues
+        stream = getattr(self, 'stream', True) and not self.is_subagent
         
-        # Call the concrete implementation's chat_completion method
-        return await self.chat_completion(messages, stream=stream, interactive=interactive)
+        # Call the concrete implementation's _generate_completion method
+        tools_list = self.convert_tools_to_llm_format() if self.available_tools else None
+        return await self._generate_completion(messages, tools_list, stream, interactive)
     
     # Tool conversion and parsing helper methods
     def normalize_tool_name(self, tool_key: str) -> str:
@@ -1449,9 +1468,229 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
         pass
     
     @abstractmethod
-    async def chat_completion(self, messages: List[Dict[str, Any]], stream: bool = True, interactive: bool = True) -> Union[str, Any]:
-        """Generate chat completion. Must be implemented by subclasses."""
+    async def _generate_completion(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None, stream: bool = True, interactive: bool = True) -> Any:
+        """Generate completion using the specific LLM. Must be implemented by subclasses."""
         pass
+    
+    
+    @abstractmethod
+    def _add_tool_results_to_conversation(self, messages: List[Dict[str, Any]], tool_calls: List[Any], tool_results: List[str]) -> List[Dict[str, Any]]:
+        """Add tool results to conversation in model-specific format. Must be implemented by subclasses."""
+        pass
+    
+    def _prepend_agent_md_to_first_message(self, messages: List[Dict[str, Any]], is_first_message: bool) -> List[Dict[str, Any]]:
+        """Prepend AGENT.md content to first message."""
+        if not is_first_message or not messages:
+            return messages
+            
+        # Read AGENT.md file and prepend to first user message
+        import os
+        agent_md_path = "AGENT.md"
+        agent_content = ""
+        
+        if os.path.exists(agent_md_path):
+            try:
+                with open(agent_md_path, 'r', encoding='utf-8') as f:
+                    agent_content = f.read().strip()
+            except Exception as e:
+                logger.warning(f"Could not read AGENT.md: {e}")
+        
+        enhanced_messages = messages.copy()
+        if agent_content and enhanced_messages and enhanced_messages[0].get("role") == "user":
+            original_content = enhanced_messages[0]["content"]
+            enhanced_messages[0]["content"] = f"{agent_content}\n\n---\n\n{original_content}"
+        
+        return enhanced_messages
+    
+    async def chat_completion(self, messages: List[Dict[str, Any]], stream: bool = True, interactive: bool = True) -> Union[str, Any]:
+        """Centralized chat completion with tool execution logic."""
+        enhanced_messages = messages.copy()
+        is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
+        
+        # Add system prompt if this is the first message and no system prompt exists
+        if is_first_message and (not enhanced_messages or enhanced_messages[0].get("role") != "system"):
+            system_prompt = self._create_system_prompt()
+            enhanced_messages.insert(0, {"role": "system", "content": system_prompt})
+        
+        # Prepare tools
+        tools = self.convert_tools_to_llm_format() if self.available_tools else None
+        
+        # For streaming responses, we need to handle tool execution differently
+        if stream:
+            return await self._handle_streaming_chat_completion(enhanced_messages, tools, interactive)
+        else:
+            return await self._handle_non_streaming_chat_completion(enhanced_messages, tools, interactive)
+    
+    async def _handle_streaming_chat_completion(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]], interactive: bool) -> Any:
+        """Handle streaming chat completion with tool execution."""
+        # Generate streaming response
+        response = await self._generate_completion(messages, tools, stream=True)
+        
+        # For streaming, we need to collect the full response first
+        if hasattr(response, '__aiter__'):
+            # It's an async generator, collect the full response
+            full_content = ""
+            collected_response = None
+            
+            async for chunk in response:
+                if isinstance(chunk, str):
+                    full_content += chunk
+                else:
+                    # Store the last non-string chunk as it may contain tool calls
+                    collected_response = chunk
+            
+            # If we collected a response object, parse tool calls from it
+            if collected_response:
+                tool_calls = self.parse_tool_calls(collected_response)
+            else:
+                # Try to parse tool calls from the full content string
+                tool_calls = self._extract_tool_calls_from_content(full_content)
+            
+            if tool_calls:
+                # Execute tools and continue conversation
+                return await self._execute_tools_and_continue(messages, full_content, tool_calls, True, interactive)
+            else:
+                # No tool calls, return the full content
+                return full_content
+        else:
+            # Not a generator, handle as non-streaming
+            return await self._handle_non_streaming_chat_completion(messages, tools, interactive)
+    
+    async def _handle_non_streaming_chat_completion(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]], interactive: bool) -> Any:
+        """Handle non-streaming chat completion with tool execution."""
+        # Generate completion
+        response = await self._generate_completion(messages, tools, stream=False)
+        
+        # Parse tool calls from response
+        tool_calls = self.parse_tool_calls(response)
+        
+        if tool_calls:
+            # Execute tools and continue conversation
+            return await self._execute_tools_and_continue(messages, response, tool_calls, False, interactive)
+        else:
+            # No tool calls, return the response
+            return self._extract_content_from_response(response)
+    
+    def _extract_tool_calls_from_content(self, content: str) -> List[Dict[str, Any]]:
+        """Extract tool calls from content string. Override in subclasses if needed."""
+        # Default implementation - try to find JSON-like tool calls
+        import re
+        import json
+        
+        tool_calls = []
+        # Look for function call patterns in the content
+        # This is a simple fallback - subclasses should override for better parsing
+        function_pattern = r'function_call\s*:\s*({[^}]+})'
+        matches = re.findall(function_pattern, content)
+        
+        for match in matches:
+            try:
+                call_data = json.loads(match)
+                if 'name' in call_data:
+                    tool_calls.append({
+                        'id': f'call_{len(tool_calls)}',
+                        'function': {
+                            'name': call_data['name'],
+                            'arguments': call_data.get('arguments', {})
+                        }
+                    })
+            except:
+                pass
+        
+        return tool_calls
+    
+    def _extract_content_from_response(self, response: Any) -> str:
+        """Extract text content from response. Override in subclasses for model-specific parsing."""
+        if isinstance(response, str):
+            return response
+        
+        # Try common response formats
+        if hasattr(response, 'choices') and response.choices:
+            if hasattr(response.choices[0], 'message'):
+                return response.choices[0].message.content or ""
+        
+        if hasattr(response, 'candidates') and response.candidates:
+            if hasattr(response.candidates[0], 'content'):
+                if hasattr(response.candidates[0].content, 'parts'):
+                    parts = response.candidates[0].content.parts
+                    text_parts = [part.text for part in parts if hasattr(part, 'text') and part.text]
+                    return ''.join(text_parts)
+        
+        return str(response)
+    
+    async def _execute_tools_and_continue(self, messages: List[Dict[str, Any]], response: Any, 
+                                        tool_calls: List[Dict[str, Any]], stream: bool, interactive: bool) -> Any:
+        """Execute tool calls and continue the conversation."""
+        # Extract text content from response for assistant message
+        response_content = self._extract_content_from_response(response)
+        
+        # Add assistant message with tool calls 
+        assistant_msg = {"role": "assistant", "content": response_content}
+        if tool_calls:
+            assistant_msg["tool_calls"] = tool_calls
+        messages.append(assistant_msg)
+        
+        # Execute tools in parallel
+        tool_results = await asyncio.gather(
+            *[self._execute_single_tool(tool_call) for tool_call in tool_calls],
+            return_exceptions=True
+        )
+        
+        # Convert results to strings
+        string_results = []
+        for result in tool_results:
+            if isinstance(result, Exception):
+                string_results.append(f"Error: {str(result)}")
+            else:
+                string_results.append(str(result))
+        
+        # Let the model-specific implementation handle how to add tool results to conversation
+        messages = self._add_tool_results_to_conversation(messages, tool_calls, string_results)
+        
+        # Generate next completion with tool results
+        tools = self.convert_tools_to_llm_format() if self.available_tools else None
+        next_response = await self._generate_completion(messages, tools, stream)
+        
+        # Check for more tool calls
+        next_tool_calls = self.parse_tool_calls(next_response)
+        
+        if next_tool_calls:
+            # Continue recursively if there are more tool calls
+            return await self._execute_tools_and_continue(messages, next_response, next_tool_calls, stream, interactive)
+        else:
+            # No more tool calls, return final response
+            return self._extract_content_from_response(next_response)
+    
+    async def _execute_single_tool(self, tool_call: Any) -> str:
+        """Execute a single tool call."""
+        try:
+            # Handle different tool call formats (dict vs SimpleNamespace)
+            if hasattr(tool_call, 'get'):
+                # Dictionary format (DeepSeek)
+                function_name = tool_call.get("function", {}).get("name", "")
+                arguments = tool_call.get("function", {}).get("arguments", {})
+            else:
+                # SimpleNamespace format (Gemini)
+                function_name = getattr(tool_call, 'name', "")
+                arguments = getattr(tool_call, 'args', {})
+            
+            if isinstance(arguments, str):
+                import json
+                arguments = json.loads(arguments)
+            
+            # Create a simple namespace object that execute_function_calls expects
+            from types import SimpleNamespace
+            function_call = SimpleNamespace()
+            function_call.name = function_name
+            function_call.args = arguments
+            
+            # Use centralized tool execution
+            results, outputs = await self.execute_function_calls([function_call])
+            return results[0] if results else ""
+            
+        except Exception as e:
+            logger.error(f"Error executing tool {function_name}: {e}")
+            return f"Error executing tool: {str(e)}"
     
     async def interactive_chat(self, input_handler, existing_messages: List[Dict[str, Any]] = None):
         """Interactive chat session with shared functionality."""
@@ -1601,13 +1840,16 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                                 break
                                 
                             if isinstance(chunk, str):
+                                # Apply markdown formatting for terminal display
+                                formatted_chunk = self.format_markdown(chunk)
                                 # Convert \n to \r\n for proper terminal display in raw mode
-                                display_chunk = chunk.replace('\n', '\r\n')
+                                display_chunk = formatted_chunk.replace('\n', '\r\n')
                                 print(display_chunk, end="", flush=True)
                                 full_response += chunk
                             else:
                                 # Handle any non-string chunks if needed
-                                display_chunk = str(chunk).replace('\n', '\r\n')
+                                formatted_chunk = self.format_markdown(str(chunk))
+                                display_chunk = formatted_chunk.replace('\n', '\r\n')
                                 print(display_chunk, end="", flush=True)
                                 full_response += str(chunk)
                     finally:
@@ -1625,8 +1867,9 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                     if full_response:  # Only add if not interrupted
                         messages.append({"role": "assistant", "content": full_response})
                 else:
-                    # Non-streaming response
-                    print(f"\nAssistant: {response}")
+                    # Non-streaming response with markdown formatting
+                    formatted_response = self.format_markdown(str(response))
+                    print(f"\nAssistant: {formatted_response}")
                     messages.append({"role": "assistant", "content": str(response)})
                 
             except KeyboardInterrupt:
