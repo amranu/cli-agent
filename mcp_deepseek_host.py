@@ -17,6 +17,8 @@ from openai import OpenAI
 from config import HostConfig, load_config, create_sample_env
 from cli_agent.core.base_agent import BaseMCPAgent
 from cli_agent.core.input_handler import InterruptibleInput
+from cli_agent.utils.tool_conversion import OpenAIStyleToolConverter
+from cli_agent.utils.tool_parsing import DeepSeekToolCallParser
 
 # Configure logging
 logging.basicConfig(
@@ -84,80 +86,18 @@ class MCPDeepseekHost(BaseMCPAgent):
     
     
     def convert_tools_to_llm_format(self) -> List[Dict]:
-        """Convert tools to Deepseek format."""
-        return self._convert_tools_to_deepseek_format()
+        """Convert tools to Deepseek format using shared utilities."""
+        converter = OpenAIStyleToolConverter()
+        return converter.convert_tools(self.available_tools)
     
     def parse_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
-        """Parse tool calls from Deepseek response."""
+        """Parse tool calls from Deepseek response using shared utilities."""
         if isinstance(response, str):
-            return self._parse_deepseek_tool_calls(response)
+            tool_calls = DeepSeekToolCallParser.parse_tool_calls(response)
+            # Convert to dict format for compatibility
+            return [{'name': tc.function.name, 'args': tc.function.arguments} for tc in tool_calls]
         return []
 
-    def _parse_deepseek_tool_calls(self, content: str) -> List:
-        """Parse Deepseek's custom tool calling format."""
-        import re
-        import json
-        from types import SimpleNamespace
-        
-        tool_calls = []
-        
-        # Multiple patterns to handle various Deepseek tool call formats
-        patterns = [
-            # Full format with begin/end markers
-            r'<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>(\w+)\s*```json\s*(.*?)\s*```<｜tool▁call▁end｜>',
-            # Standard format with markers
-            r'<｜tool▁call▁begin｜>function<｜tool▁sep｜>(\w+)\s*```json\s*(.*?)\s*```<｜tool▁call▁end｜>',
-            # JSON object with function and parameters in code block
-            r'```json\s*\{\s*"function":\s*"(\w+)"\s*,\s*"parameters":\s*(\{.*?\})\s*\}\s*```',
-            # Direct JSON with function field
-            r'\{\s*"function":\s*"(\w+)"\s*,\s*"parameters":\s*(\{.*?\})\s*\}',
-            # Python-style function call format (with text before tool calls)
-            r'```python\s*.*?<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>(\w+)\s*```json\s*(.*?)\s*```<｜tool▁call▁end｜><｜tool▁calls▁end｜>',
-            # Python-style function call format (simple)
-            r'```python\s*<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>(\w+)\s*```json\s*(.*?)\s*```<｜tool▁call▁end｜>',
-        ]
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, content, re.DOTALL)
-            
-            for i, match in enumerate(matches):
-                try:
-                    if isinstance(match, tuple) and len(match) >= 2:
-                        func_name = match[0]
-                        args_json = match[1]
-                    else:
-                        continue
-                    
-                    # Skip if we already have this function call
-                    if any(tc.function.name == func_name for tc in tool_calls):
-                        continue
-                    
-                    # Only accept valid builtin tool names
-                    if not func_name.startswith('builtin_'):
-                        continue
-                    
-                    # Validate JSON
-                    try:
-                        json.loads(args_json)
-                    except json.JSONDecodeError:
-                        continue
-                    
-                    # Create a mock tool call object similar to OpenAI's format
-                    tool_call = SimpleNamespace()
-                    tool_call.id = f"deepseek_call_{len(tool_calls)}"
-                    tool_call.type = "function"
-                    tool_call.function = SimpleNamespace()
-                    tool_call.function.name = func_name
-                    tool_call.function.arguments = args_json.strip()
-                    
-                    tool_calls.append(tool_call)
-                    logger.warning(f"Parsed Deepseek tool call: {func_name}")
-                    
-                except Exception as e:
-                    logger.error(f"Error parsing Deepseek tool call: {e}")
-                    continue
-        
-        return tool_calls
     
     def _create_system_prompt(self, for_first_message: bool = False) -> str:
         """Create a system prompt that includes tool information."""
@@ -180,22 +120,6 @@ class MCPDeepseekHost(BaseMCPAgent):
         return system_prompt
     
     
-    def _convert_tools_to_deepseek_format(self) -> List[Dict]:
-        """Convert MCP tools to Deepseek function calling format."""
-        deepseek_tools = []
-        
-        for tool_key, tool_info in self.available_tools.items():
-            deepseek_tool = {
-                "type": "function",
-                "function": {
-                    "name": tool_key.replace(":", "_"),  # Replace colon with underscore for Deepseek
-                    "description": tool_info["description"] or f"Execute {tool_info['name']} tool",
-                    "parameters": tool_info["schema"] or {"type": "object", "properties": {}}
-                }
-            }
-            deepseek_tools.append(deepseek_tool)
-        
-        return deepseek_tools
     
     
     async def chat_completion(self, messages: List[Dict[str, str]], stream: bool = None, interactive: bool = False) -> Union[str, Any]:
@@ -231,7 +155,7 @@ class MCPDeepseekHost(BaseMCPAgent):
                 enhanced_messages.insert(0, {"role": "system", "content": system_prompt})
         
         # Prepare tools for Deepseek
-        tools = self._convert_tools_to_deepseek_format() if self.available_tools else None
+        tools = self.convert_tools_to_llm_format() if self.available_tools else None
         
         # Use configured streaming mode, but force streaming for interactive mode with tools
         # to handle tool calls properly
@@ -324,7 +248,7 @@ class MCPDeepseekHost(BaseMCPAgent):
                 '{"function"' in message.content
             ):
                 logger.warning("Detected Deepseek custom tool calling format")
-                tool_calls = self._parse_deepseek_tool_calls(message.content)
+                tool_calls = DeepSeekToolCallParser.parse_tool_calls(message.content)
                 
             if tool_calls:
                 if interactive:
@@ -411,7 +335,7 @@ class MCPDeepseekHost(BaseMCPAgent):
                     temperature=self.deepseek_config.temperature,
                     max_tokens=self.deepseek_config.max_tokens,
                     stream=interactive,  # Stream if in interactive mode
-                    tools=self._convert_tools_to_deepseek_format()
+                    tools=self.convert_tools_to_llm_format()
                 )
                 
                 # If interactive, we need to handle the new streaming response
@@ -586,7 +510,7 @@ class MCPDeepseekHost(BaseMCPAgent):
                 ):
                     has_tool_calls = True
                     yield "\n\n🔧 Parsing custom tool calls...\n"
-                    tool_calls = self._parse_deepseek_tool_calls(accumulated_content)
+                    tool_calls = DeepSeekToolCallParser.parse_tool_calls(accumulated_content)
                 
                 # Execute tools if found
                 if has_tool_calls and tool_calls:
@@ -706,7 +630,7 @@ class MCPDeepseekHost(BaseMCPAgent):
                     
                     # Make a new streaming request with tool results
                     try:
-                        tools = self._convert_tools_to_deepseek_format() if self.available_tools else None
+                        tools = self.convert_tools_to_llm_format() if self.available_tools else None
                         current_response = self.deepseek_client.chat.completions.create(
                             model=self.deepseek_config.model,
                             messages=current_messages,

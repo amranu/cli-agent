@@ -20,6 +20,8 @@ from mcp.client.stdio import stdio_client
 from config import HostConfig, load_config, create_sample_env, GeminiConfig
 from cli_agent.core.base_agent import BaseMCPAgent
 from cli_agent.core.input_handler import InterruptibleInput
+from cli_agent.utils.tool_conversion import GeminiToolConverter
+from cli_agent.utils.tool_parsing import GeminiToolCallParser
 
 
 # Configure logging
@@ -77,71 +79,18 @@ class MCPGeminiHost(BaseMCPAgent):
     
 
     
-    def convert_tools_to_llm_format(self) -> List[Dict]:
-        """Convert tools to Gemini format."""
-        return self._convert_tools_to_gemini_format()
+    def convert_tools_to_llm_format(self) -> List[types.Tool]:
+        """Convert tools to Gemini format using shared utilities."""
+        converter = GeminiToolConverter()
+        function_declarations = converter.convert_tools(self.available_tools)
+        return [types.Tool(function_declarations=function_declarations)]
     
     def parse_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
-        """Parse tool calls from Gemini response."""
-        if hasattr(response, 'candidates'):
-            function_calls, _ = self._parse_response_content(response)
-            return [{'name': fc.name, 'args': fc.args} for fc in function_calls]
-        return []
+        """Parse tool calls from Gemini response using shared utilities."""
+        tool_calls = GeminiToolCallParser.parse_all_formats(response, "")
+        # Convert to dict format for compatibility
+        return [{'name': tc.function.name, 'args': tc.function.arguments} for tc in tool_calls]
     
-    def _convert_tools_to_gemini_format(self) -> List[types.Tool]:
-        """Convert MCP tools to Gemini function calling format."""
-        function_declarations = []
-        
-        for tool_key, tool_info in self.available_tools.items():
-            # Sanitize schema to remove unsupported properties
-            sanitized_schema = self._sanitize_schema_for_gemini(tool_info["schema"] or {"type": "object", "properties": {}})
-            
-            function_declaration = {
-                "name": tool_key.replace(":", "_"),  # Replace colon with underscore for Gemini
-                "description": tool_info["description"] or f"Execute {tool_info['name']} tool",
-                "parameters": sanitized_schema
-            }
-            function_declarations.append(function_declaration)
-        
-        return [types.Tool(function_declarations=function_declarations)] if function_declarations else []
-    
-    def _sanitize_schema_for_gemini(self, schema: Dict[str, Any]) -> Dict[str, Any]:
-        """Sanitize JSON schema to be compatible with Gemini API."""
-        if not isinstance(schema, dict):
-            return {"type": "object", "properties": {}}
-        
-        # List of properties that Gemini doesn't support
-        unsupported_properties = {
-            'additionalProperties', 'additional_properties', 'patternProperties', 
-            'dependencies', 'definitions', '$ref', '$schema', '$id', 'allOf', 
-            'anyOf', 'oneOf', 'not', 'if', 'then', 'else'
-        }
-        
-        def clean_schema(obj):
-            if isinstance(obj, dict):
-                cleaned = {}
-                for key, value in obj.items():
-                    # Skip unsupported properties
-                    if key in unsupported_properties:
-                        continue
-                    # Recursively clean nested objects
-                    cleaned[key] = clean_schema(value)
-                return cleaned
-            elif isinstance(obj, list):
-                return [clean_schema(item) for item in obj]
-            else:
-                return obj
-        
-        cleaned_schema = clean_schema(schema)
-        
-        # Ensure we have a valid basic schema structure
-        if not cleaned_schema.get("type"):
-            cleaned_schema["type"] = "object"
-        
-        if cleaned_schema.get("type") == "object" and "properties" not in cleaned_schema:
-            cleaned_schema["properties"] = {}
-        
-        return cleaned_schema
     
     async def _make_gemini_request_with_retry(self, request_func, max_retries: int = 3, base_delay: float = 1.0):
         """Make a Gemini API request with exponential backoff retry logic."""
@@ -459,7 +408,7 @@ class MCPGeminiHost(BaseMCPAgent):
         gemini_prompt = self._convert_messages_to_gemini_format(enhanced_messages)
         
         # Prepare tools and config
-        tools = self._convert_tools_to_gemini_format()
+        tools = self.convert_tools_to_llm_format()
         
         # Configure tool calling behavior
         tool_config = None
@@ -514,64 +463,6 @@ class MCPGeminiHost(BaseMCPAgent):
             logger.error(f"Traceback: {traceback.format_exc()}")
             return f"Error: {str(e)}"
     
-    def _parse_response_content(self, response) -> tuple:
-        """Parse Gemini response content into function calls and text."""
-        function_calls = []
-        text_response = ""
-        
-        # Debug response structure
-        logger.debug(f"Response type: {type(response)}")
-        logger.debug(f"Has candidates: {hasattr(response, 'candidates') and bool(response.candidates)}")
-        if hasattr(response, 'candidates') and response.candidates:
-            logger.debug(f"Candidate 0 has content: {hasattr(response.candidates[0], 'content') and bool(response.candidates[0].content)}")
-            if hasattr(response.candidates[0], 'content') and response.candidates[0].content:
-                logger.debug(f"Content has parts: {hasattr(response.candidates[0].content, 'parts') and bool(response.candidates[0].content.parts)}")
-        
-        # First try to get content from parts structure
-        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, 'function_call') and part.function_call:
-                    function_calls.append(part.function_call)
-                elif hasattr(part, 'text') and part.text:
-                    text_response += part.text
-        
-        # If no content from parts, try alternative locations
-        if not text_response and not function_calls:
-            # Try direct text property on response
-            if hasattr(response, 'text') and response.text:
-                text_response = response.text
-                logger.debug("Found text on response.text")
-            # Try text on candidate
-            elif response.candidates and hasattr(response.candidates[0], 'text') and response.candidates[0].text:
-                text_response = response.candidates[0].text
-                logger.debug("Found text on candidate.text")
-            else:
-                # Log the full response structure for debugging
-                logger.warning("No text content found in response")
-                logger.warning(f"Response structure: {repr(response)}")
-                if response.candidates:
-                    logger.warning(f"Candidate 0 structure: {repr(response.candidates[0])}")
-                    if response.candidates[0].content:
-                        logger.warning(f"Content structure: {repr(response.candidates[0].content)}")
-                
-                # Return empty response rather than failing
-                return [], ""
-                    
-        # Also check for Python-style function calls in text that Gemini sometimes generates
-        if text_response:
-            python_calls = self._parse_python_style_function_calls(text_response)
-            if python_calls:
-                function_calls.extend(python_calls)
-                logger.debug(f"Found {len(python_calls)} Python-style function calls in addition to {len(function_calls) - len(python_calls)} structured calls")
-        
-        # Also check for XML-style tool calls like <execute_tool>tool_name{args}</execute_tool>
-        if text_response:
-            xml_calls = self._parse_xml_style_tool_calls(text_response)
-            if xml_calls:
-                function_calls.extend(xml_calls)
-                logger.debug(f"Found {len(xml_calls)} XML-style tool calls in addition to {len(function_calls) - len(xml_calls)} other calls")
-        
-        return function_calls, text_response
 
     async def _execute_function_calls(self, function_calls: List, interactive: bool, input_handler=None, streaming_mode=False) -> tuple:
         """Execute a list of function calls and return results and output."""
@@ -696,7 +587,17 @@ class MCPGeminiHost(BaseMCPAgent):
                 )
                 
                 # Parse response content
-                function_calls, text_response = self._parse_response_content(response)
+                function_calls = self.parse_tool_calls(response)
+                # Extract text response from response
+                text_response = ""
+                if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+                    for part in response.candidates[0].content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            text_response += part.text
+                elif hasattr(response, 'text') and response.text:
+                    text_response = response.text
+                elif response.candidates and hasattr(response.candidates[0], 'text') and response.candidates[0].text:
+                    text_response = response.candidates[0].text
                 
                 # Debug logging
                 logger.debug(f"Parsed {len(function_calls)} function calls and {len(text_response)} chars of text")
