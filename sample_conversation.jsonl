@@ -1,2 +1,0 @@
-{"type": "system", "subtype": "init", "cwd": "/home/test/project", "session_id": "sample123", "tools": ["Bash", "Read", "Write", "todo_read", "todo_write"], "mcp_servers": [], "model": "deepseek-chat", "permissionMode": "default", "apiKeySource": "none"}
-{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Create a simple Python script that prints hello world"}]}, "session_id": "sample123"}

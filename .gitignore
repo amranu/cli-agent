@@ -6,6 +6,9 @@
 # MCP server configurations (may contain sensitive paths/configs)
 mcp_servers.json
 
+# Session data (contains conversation history)
+.agent_sessions/
+
 # Python
 __pycache__/
 *.py[cod]
