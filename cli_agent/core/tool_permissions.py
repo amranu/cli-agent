@@ -134,6 +134,16 @@ class ToolPermissionManager:
             # match any command for that tool type
             return True
         
+        # Handle MCP server patterns like "mcp:*" or "server_name:*"  
+        if ':' in pattern:
+            if pattern.endswith(':*'):
+                # Pattern like "mcp:*" should match any tool starting with "mcp:"
+                prefix = pattern[:-1]  # Remove the '*'
+                return tool_name.startswith(prefix)
+            elif ':' in tool_name:
+                # Both pattern and tool_name have colons, try exact match
+                return tool_name == pattern
+        
         # Handle simple glob patterns
         return fnmatch.fnmatch(tool_name, pattern)
     

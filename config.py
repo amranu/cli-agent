@@ -68,7 +68,7 @@ class HostConfig(BaseSettings):
     mcp_servers: Dict[str, MCPServerConfig] = Field(default_factory=dict)
     
     # Tool permission configuration
-    allowed_tools: List[str] = Field(default_factory=list, alias="ALLOWED_TOOLS")
+    allowed_tools: List[str] = Field(default_factory=lambda: ["task", "task_status", "task_results", "emit_result", "read_file", "list_directory", "get_current_directory", "todo_read", "todo_write"], alias="ALLOWED_TOOLS")
     disallowed_tools: List[str] = Field(default_factory=list, alias="DISALLOWED_TOOLS")
     auto_approve_tools: bool = Field(default=False, alias="AUTO_APPROVE_TOOLS")
     

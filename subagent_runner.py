@@ -157,8 +157,10 @@ CRITICAL INSTRUCTIONS:
 - You are a subagent focused on executing tasks.
 - You MUST ONLY USE THE PROVIDED TOOLS.
 - Do not output any text, reasoning, or explanations.
-- When the task is complete, use the 'emit_result' function to return the final result.
-- Your response should be only the tool call, followed by the result.
+- When the task is complete, you MUST use the 'emit_result' tool to provide a summary of your results.
+- The emit_result tool takes two parameters: 'result' (required - the main findings/output) and 'summary' (optional - brief description of what was accomplished).
+- Always call emit_result as your final action to terminate the subagent and return results to the main agent.
+- Your response should be only tool calls, no other text.
 """
         
         messages = [{"role": "user", "content": enhanced_prompt}]
