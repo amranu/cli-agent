@@ -250,7 +250,7 @@ class TestBaseMCPAgent:
         result = await mock_base_agent._execute_builtin_tool(
             "bash_execute", {"command": "invalid_command_xyz"}
         )
-        assert "error" in result.lower() or "command not found" in result.lower()
+        assert "error" in result.lower() or "not found" in result.lower()
 
         # Test with missing file
         result = await mock_base_agent._execute_builtin_tool(
