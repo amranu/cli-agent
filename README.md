@@ -204,7 +204,7 @@ Please read our [CONTRIBUTING.md](CONTRIBUTING.md) file for more details on our 
 
 ## 📋 Requirements
 
-- Python 3.8+
+- Python 3.10+
 - DeepSeek API key (for DeepSeek models)
 - Google AI Studio API key (for Gemini models)
 - Node.js (for MCP servers that require it)
