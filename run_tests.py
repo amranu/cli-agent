@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Test runner script for cli-agent."""
 
-import sys
 import subprocess
+import sys
 from pathlib import Path
 
 
 def run_tests(test_type="all", verbose=False, coverage=True):
     """Run tests with specified options."""
     cmd = ["python", "-m", "pytest"]
-    
+
     # Add test path based on type
     if test_type == "unit":
         cmd.append("tests/unit/")
@@ -19,20 +19,20 @@ def run_tests(test_type="all", verbose=False, coverage=True):
         cmd.append("tests/")
     else:
         cmd.append(test_type)  # Custom path
-    
+
     # Add options
     if verbose:
         cmd.append("-v")
-    
+
     if coverage:
         cmd.extend(["--cov=cli_agent", "--cov=.", "--cov-report=term-missing"])
-    
+
     # Add markers for different test types
     if test_type == "unit":
         cmd.extend(["-m", "unit"])
     elif test_type == "integration":
         cmd.extend(["-m", "integration"])
-    
+
     print(f"Running command: {' '.join(cmd)}")
     return subprocess.run(cmd)
 
@@ -40,11 +40,13 @@ def run_tests(test_type="all", verbose=False, coverage=True):
 def run_lint():
     """Run linting checks."""
     print("Running flake8...")
-    subprocess.run(["python", "-m", "flake8", "cli_agent/", "tests/", "--max-line-length=127"])
-    
+    subprocess.run(
+        ["python", "-m", "flake8", "cli_agent/", "tests/", "--max-line-length=127"]
+    )
+
     print("\nRunning black check...")
     subprocess.run(["python", "-m", "black", "--check", "."])
-    
+
     print("\nRunning isort check...")
     subprocess.run(["python", "-m", "isort", "--check-only", "."])
 
@@ -61,17 +63,19 @@ def main():
         print("Usage: python run_tests.py [unit|integration|all|lint|type|path]")
         print("Examples:")
         print("  python run_tests.py unit          # Run unit tests")
-        print("  python run_tests.py integration   # Run integration tests") 
+        print("  python run_tests.py integration   # Run integration tests")
         print("  python run_tests.py all           # Run all tests")
         print("  python run_tests.py lint          # Run linting")
         print("  python run_tests.py type          # Run type checking")
-        print("  python run_tests.py tests/unit/test_base_agent.py  # Run specific test")
+        print(
+            "  python run_tests.py tests/unit/test_base_agent.py  # Run specific test"
+        )
         sys.exit(1)
-    
+
     test_type = sys.argv[1]
     verbose = "-v" in sys.argv or "--verbose" in sys.argv
     no_coverage = "--no-coverage" in sys.argv
-    
+
     if test_type == "lint":
         run_lint()
     elif test_type == "type":

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-@pytest.mark.integration  
+@pytest.mark.integration
 class TestAgentWorkflows:
     """Test agent workflows without hanging issues."""
 
@@ -16,24 +16,28 @@ class TestAgentWorkflows:
     async def test_message_processing_workflow(self, mock_base_agent):
         """Test message processing without interactive chat."""
         # Mock the generate response method
-        mock_base_agent._generate_completion = AsyncMock(return_value="Hello! I'm ready to help.")
-        
+        mock_base_agent._generate_completion = AsyncMock(
+            return_value="Hello! I'm ready to help."
+        )
+
         # Test processing a single message
         messages = [{"role": "user", "content": "Hello"}]
         response = await mock_base_agent.generate_response(messages)
-        
+
         assert response is not None
         assert isinstance(response, str)
 
-    @pytest.mark.asyncio  
+    @pytest.mark.asyncio
     async def test_tool_execution_workflow(self, mock_base_agent, temp_dir):
         """Test tool execution workflow."""
         # Create a test file
         test_file = temp_dir / "test.txt"
         test_file.write_text("test content")
-        
+
         # Test tool execution directly
-        result = await mock_base_agent._execute_builtin_tool("read_file", {"file_path": str(test_file)})
+        result = await mock_base_agent._execute_builtin_tool(
+            "read_file", {"file_path": str(test_file)}
+        )
         assert "test content" in result
 
     @pytest.mark.asyncio
@@ -48,29 +52,33 @@ class TestAgentWorkflows:
                 completed=True,
                 result="Subagent completed successfully",
                 description="Test task",
-                start_time=0
+                start_time=0,
             )
         }
-        
+
         mock_base_agent.subagent_manager = mock_manager
-        
+
         # Test task spawning
-        result = await mock_base_agent._task({
-            "description": "Test subagent task", 
-            "prompt": "Analyze something",
-            "context": "Test context"
-        })
-        
+        result = await mock_base_agent._task(
+            {
+                "description": "Test subagent task",
+                "prompt": "Analyze something",
+                "context": "Test context",
+            }
+        )
+
         assert result is not None
 
     @pytest.mark.asyncio
     async def test_error_handling_workflow(self, mock_base_agent):
         """Test error handling in workflows."""
         # Mock an error in generate_completion
-        mock_base_agent._generate_completion = AsyncMock(side_effect=Exception("Test error"))
-        
+        mock_base_agent._generate_completion = AsyncMock(
+            side_effect=Exception("Test error")
+        )
+
         messages = [{"role": "user", "content": "Test"}]
-        
+
         # Should handle errors gracefully
         try:
             result = await mock_base_agent.generate_response(messages)
@@ -84,10 +92,10 @@ class TestAgentWorkflows:
     async def test_slash_command_workflow(self, mock_base_agent):
         """Test slash command processing."""
         from cli_agent.core.slash_commands import SlashCommandManager
-        
+
         # Create real slash command manager for testing
         slash_manager = SlashCommandManager(mock_base_agent)
-        
+
         # Test help command
         result = await slash_manager.handle_slash_command("/help")
         assert isinstance(result, str)
@@ -106,7 +114,7 @@ class TestAgentWorkflows:
     async def test_tool_discovery_workflow(self, mock_base_agent):
         """Test tool discovery and loading."""
         # Test that tools are properly loaded
-        assert hasattr(mock_base_agent, 'available_tools')
+        assert hasattr(mock_base_agent, "available_tools")
         assert isinstance(mock_base_agent.available_tools, dict)
         assert len(mock_base_agent.available_tools) > 0
 
@@ -116,7 +124,7 @@ class TestAgentWorkflows:
         # Test markdown formatting
         test_markdown = "# Test\n\nThis is **bold** text with `code`."
         result = mock_base_agent.format_markdown(test_markdown)
-        
+
         assert isinstance(result, str)
         assert len(result) > 0
 
@@ -126,9 +134,9 @@ class TestAgentWorkflows:
         # Test with short conversation (should not compact)
         short_messages = [
             {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there!"}
+            {"role": "assistant", "content": "Hi there!"},
         ]
-        
+
         result = await mock_base_agent.compact_conversation(short_messages)
         assert len(result) == len(short_messages)
 
@@ -136,8 +144,13 @@ class TestAgentWorkflows:
     async def test_tool_normalization_workflow(self, mock_base_agent):
         """Test tool name normalization."""
         # Test tool name normalization
-        assert mock_base_agent.normalize_tool_name("builtin:bash_execute") == "builtin_bash_execute"
-        assert mock_base_agent.normalize_tool_name("mcp:server:tool") == "mcp_server_tool"
+        assert (
+            mock_base_agent.normalize_tool_name("builtin:bash_execute")
+            == "builtin_bash_execute"
+        )
+        assert (
+            mock_base_agent.normalize_tool_name("mcp:server:tool") == "mcp_server_tool"
+        )
 
     @pytest.mark.asyncio
     async def test_token_calculation_workflow(self, mock_base_agent):
@@ -151,7 +164,7 @@ class TestAgentWorkflows:
     async def test_builtin_tools_workflow(self, mock_base_agent):
         """Test builtin tools loading and structure."""
         from cli_agent.tools.builtin_tools import get_all_builtin_tools
-        
+
         tools = get_all_builtin_tools()
         assert isinstance(tools, dict)
         assert "builtin:bash_execute" in tools

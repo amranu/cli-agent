@@ -5,7 +5,7 @@ This module contains all the built-in tool schemas and definitions that were
 extracted from the BaseMCPAgent._add_builtin_tools method in agent.py.
 """
 
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 def get_bash_execute_tool() -> Dict[str, Any]:
@@ -17,12 +17,19 @@ def get_bash_execute_tool() -> Dict[str, Any]:
         "schema": {
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "The bash command to execute"},
-                "timeout": {"type": "integer", "default": 120, "description": "Timeout in seconds"}
+                "command": {
+                    "type": "string",
+                    "description": "The bash command to execute",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "default": 120,
+                    "description": "Timeout in seconds",
+                },
             },
-            "required": ["command"]
+            "required": ["command"],
         },
-        "client": None
+        "client": None,
     }
 
 
@@ -35,13 +42,19 @@ def get_read_file_tool() -> Dict[str, Any]:
         "schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Path to the file to read"},
-                "offset": {"type": "integer", "description": "Line number to start from"},
-                "limit": {"type": "integer", "description": "Number of lines to read"}
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the file to read",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Line number to start from",
+                },
+                "limit": {"type": "integer", "description": "Number of lines to read"},
             },
-            "required": ["file_path"]
+            "required": ["file_path"],
         },
-        "client": None
+        "client": None,
     }
 
 
@@ -54,12 +67,18 @@ def get_write_file_tool() -> Dict[str, Any]:
         "schema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Path to the file to write"},
-                "content": {"type": "string", "description": "Content to write to the file"}
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the file to write",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Content to write to the file",
+                },
             },
-            "required": ["file_path", "content"]
+            "required": ["file_path", "content"],
         },
-        "client": None
+        "client": None,
     }
 
 
@@ -72,11 +91,14 @@ def get_list_directory_tool() -> Dict[str, Any]:
         "schema": {
             "type": "object",
             "properties": {
-                "directory_path": {"type": "string", "description": "Path to the directory to list"}
+                "directory_path": {
+                    "type": "string",
+                    "description": "Path to the directory to list",
+                }
             },
-            "required": ["directory_path"]
+            "required": ["directory_path"],
         },
-        "client": None
+        "client": None,
     }
 
 
@@ -86,12 +108,8 @@ def get_current_directory_tool() -> Dict[str, Any]:
         "server": "builtin",
         "name": "get_current_directory",
         "description": "Get the current working directory",
-        "schema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        },
-        "client": None
+        "schema": {"type": "object", "properties": {}, "required": []},
+        "client": None,
     }
 
 
@@ -101,12 +119,8 @@ def get_todo_read_tool() -> Dict[str, Any]:
         "server": "builtin",
         "name": "todo_read",
         "description": "Read the current todo list",
-        "schema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        },
-        "client": None
+        "schema": {"type": "object", "properties": {}, "required": []},
+        "client": None,
     }
 
 
@@ -126,16 +140,22 @@ def get_todo_write_tool() -> Dict[str, Any]:
                         "properties": {
                             "id": {"type": "string"},
                             "content": {"type": "string"},
-                            "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
-                            "priority": {"type": "string", "enum": ["low", "medium", "high"]}
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "in_progress", "completed"],
+                            },
+                            "priority": {
+                                "type": "string",
+                                "enum": ["low", "medium", "high"],
+                            },
                         },
-                        "required": ["id", "content", "status", "priority"]
-                    }
+                        "required": ["id", "content", "status", "priority"],
+                    },
                 }
             },
-            "required": ["todos"]
+            "required": ["todos"],
         },
-        "client": None
+        "client": None,
     }
 
 
@@ -150,11 +170,14 @@ def get_replace_in_file_tool() -> Dict[str, Any]:
             "properties": {
                 "file_path": {"type": "string", "description": "Path to the file"},
                 "old_text": {"type": "string", "description": "Text to replace"},
-                "new_text": {"type": "string", "description": "New text to replace with"}
+                "new_text": {
+                    "type": "string",
+                    "description": "New text to replace with",
+                },
             },
-            "required": ["file_path", "old_text", "new_text"]
+            "required": ["file_path", "old_text", "new_text"],
         },
-        "client": None
+        "client": None,
     }
 
 
@@ -168,11 +191,14 @@ def get_web_fetch_tool() -> Dict[str, Any]:
             "type": "object",
             "properties": {
                 "url": {"type": "string", "description": "URL to fetch"},
-                "limit": {"type": "integer", "description": "Optional limit to truncate the HTML response by this number of lines (default: 1000)"}
+                "limit": {
+                    "type": "integer",
+                    "description": "Optional limit to truncate the HTML response by this number of lines (default: 1000)",
+                },
             },
-            "required": ["url"]
+            "required": ["url"],
         },
-        "client": None
+        "client": None,
     }
 
 
@@ -185,13 +211,22 @@ def get_task_tool() -> Dict[str, Any]:
         "schema": {
             "type": "object",
             "properties": {
-                "description": {"type": "string", "description": "A brief description of the task (3-5 words)"},
-                "prompt": {"type": "string", "description": "Detailed instructions for what the subagent should investigate or accomplish"},
-                "context": {"type": "string", "description": "Optional additional context or files the subagent should consider"}
+                "description": {
+                    "type": "string",
+                    "description": "A brief description of the task (3-5 words)",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed instructions for what the subagent should investigate or accomplish",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional additional context or files the subagent should consider",
+                },
             },
-            "required": ["description", "prompt"]
+            "required": ["description", "prompt"],
         },
-        "client": None
+        "client": None,
     }
 
 
@@ -204,10 +239,13 @@ def get_task_status_tool() -> Dict[str, Any]:
         "schema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "string", "description": "Optional specific task ID to check. If not provided, shows all tasks"}
-            }
+                "task_id": {
+                    "type": "string",
+                    "description": "Optional specific task ID to check. If not provided, shows all tasks",
+                }
+            },
         },
-        "client": None
+        "client": None,
     }
 
 
@@ -220,11 +258,17 @@ def get_task_results_tool() -> Dict[str, Any]:
         "schema": {
             "type": "object",
             "properties": {
-                "include_running": {"type": "boolean", "description": "Whether to include running tasks (default: false, only completed)"},
-                "clear_after_retrieval": {"type": "boolean", "description": "Whether to clear tasks after retrieving results (default: true)"}
-            }
+                "include_running": {
+                    "type": "boolean",
+                    "description": "Whether to include running tasks (default: false, only completed)",
+                },
+                "clear_after_retrieval": {
+                    "type": "boolean",
+                    "description": "Whether to clear tasks after retrieving results (default: true)",
+                },
+            },
         },
-        "client": None
+        "client": None,
     }
 
 
@@ -238,18 +282,21 @@ def get_emit_result_tool() -> Dict[str, Any]:
             "type": "object",
             "properties": {
                 "result": {"type": "string", "description": "The final result to emit"},
-                "summary": {"type": "string", "description": "Optional brief summary of what was accomplished"}
+                "summary": {
+                    "type": "string",
+                    "description": "Optional brief summary of what was accomplished",
+                },
             },
-            "required": ["result"]
+            "required": ["result"],
         },
-        "client": None
+        "client": None,
     }
 
 
 def get_all_builtin_tools() -> Dict[str, Dict[str, Any]]:
     """
     Return a dictionary of all built-in tools with their full qualified names as keys.
-    
+
     Returns:
         Dict[str, Dict[str, Any]]: Dictionary mapping tool names to their definitions
     """
@@ -266,38 +313,38 @@ def get_all_builtin_tools() -> Dict[str, Dict[str, Any]]:
         "builtin:task": get_task_tool(),
         "builtin:task_status": get_task_status_tool(),
         "builtin:task_results": get_task_results_tool(),
-        "builtin:emit_result": get_emit_result_tool()
+        "builtin:emit_result": get_emit_result_tool(),
     }
 
 
 def get_builtin_tool_by_name(tool_name: str) -> Dict[str, Any]:
     """
     Get a specific built-in tool definition by name.
-    
+
     Args:
         tool_name (str): The name of the tool (with or without 'builtin:' prefix)
-    
+
     Returns:
         Dict[str, Any]: The tool definition
-    
+
     Raises:
         KeyError: If the tool name is not found
     """
     # Normalize tool name to include builtin: prefix if not present
     if not tool_name.startswith("builtin:"):
         tool_name = f"builtin:{tool_name}"
-    
+
     all_tools = get_all_builtin_tools()
     if tool_name not in all_tools:
         raise KeyError(f"Built-in tool '{tool_name}' not found")
-    
+
     return all_tools[tool_name]
 
 
 # List of all built-in tool names (without prefix) for easy reference
 BUILTIN_TOOL_NAMES = [
     "bash_execute",
-    "read_file", 
+    "read_file",
     "write_file",
     "list_directory",
     "get_current_directory",
@@ -308,5 +355,5 @@ BUILTIN_TOOL_NAMES = [
     "task",
     "task_status",
     "task_results",
-    "emit_result"
+    "emit_result",
 ]

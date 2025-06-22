@@ -12,44 +12,46 @@ import logging
 import subprocess
 import tempfile
 import time
-from typing import Dict, List, Any, Optional, AsyncGenerator, Callable
 import uuid
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class SubagentMessage:
     """Structured message from subagent."""
-    
+
     def __init__(self, msg_type: str, content: str, **kwargs):
         self.type = msg_type
         self.content = content
         self.timestamp = time.time()
         self.id = str(uuid.uuid4())
         self.data = kwargs
-    
+
     def to_json(self) -> str:
-        return json.dumps({
-            'type': self.type,
-            'content': self.content,
-            'timestamp': self.timestamp,
-            'id': self.id,
-            **self.data
-        })
-    
+        return json.dumps(
+            {
+                "type": self.type,
+                "content": self.content,
+                "timestamp": self.timestamp,
+                "id": self.id,
+                **self.data,
+            }
+        )
+
     @classmethod
-    def from_json(cls, json_str: str) -> 'SubagentMessage':
+    def from_json(cls, json_str: str) -> "SubagentMessage":
         data = json.loads(json_str)
-        msg_type = data.pop('type')
-        content = data.pop('content', '')
-        data.pop('timestamp', None)  # Remove timestamp from kwargs
-        data.pop('id', None)  # Remove id from kwargs
+        msg_type = data.pop("type")
+        content = data.pop("content", "")
+        data.pop("timestamp", None)  # Remove timestamp from kwargs
+        data.pop("id", None)  # Remove id from kwargs
         return cls(msg_type, content, **data)
 
 
 class SubagentProcess:
     """Manages a single subagent subprocess."""
-    
+
     def __init__(self, task_id: str, description: str, prompt: str):
         self.task_id = task_id
         self.description = description
@@ -58,70 +60,70 @@ class SubagentProcess:
         self.start_time = time.time()
         self.completed = False
         self.result = None
-        
+
     async def start(self, config) -> bool:
         """Start the subagent subprocess."""
         try:
             # Create task file
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False
+            ) as f:
                 task_data = {
-                    'task_id': self.task_id,
-                    'description': self.description,
-                    'prompt': self.prompt,
-                    'timestamp': self.start_time
+                    "task_id": self.task_id,
+                    "description": self.description,
+                    "prompt": self.prompt,
+                    "timestamp": self.start_time,
                 }
                 json.dump(task_data, f)
                 task_file = f.name
-            
+
             # Start subprocess
             import os
+
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            runner_path = os.path.join(current_dir, 'subagent_runner.py')
-            cmd = ['python', runner_path, task_file]
+            runner_path = os.path.join(current_dir, "subagent_runner.py")
+            cmd = ["python", runner_path, task_file]
             self.process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
-            
+
             logger.info(f"Started subagent {self.task_id} with PID {self.process.pid}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to start subagent {self.task_id}: {e}")
             return False
-    
+
     async def read_messages(self) -> AsyncGenerator[SubagentMessage, None]:
         """Read messages from subagent stdout."""
         if not self.process or not self.process.stdout:
             return
-        
+
         buffer = ""
         while True:
             try:
                 # Check if process is still running
                 if self.process.returncode is not None:
                     break
-                
+
                 # Read available data
                 try:
                     chunk = await asyncio.wait_for(
-                        self.process.stdout.read(1024), 
-                        timeout=0.1
+                        self.process.stdout.read(1024), timeout=0.1
                     )
                     if not chunk:
                         break
-                    
+
                     # Decode bytes to string
-                    chunk_str = chunk.decode('utf-8', errors='ignore')
+                    chunk_str = chunk.decode("utf-8", errors="ignore")
                     buffer += chunk_str
-                    
+
                     # Process complete lines
-                    while '\n' in buffer:
-                        line, buffer = buffer.split('\n', 1)
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
                         line = line.strip()
-                        
-                        if line.startswith('SUBAGENT_MSG:'):
+
+                        if line.startswith("SUBAGENT_MSG:"):
                             # Parse structured message
                             try:
                                 msg_json = line[13:]  # Remove "SUBAGENT_MSG:" prefix
@@ -131,19 +133,19 @@ class SubagentProcess:
                                 logger.error(f"Failed to parse subagent message: {e}")
                         elif line:
                             # Treat as regular output
-                            yield SubagentMessage('output', line)
-                
+                            yield SubagentMessage("output", line)
+
                 except asyncio.TimeoutError:
                     # No data available, continue
                     continue
-                    
+
             except Exception as e:
                 logger.error(f"Error reading from subagent {self.task_id}: {e}")
                 break
-        
+
         # Mark as completed
         self.completed = True
-    
+
     async def terminate(self):
         """Terminate the subagent process."""
         if self.process and self.process.returncode is None:
@@ -157,32 +159,35 @@ class SubagentProcess:
 
 class SubagentManager:
     """Manages multiple subagent processes with event-driven messaging."""
-    
+
     def __init__(self, config):
         self.config = config
         self.subagents: Dict[str, SubagentProcess] = {}
         self.message_queue: asyncio.Queue = asyncio.Queue()
         self.message_callbacks: List[Callable[[SubagentMessage], None]] = []
         self._running = True
-        
+
     async def spawn_subagent(self, description: str, prompt: str) -> str:
         """Spawn a new subagent and return its task_id."""
         # Generate unique task_id using timestamp + microseconds + counter to avoid collisions
         import uuid
+
         timestamp = time.time()
         # Use UUID to ensure absolute uniqueness
         task_id = f"task_{int(timestamp)}_{uuid.uuid4().hex[:8]}"
-        
+
         # Ensure task_id is unique (shouldn't be needed with UUID, but safety check)
         while task_id in self.subagents:
             task_id = f"task_{int(timestamp)}_{uuid.uuid4().hex[:8]}"
-        
+
         logger.info(f"NEW SUBAGENT SYSTEM: spawn_subagent called for {task_id}")
-        logger.info(f"NEW SUBAGENT SYSTEM: description={description}, prompt={prompt[:50]}...")
-        
+        logger.info(
+            f"NEW SUBAGENT SYSTEM: description={description}, prompt={prompt[:50]}..."
+        )
+
         subagent = SubagentProcess(task_id, description, prompt)
         success = await subagent.start(self.config)
-        
+
         if success:
             self.subagents[task_id] = subagent
             # Start monitoring messages
@@ -191,41 +196,45 @@ class SubagentManager:
             return task_id
         else:
             raise Exception(f"Failed to start subagent for: {description}")
-    
+
     async def _monitor_subagent(self, subagent: SubagentProcess):
         """Monitor a subagent for messages and trigger events."""
         logger.info(f"Starting to monitor subagent {subagent.task_id}")
         try:
             async for message in subagent.read_messages():
                 # Store result in subagent process for later retrieval
-                if message.type == 'result':
+                if message.type == "result":
                     subagent.result = message.content
-                    logger.info(f"Stored result for {subagent.task_id}: {message.content[:100]}...")
-                
+                    logger.info(
+                        f"Stored result for {subagent.task_id}: {message.content[:100]}..."
+                    )
+
                 # Add to queue for polling fallback
                 await self.message_queue.put(message)
-                
+
                 # Trigger immediate callbacks for event-driven handling
                 for callback in self.message_callbacks:
                     try:
                         callback(message)
                     except Exception as e:
                         logger.error(f"Error in message callback: {e}")
-                        
-                logger.info(f"Received message from {subagent.task_id}: {message.type} - {message.content[:50]}")
+
+                logger.info(
+                    f"Received message from {subagent.task_id}: {message.type} - {message.content[:50]}"
+                )
         except Exception as e:
             logger.error(f"Error monitoring subagent {subagent.task_id}: {e}")
         logger.info(f"Finished monitoring subagent {subagent.task_id}")
-    
+
     def add_message_callback(self, callback: Callable[[SubagentMessage], None]):
         """Add a callback that gets called immediately when a message is received."""
         self.message_callbacks.append(callback)
-    
+
     def remove_message_callback(self, callback: Callable[[SubagentMessage], None]):
         """Remove a message callback."""
         if callback in self.message_callbacks:
             self.message_callbacks.remove(callback)
-    
+
     async def get_pending_messages(self) -> List[SubagentMessage]:
         """Get all pending messages from the async queue."""
         messages = []
@@ -235,17 +244,17 @@ class SubagentManager:
                 messages.append(message)
         except asyncio.QueueEmpty:
             pass
-        
+
         if messages:
             logger.info(f"Retrieved {len(messages)} pending subagent messages")
         return messages
-    
+
     async def terminate_all(self):
         """Terminate all running subagents."""
         for subagent in self.subagents.values():
             await subagent.terminate()
         self.subagents.clear()
-    
+
     def get_active_count(self) -> int:
         """Get number of active subagents."""
         return len([s for s in self.subagents.values() if not s.completed])
@@ -260,28 +269,33 @@ def emit_message(msg_type: str, content: str, **kwargs):
 
 def emit_output(text: str):
     """Emit regular output from subagent."""
-    emit_message('output', text)
+    emit_message("output", text)
 
 
 def emit_tool_request(tool_name: str, arguments: dict, request_id: str = None):
     """Emit a tool execution request."""
     if not request_id:
         request_id = str(uuid.uuid4())
-    emit_message('tool_request', f"Requesting tool: {tool_name}", 
-                 tool_name=tool_name, arguments=arguments, request_id=request_id)
+    emit_message(
+        "tool_request",
+        f"Requesting tool: {tool_name}",
+        tool_name=tool_name,
+        arguments=arguments,
+        request_id=request_id,
+    )
     return request_id
 
 
 def emit_status(status: str, details: str = ""):
     """Emit status update."""
-    emit_message('status', f"Status: {status}", status=status, details=details)
+    emit_message("status", f"Status: {status}", status=status, details=details)
 
 
 def emit_result(result: str):
     """Emit final result."""
-    emit_message('result', result)
+    emit_message("result", result)
 
 
 def emit_error(error: str, details: str = ""):
     """Emit error message."""
-    emit_message('error', error, details=details)
+    emit_message("error", error, details=details)

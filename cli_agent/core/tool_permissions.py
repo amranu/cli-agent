@@ -11,15 +11,16 @@ import json
 import logging
 import os
 import re
-from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 class ToolDeniedReturnToPrompt(Exception):
     """Exception raised when a tool is denied and should return to user prompt."""
+
     def __init__(self, reason: str):
         self.reason = reason
         super().__init__(reason)
@@ -28,137 +29,145 @@ class ToolDeniedReturnToPrompt(Exception):
 @dataclass
 class ToolPermissionConfig:
     """Configuration for tool permissions."""
+
     allowed_tools: List[str] = field(default_factory=list)
     disallowed_tools: List[str] = field(default_factory=list)
-    auto_approve_session: bool = False  # Global setting to auto-approve all tools for session
+    auto_approve_session: bool = (
+        False  # Global setting to auto-approve all tools for session
+    )
     session_permissions_file: str = ".agent_sessions/.tool_permissions.json"
 
 
 @dataclass
 class ToolPermissionResult:
     """Result of a tool permission check."""
+
     allowed: bool
     reason: str
     skip_prompt: bool = False
-    return_to_prompt: bool = False  # If True, should return to user prompt instead of sending to LLM
+    return_to_prompt: bool = (
+        False  # If True, should return to user prompt instead of sending to LLM
+    )
 
 
 class ToolPermissionManager:
     """Manages tool permissions with user prompts and session tracking."""
-    
+
     def __init__(self, config: ToolPermissionConfig):
         self.config = config
         self.session_approvals: Set[str] = set()  # Tools approved for this session
-        self.session_denials: Set[str] = set()   # Tools denied for this session
+        self.session_denials: Set[str] = set()  # Tools denied for this session
         self.session_auto_approve: bool = False  # Auto-approve all for this session
-        
+
         # Load persistent session permissions
         self._load_session_permissions()
-    
+
     def _load_session_permissions(self):
         """Load persistent session permissions from file."""
         try:
             permissions_file = Path(self.config.session_permissions_file)
             if permissions_file.exists():
-                with open(permissions_file, 'r', encoding='utf-8') as f:
+                with open(permissions_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    self.session_approvals = set(data.get('approvals', []))
-                    self.session_denials = set(data.get('denials', []))
-                    self.session_auto_approve = data.get('auto_approve', False)
+                    self.session_approvals = set(data.get("approvals", []))
+                    self.session_denials = set(data.get("denials", []))
+                    self.session_auto_approve = data.get("auto_approve", False)
         except Exception as e:
             logger.warning(f"Could not load session permissions: {e}")
-    
+
     def _save_session_permissions(self):
         """Save persistent session permissions to file."""
         try:
             permissions_file = Path(self.config.session_permissions_file)
             permissions_file.parent.mkdir(parents=True, exist_ok=True)
-            
+
             data = {
-                'approvals': list(self.session_approvals),
-                'denials': list(self.session_denials),
-                'auto_approve': self.session_auto_approve
+                "approvals": list(self.session_approvals),
+                "denials": list(self.session_denials),
+                "auto_approve": self.session_auto_approve,
             }
-            
-            with open(permissions_file, 'w', encoding='utf-8') as f:
+
+            with open(permissions_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.warning(f"Could not save session permissions: {e}")
-    
+
     def _matches_pattern(self, tool_name: str, pattern: str) -> bool:
         """
         Check if tool name matches a pattern.
-        
+
         Supports Claude Code-style patterns:
         - "Bash" or "bash_execute" - exact tool name match
-        - "Bash(*)" - any bash command 
+        - "Bash(*)" - any bash command
         - "Bash(git:*)" - bash commands starting with "git:"
         - "*" - wildcard for any tool
         """
         # Handle exact matches first
         if pattern == tool_name:
             return True
-        
+
         # Handle wildcard patterns
         if pattern == "*":
             return True
-        
+
         # Convert friendly names to internal tool names
         tool_mapping = {
-            'Bash': 'bash_execute',
-            'Edit': 'replace_in_file', 
-            'Read': 'read_file',
-            'Write': 'write_file',
-            'List': 'list_directory',
-            'WebFetch': 'webfetch',
-            'Task': 'task',
-            'Todo': 'todo_read',  # Could match todo_read or todo_write
-            'Directory': 'get_current_directory'
+            "Bash": "bash_execute",
+            "Edit": "replace_in_file",
+            "Read": "read_file",
+            "Write": "write_file",
+            "List": "list_directory",
+            "WebFetch": "webfetch",
+            "Task": "task",
+            "Todo": "todo_read",  # Could match todo_read or todo_write
+            "Directory": "get_current_directory",
         }
-        
+
         # Check if pattern is a friendly name that maps to this tool
         if pattern in tool_mapping and tool_mapping[pattern] == tool_name:
             return True
-        
+
         # Handle tool-specific patterns like "Bash(*)" or "Bash(git:*)"
-        tool_pattern_match = re.match(r'^(\w+)\(([^)]+)\)$', pattern)
+        tool_pattern_match = re.match(r"^(\w+)\(([^)]+)\)$", pattern)
         if tool_pattern_match:
             tool_type, command_pattern = tool_pattern_match.groups()
-            
+
             expected_tool = tool_mapping.get(tool_type, tool_type.lower())
             if tool_name != expected_tool:
                 return False
-            
+
             # For bash commands, we'd need to check the actual command
             # This would require passing the arguments, but for now we'll
             # match any command for that tool type
             return True
-        
-        # Handle MCP server patterns like "mcp:*" or "server_name:*"  
-        if ':' in pattern:
-            if pattern.endswith(':*'):
+
+        # Handle MCP server patterns like "mcp:*" or "server_name:*"
+        if ":" in pattern:
+            if pattern.endswith(":*"):
                 # Pattern like "mcp:*" should match any tool starting with "mcp:"
                 prefix = pattern[:-1]  # Remove the '*'
                 return tool_name.startswith(prefix)
-            elif ':' in tool_name:
+            elif ":" in tool_name:
                 # Both pattern and tool_name have colons, try exact match
                 return tool_name == pattern
-        
+
         # Handle simple glob patterns
         return fnmatch.fnmatch(tool_name, pattern)
-    
-    def _is_tool_allowed_by_config(self, tool_name: str, arguments: Dict[str, Any]) -> ToolPermissionResult:
+
+    def _is_tool_allowed_by_config(
+        self, tool_name: str, arguments: Dict[str, Any]
+    ) -> ToolPermissionResult:
         """Check if tool is allowed/disallowed by configuration."""
-        
+
         # Check disallowed tools first (takes precedence)
         for pattern in self.config.disallowed_tools:
             if self._matches_pattern(tool_name, pattern):
                 return ToolPermissionResult(
                     allowed=False,
                     reason=f"Tool '{tool_name}' is disallowed by configuration pattern '{pattern}'",
-                    skip_prompt=True
+                    skip_prompt=True,
                 )
-        
+
         # Check allowed tools
         if self.config.allowed_tools:
             for pattern in self.config.allowed_tools:
@@ -166,179 +175,199 @@ class ToolPermissionManager:
                     return ToolPermissionResult(
                         allowed=True,
                         reason=f"Tool '{tool_name}' is allowed by configuration pattern '{pattern}'",
-                        skip_prompt=True
+                        skip_prompt=True,
                     )
-            
+
             # If allowed tools are specified but no match found, prompt user
             return ToolPermissionResult(
                 allowed=True,  # Default to allow but require prompt
                 reason=f"Tool '{tool_name}' is not in the allowed tools list",
-                skip_prompt=False  # Require user prompt
+                skip_prompt=False,  # Require user prompt
             )
-        
+
         # No specific configuration, allow with prompt
         return ToolPermissionResult(
             allowed=True,
             reason="No specific configuration, allowing with prompt",
-            skip_prompt=False
+            skip_prompt=False,
         )
-    
-    def _format_tool_description(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+
+    def _format_tool_description(
+        self, tool_name: str, arguments: Dict[str, Any]
+    ) -> str:
         """Format a user-friendly description of what the tool will do."""
         descriptions = {
-            'bash_execute': lambda args: f"Execute bash command: {args.get('command', 'N/A')}",
-            'read_file': lambda args: f"Read file: {args.get('file_path', 'N/A')}",
-            'write_file': lambda args: f"Write to file: {args.get('file_path', 'N/A')}",
-            'replace_in_file': lambda args: f"Edit file: {args.get('file_path', 'N/A')}",
-            'list_directory': lambda args: f"List directory: {args.get('path', 'current directory')}",
-            'webfetch': lambda args: f"Fetch URL: {args.get('url', 'N/A')}",
-            'todo_read': lambda args: "Read todo list",
-            'todo_write': lambda args: f"Update todo list with {len(args.get('todos', []))} items",
-            'task': lambda args: f"Spawn subagent task: {args.get('description', 'N/A')}",
-            'task_status': lambda args: f"Check task status: {args.get('task_id', 'N/A')}",
-            'task_results': lambda args: f"Get task results: {args.get('task_id', 'N/A')}",
-            'get_current_directory': lambda args: "Get current directory"
+            "bash_execute": lambda args: f"Execute bash command: {args.get('command', 'N/A')}",
+            "read_file": lambda args: f"Read file: {args.get('file_path', 'N/A')}",
+            "write_file": lambda args: f"Write to file: {args.get('file_path', 'N/A')}",
+            "replace_in_file": lambda args: f"Edit file: {args.get('file_path', 'N/A')}",
+            "list_directory": lambda args: f"List directory: {args.get('path', 'current directory')}",
+            "webfetch": lambda args: f"Fetch URL: {args.get('url', 'N/A')}",
+            "todo_read": lambda args: "Read todo list",
+            "todo_write": lambda args: f"Update todo list with {len(args.get('todos', []))} items",
+            "task": lambda args: f"Spawn subagent task: {args.get('description', 'N/A')}",
+            "task_status": lambda args: f"Check task status: {args.get('task_id', 'N/A')}",
+            "task_results": lambda args: f"Get task results: {args.get('task_id', 'N/A')}",
+            "get_current_directory": lambda args: "Get current directory",
         }
-        
+
         formatter = descriptions.get(tool_name)
         if formatter:
             try:
                 return formatter(arguments)
             except Exception:
                 pass
-        
+
         return f"Execute tool: {tool_name}"
-    
-    async def check_tool_permission(self, tool_name: str, arguments: Dict[str, Any], 
-                                  input_handler=None) -> ToolPermissionResult:
+
+    async def check_tool_permission(
+        self, tool_name: str, arguments: Dict[str, Any], input_handler=None
+    ) -> ToolPermissionResult:
         """
         Check if a tool should be allowed to execute.
-        
+
         Returns ToolPermissionResult with decision and whether to skip prompting.
         """
-        
+
         # Check session-level auto-approve
         if self.session_auto_approve or self.config.auto_approve_session:
             return ToolPermissionResult(
-                allowed=True,
-                reason="Auto-approved for session",
-                skip_prompt=True
+                allowed=True, reason="Auto-approved for session", skip_prompt=True
             )
-        
+
         # Check session-level approvals/denials
         if tool_name in self.session_approvals:
             return ToolPermissionResult(
-                allowed=True,
-                reason="Previously approved for session",
-                skip_prompt=True
+                allowed=True, reason="Previously approved for session", skip_prompt=True
             )
-        
+
         if tool_name in self.session_denials:
             return ToolPermissionResult(
-                allowed=False,
-                reason="Previously denied for session",
-                skip_prompt=True
+                allowed=False, reason="Previously denied for session", skip_prompt=True
             )
-        
+
         # Check configuration-based permissions
         config_result = self._is_tool_allowed_by_config(tool_name, arguments)
         if config_result.skip_prompt:
             return config_result
-        
+
         # Need to prompt user
         if input_handler is None:
             # No input handler available, default to allow
-            logger.warning("No input handler available for tool permission prompt, defaulting to allow")
-            return ToolPermissionResult(allowed=True, reason="No input handler available")
-        
-        return await self._prompt_user_for_permission(tool_name, arguments, input_handler)
-    
-    async def _prompt_user_for_permission(self, tool_name: str, arguments: Dict[str, Any], 
-                                        input_handler) -> ToolPermissionResult:
+            logger.warning(
+                "No input handler available for tool permission prompt, defaulting to allow"
+            )
+            return ToolPermissionResult(
+                allowed=True, reason="No input handler available"
+            )
+
+        return await self._prompt_user_for_permission(
+            tool_name, arguments, input_handler
+        )
+
+    async def _prompt_user_for_permission(
+        self, tool_name: str, arguments: Dict[str, Any], input_handler
+    ) -> ToolPermissionResult:
         """Prompt the user for tool execution permission."""
-        
+
         tool_description = self._format_tool_description(tool_name, arguments)
-        
+
         # Display tool execution request (no extra prefix since emit system handles subagent labeling)
         print(f"\r\n🔧 Tool Execution Request:")
         print(f"\rTool: {tool_name}")
         print(f"\rAction: {tool_description}")
-        
+
         # Show arguments if they're not sensitive
-        if tool_name != 'bash_execute' or len(str(arguments)) < 100:
+        if tool_name != "bash_execute" or len(str(arguments)) < 100:
             print(f"\rArguments: {arguments}")
-        
+
         print(f"\r\nAllow this tool to execute?")
         print(f"\r[y] Yes, execute once")
         print(f"\r[a] Yes, and allow '{tool_name}' for the rest of this session")
         print(f"\r[A] Yes, and auto-approve ALL tools for this session")
         print(f"\r[n] No, deny this execution")
         print(f"\r[d] No, and deny '{tool_name}' for the rest of this session")
-        
+
         try:
             # Get user response - add newline to fix cursor position
             print()  # Add newline to fix cursor position
             response = input_handler.get_input("Choice [y/a/A/n/d]: ")
             if response is None:
-                return ToolPermissionResult(allowed=False, reason="User interrupted input")
+                return ToolPermissionResult(
+                    allowed=False, reason="User interrupted input"
+                )
             response = response.strip().lower()
-            
-            if response in ['y', 'yes']:
+
+            if response in ["y", "yes"]:
                 return ToolPermissionResult(allowed=True, reason="User approved once")
-            
-            elif response in ['a', 'allow']:
+
+            elif response in ["a", "allow"]:
                 self.session_approvals.add(tool_name)
                 self._save_session_permissions()
-                return ToolPermissionResult(allowed=True, reason="User approved for session")
-            
-            elif response in ['A', 'auto']:
+                return ToolPermissionResult(
+                    allowed=True, reason="User approved for session"
+                )
+
+            elif response in ["A", "auto"]:
                 self.session_auto_approve = True
                 self._save_session_permissions()
-                return ToolPermissionResult(allowed=True, reason="User enabled auto-approval for session")
-            
-            elif response in ['n', 'no']:
+                return ToolPermissionResult(
+                    allowed=True, reason="User enabled auto-approval for session"
+                )
+
+            elif response in ["n", "no"]:
                 print(f"\r\n🚫 Tool execution denied.")
-                return ToolPermissionResult(allowed=False, reason="User denied once", return_to_prompt=True)
-            
-            elif response in ['d', 'deny']:
+                return ToolPermissionResult(
+                    allowed=False, reason="User denied once", return_to_prompt=True
+                )
+
+            elif response in ["d", "deny"]:
                 self.session_denials.add(tool_name)
                 self._save_session_permissions()
                 print(f"\r\n🚫 Tool '{tool_name}' denied for this session.")
-                return ToolPermissionResult(allowed=False, reason="User denied for session", return_to_prompt=True)
-            
+                return ToolPermissionResult(
+                    allowed=False,
+                    reason="User denied for session",
+                    return_to_prompt=True,
+                )
+
             else:
                 print(f"Invalid response '{response}', defaulting to deny")
-                return ToolPermissionResult(allowed=False, reason="Invalid user response")
-        
+                return ToolPermissionResult(
+                    allowed=False, reason="Invalid user response"
+                )
+
         except Exception as e:
             logger.error(f"Error getting user permission: {e}")
-            return ToolPermissionResult(allowed=False, reason=f"Error getting user input: {e}")
-    
+            return ToolPermissionResult(
+                allowed=False, reason=f"Error getting user input: {e}"
+            )
+
     def reset_session_permissions(self):
         """Reset all session-based permissions."""
         self.session_approvals.clear()
         self.session_denials.clear()
         self.session_auto_approve = False
         self._save_session_permissions()
-    
+
     def add_session_approval(self, tool_name: str):
         """Add a tool to session approvals."""
         self.session_approvals.add(tool_name)
         self.session_denials.discard(tool_name)  # Remove from denials if present
         self._save_session_permissions()
-    
+
     def add_session_denial(self, tool_name: str):
         """Add a tool to session denials."""
         self.session_denials.add(tool_name)
         self.session_approvals.discard(tool_name)  # Remove from approvals if present
         self._save_session_permissions()
-    
+
     def get_session_status(self) -> Dict[str, Any]:
         """Get current session permission status."""
         return {
-            'auto_approve': self.session_auto_approve,
-            'approved_tools': list(self.session_approvals),
-            'denied_tools': list(self.session_denials),
-            'config_allowed': self.config.allowed_tools,
-            'config_disallowed': self.config.disallowed_tools
+            "auto_approve": self.session_auto_approve,
+            "approved_tools": list(self.session_approvals),
+            "denied_tools": list(self.session_denials),
+            "config_allowed": self.config.allowed_tools,
+            "config_disallowed": self.config.disallowed_tools,
         }

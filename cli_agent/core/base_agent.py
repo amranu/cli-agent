@@ -5,57 +5,62 @@ import asyncio
 import json
 import logging
 import os
+import re
+import select
 import subprocess
 import sys
 import termios
-import tty
-import select
 import time
-import re
-from typing import Any, Dict, List, Optional, Union
-from pathlib import Path
+import tty
 from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
-from fastmcp.client import Client as FastMCPClient, StdioTransport
+from fastmcp.client import Client as FastMCPClient
+from fastmcp.client import StdioTransport
 
-from config import HostConfig
 from cli_agent.core.slash_commands import SlashCommandManager
 from cli_agent.tools.builtin_tools import get_all_builtin_tools
+from config import HostConfig
 
 # Configure logging
 logging.basicConfig(
     level=logging.ERROR,  # Suppress WARNING messages during interactive chat
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
 
 class BaseMCPAgent(ABC):
     """Base class for MCP agents with shared functionality."""
-    
+
     def __init__(self, config: HostConfig, is_subagent: bool = False):
         self.config = config
         self.is_subagent = is_subagent
         self.mcp_clients: Dict[str, FastMCPClient] = {}
         self.available_tools: Dict[str, Dict] = {}
         self.conversation_history: List[Dict[str, Any]] = []
-        
+
         # Communication socket for subagent forwarding (set by parent process)
         self.comm_socket = None
-        
+
         # Centralized subagent management system
         if not is_subagent:
             try:
-                import sys
                 import os
+                import sys
+
                 # Add project root directory to path for subagent import
                 # subagent.py is in the root directory, not in cli_agent/core/
-                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                project_root = os.path.dirname(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                )
                 if project_root not in sys.path:
                     sys.path.insert(0, project_root)
                 from subagent import SubagentManager
+
                 self.subagent_manager = SubagentManager(config)
-                
+
                 # Event-driven message handling
                 self.subagent_message_queue = asyncio.Queue()
                 self.subagent_manager.add_message_callback(self._on_subagent_message)
@@ -67,23 +72,29 @@ class BaseMCPAgent(ABC):
         else:
             self.subagent_manager = None
             self.subagent_message_queue = None
-        
+
         # Add built-in tools
         self._add_builtin_tools()
-        
+
         # Initialize slash command manager
         self.slash_commands = SlashCommandManager(self)
-        
-        logger.info(f"Initialized Base MCP Agent with {len(self.available_tools)} built-in tools")
-    
+
+        logger.info(
+            f"Initialized Base MCP Agent with {len(self.available_tools)} built-in tools"
+        )
+
     def _add_builtin_tools(self):
         """Add built-in tools to the available tools."""
         builtin_tools = get_all_builtin_tools()
-        
+
         # Configure tools based on agent type
         if self.is_subagent:
             # Remove subagent management tools for subagents to prevent recursion
-            subagent_tools = ["builtin:task", "builtin:task_status", "builtin:task_results"]
+            subagent_tools = [
+                "builtin:task",
+                "builtin:task_status",
+                "builtin:task_results",
+            ]
             for tool_key in subagent_tools:
                 if tool_key in builtin_tools:
                     del builtin_tools[tool_key]
@@ -93,13 +104,15 @@ class BaseMCPAgent(ABC):
             if "builtin:emit_result" in builtin_tools:
                 del builtin_tools["builtin:emit_result"]
                 logger.info("Removed emit_result from main agent tools")
-        
+
         self.available_tools.update(builtin_tools)
-        
+
         # Debug: Log available tools for subagents
         if self.is_subagent:
-            logger.info(f"Subagent initialized with {len(self.available_tools)} tools: {list(self.available_tools.keys())}")
-    
+            logger.info(
+                f"Subagent initialized with {len(self.available_tools)} tools: {list(self.available_tools.keys())}"
+            )
+
     async def _execute_builtin_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Execute a built-in tool."""
         if tool_name == "bash_execute":
@@ -130,51 +143,48 @@ class BaseMCPAgent(ABC):
             return await self._emit_result(args)
         else:
             return f"Unknown built-in tool: {tool_name}"
-    
+
     async def _emit_result(self, args: Dict[str, Any]) -> str:
         """Emit the final result of a subagent task and terminate (subagents only)."""
         if not self.is_subagent:
             return "Error: emit_result can only be used by subagents"
-        
+
         result = args.get("result", "")
         summary = args.get("summary", "")
-        
+
         try:
             # Import emit functions
             from subagent import emit_result
-            
+
             # Emit the final result
             if summary:
                 full_result = f"{result}\n\nSummary: {summary}"
             else:
                 full_result = result
-            
+
             emit_result(full_result)
-            
+
             # Exit the subagent process to terminate cleanly
             import sys
+
             sys.exit(0)
-            
+
         except Exception as e:
             return f"Error emitting result: {str(e)}"
-    
+
     def _bash_execute(self, args: Dict[str, Any]) -> str:
         """Execute a bash command and return the output."""
         command = args.get("command", "")
         timeout = args.get("timeout", 120)
-        
+
         if not command:
             return "Error: No command provided"
-        
+
         try:
             result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=timeout
+                command, shell=True, capture_output=True, text=True, timeout=timeout
             )
-            
+
             output = ""
             if result.stdout:
                 output += f"STDOUT:\n{result.stdout}"
@@ -182,75 +192,79 @@ class BaseMCPAgent(ABC):
                 output += f"\nSTDERR:\n{result.stderr}"
             if result.returncode != 0:
                 output += f"\nReturn code: {result.returncode}"
-            
+
             return output if output else "Command executed successfully (no output)"
-            
+
         except subprocess.TimeoutExpired:
             return f"Error: Command timed out after {timeout} seconds"
         except Exception as e:
             return f"Error executing command: {str(e)}"
-    
+
     def _read_file(self, args: Dict[str, Any]) -> str:
         """Read contents of a file with line numbers."""
         file_path = args.get("file_path", "")
         offset = args.get("offset", 1)
         limit = args.get("limit", None)
-        
+
         if not file_path:
             return "Error: No file path provided"
-        
+
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
-            
+
             start_idx = max(0, offset - 1)  # Convert to 0-based index
-            end_idx = len(lines) if limit is None else min(len(lines), start_idx + limit)
-            
+            end_idx = (
+                len(lines) if limit is None else min(len(lines), start_idx + limit)
+            )
+
             result = []
             for i in range(start_idx, end_idx):
                 result.append(f"{i + 1:6d}→{lines[i].rstrip()}")
-            
+
             return "\n".join(result)
-            
+
         except FileNotFoundError:
             return f"Error: File not found: {file_path}"
         except Exception as e:
             return f"Error reading file: {str(e)}"
-    
+
     def _write_file(self, args: Dict[str, Any]) -> str:
         """Write content to a file."""
         file_path = args.get("file_path", "")
         content = args.get("content", "")
-        
+
         if not file_path:
             return "Error: No file path provided"
-        
+
         try:
             # Create directory if it doesn't exist
             dir_path = os.path.dirname(file_path)
-            if dir_path:  # Only create directory if it's not empty (i.e., file is not in current dir)
+            if (
+                dir_path
+            ):  # Only create directory if it's not empty (i.e., file is not in current dir)
                 os.makedirs(dir_path, exist_ok=True)
-            
-            with open(file_path, 'w', encoding='utf-8') as f:
+
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            
+
             return f"Successfully wrote {len(content)} characters to {file_path}"
-            
+
         except Exception as e:
             return f"Error writing file: {str(e)}"
-    
+
     def _list_directory(self, args: Dict[str, Any]) -> str:
         """List contents of a directory."""
         directory_path = args.get("directory_path", ".")
-        
+
         try:
             path = Path(directory_path)
             if not path.exists():
                 return f"Error: Directory does not exist: {directory_path}"
-            
+
             if not path.is_dir():
                 return f"Error: Path is not a directory: {directory_path}"
-            
+
             items = []
             for item in sorted(path.iterdir()):
                 if item.is_dir():
@@ -258,79 +272,79 @@ class BaseMCPAgent(ABC):
                 else:
                     size = item.stat().st_size
                     items.append(f"📄 {item.name} ({size} bytes)")
-            
+
             return "\n".join(items) if items else "Directory is empty"
-            
+
         except Exception as e:
             return f"Error listing directory: {str(e)}"
-    
+
     def _get_current_directory(self, args: Dict[str, Any]) -> str:
         """Get the current working directory."""
         try:
             return os.getcwd()
         except Exception as e:
             return f"Error getting current directory: {str(e)}"
-    
+
     def _todo_read(self, args: Dict[str, Any]) -> str:
         """Read the current todo list."""
         todo_file = "todo.json"
-        
+
         try:
             if not os.path.exists(todo_file):
                 return "[]"  # Empty todo list
-            
-            with open(todo_file, 'r', encoding='utf-8') as f:
+
+            with open(todo_file, "r", encoding="utf-8") as f:
                 return f.read()
-                
+
         except Exception as e:
             return f"Error reading todo list: {str(e)}"
-    
+
     def _todo_write(self, args: Dict[str, Any]) -> str:
         """Write/update the todo list."""
         todos = args.get("todos", [])
         todo_file = "todo.json"
-        
+
         try:
-            with open(todo_file, 'w', encoding='utf-8') as f:
+            with open(todo_file, "w", encoding="utf-8") as f:
                 json.dump(todos, f, indent=2)
-            
+
             # Return the actual todo list data to the LLM for proper feedback
             return f"Successfully updated todo list with {len(todos)} items. Current todo list:\n{json.dumps(todos, indent=2)}"
-            
+
         except Exception as e:
             return f"Error writing todo list: {str(e)}"
-    
+
     def _replace_in_file(self, args: Dict[str, Any]) -> str:
         """Replace text in a file."""
         file_path = args.get("file_path", "")
         old_text = args.get("old_text", "")
         new_text = args.get("new_text", "")
-        
+
         if not file_path:
             return "Error: No file path provided"
         if not old_text:
             return "Error: No old text provided"
-        
+
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            
+
             if old_text not in content:
                 return f"Error: Text not found in file: {old_text}"
-            
+
             new_content = content.replace(old_text, new_text)
-            
-            with open(file_path, 'w', encoding='utf-8') as f:
+
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
-            
+
             count = content.count(old_text)
             return f"Successfully replaced {count} occurrence(s) of text in {file_path}"
-            
+
         except FileNotFoundError:
             return f"Error: File not found: {file_path}"
         except Exception as e:
             return f"Error replacing text in file: {str(e)}"
-    
+
     def _webfetch(self, args: Dict[str, Any]) -> str:
         """Fetch a webpage using curl and return its content."""
         url = args.get("url", "")
@@ -343,25 +357,27 @@ class BaseMCPAgent(ABC):
         result = subprocess.run(
             ["curl", "-L", "--max-time", "30", url],
             capture_output=True,
-            timeout=35  # Slightly longer than curl timeout
+            timeout=35,  # Slightly longer than curl timeout
         )
 
         # Try to decode with utf-8, then fall back to latin-1 (which rarely fails)
         try:
-            content = result.stdout.decode('utf-8')
+            content = result.stdout.decode("utf-8")
         except UnicodeDecodeError:
             logger.warning(f"UTF-8 decoding failed for {url}. Falling back to latin-1.")
-            content = result.stdout.decode('latin-1', errors='replace')
+            content = result.stdout.decode("latin-1", errors="replace")
 
         if result.returncode != 0:
             # Try to decode stderr for a better error message
             try:
-                stderr = result.stderr.decode('utf-8', errors='replace')
+                stderr = result.stderr.decode("utf-8", errors="replace")
             except:
                 stderr = repr(result.stderr)
-            
-            error_msg = f"Error fetching URL (curl return code {result.returncode}): {stderr}"
-            
+
+            error_msg = (
+                f"Error fetching URL (curl return code {result.returncode}): {stderr}"
+            )
+
             # If we have content despite the error, include it
             if content.strip():
                 return f"{error_msg}\n\nContent retrieved:\n{content}"
@@ -370,190 +386,201 @@ class BaseMCPAgent(ABC):
 
         # Truncate the content by lines if limit is specified
         if limit is not None and isinstance(limit, int) and limit > 0:
-            lines = content.split('\n')
+            lines = content.split("\n")
             if len(lines) > limit:
-                content = '\n'.join(lines[:limit])
+                content = "\n".join(lines[:limit])
                 content += f"\n\n[Content truncated at {limit} lines. Original had {len(lines)} lines.]"
 
         # Return the content (truncated if limit was provided)
         return content
-    
+
     async def _task(self, args: Dict[str, Any]) -> str:
         """Spawn a new subagent task using the centralized SubagentManager."""
         if not self.subagent_manager:
             return "Error: Subagent management not available"
-        
+
         description = args.get("description", "Investigation task")
         prompt = args.get("prompt", "")
         context = args.get("context", "")
-        
+
         if not prompt:
             return "Error: prompt is required"
-        
+
         # Add context to prompt if provided
         full_prompt = prompt
         if context:
             full_prompt += f"\n\nAdditional context: {context}"
-        
+
         try:
             # Track active count before and after spawning
             initial_count = self.subagent_manager.get_active_count()
-            task_id = await self.subagent_manager.spawn_subagent(description, full_prompt)
+            task_id = await self.subagent_manager.spawn_subagent(
+                description, full_prompt
+            )
             final_count = self.subagent_manager.get_active_count()
-            
+
             # Display spawn confirmation with active count
-            active_info = f" (Now {final_count} active subagents)" if final_count > 1 else ""
+            active_info = (
+                f" (Now {final_count} active subagents)" if final_count > 1 else ""
+            )
             return f"Spawned subagent task: {task_id}\nDescription: {description}{active_info}\nTask is running in the background - output will appear in the chat as it becomes available."
         except Exception as e:
             return f"Error spawning subagent: {e}"
-            
-    
-    
-    
-    
-    
-    
+
     def _task_status(self, args: Dict[str, Any]) -> str:
         """Check the status of running subagent tasks using SubagentManager."""
         if not self.subagent_manager:
             return "Subagent management not available"
-        
+
         task_id = args.get("task_id", None)
-        
+
         if task_id:
             # Check specific task
             if task_id not in self.subagent_manager.subagents:
                 return f"Task {task_id} not found."
-            
+
             subagent = self.subagent_manager.subagents[task_id]
             status = "Completed" if subagent.completed else "Running"
             runtime = time.time() - subagent.start_time
-            
+
             result = f"""Task Status: {task_id}
 Description: {subagent.description}
 Status: {status}
 Runtime: {runtime:.2f} seconds"""
-            
+
             if subagent.completed:
                 result += f"\nResult available: {subagent.result is not None}"
-            
+
             return result
         else:
             # Check all tasks
             subagents = self.subagent_manager.subagents
             if not subagents:
                 return "No tasks are currently running."
-            
+
             result = f"Task Status Summary ({len(subagents)} tasks):\n"
             for tid, subagent in subagents.items():
                 status = "Completed" if subagent.completed else "Running"
                 runtime = time.time() - subagent.start_time
                 result += f"\n{tid}: {subagent.description} - {status} ({runtime:.1f}s)"
-            
+
             return result
-    
+
     def _task_results(self, args: Dict[str, Any]) -> str:
         """Retrieve the results and summaries from completed subagent tasks using SubagentManager."""
         try:
             if not self.subagent_manager:
                 return "Subagent management not available"
-            
+
             include_running = args.get("include_running", False)
             clear_after_retrieval = args.get("clear_after_retrieval", True)
-            
+
             subagents = self.subagent_manager.subagents
             if not subagents:
                 return "No tasks found."
-            
+
             # Count tasks
             task_count = len(subagents)
-            completed_count = sum(1 for subagent in subagents.values() if subagent.completed)
+            completed_count = sum(
+                1 for subagent in subagents.values() if subagent.completed
+            )
             running_count = task_count - completed_count
-            
+
             result_parts = [
                 f"=== TASK RESULTS SUMMARY ===",
                 f"Total tasks: {task_count}",
                 f"Completed: {completed_count}",
                 f"Running: {running_count}",
-                ""
+                "",
             ]
-            
+
             # Show completed tasks
             if completed_count > 0:
                 result_parts.append("=== COMPLETED TASKS ===")
                 for task_id, subagent in subagents.items():
                     if not subagent.completed:
                         continue
-                    
+
                     runtime = time.time() - subagent.start_time
-                    result_parts.append(f"\n{task_id}: {subagent.description} - ✅ Completed ({runtime:.2f}s)")
-                    
+                    result_parts.append(
+                        f"\n{task_id}: {subagent.description} - ✅ Completed ({runtime:.2f}s)"
+                    )
+
                     if subagent.result:
                         result_parts.append(f"Result: {subagent.result}")
-            
+
             # Show running tasks if requested
             if include_running and running_count > 0:
                 result_parts.append("\n=== RUNNING TASKS ===")
                 for task_id, subagent in subagents.items():
                     if subagent.completed:
                         continue
-                    
+
                     runtime = time.time() - subagent.start_time
-                    result_parts.append(f"\n{task_id}: {subagent.description} - ⏳ Running ({runtime:.2f}s)")
-            
+                    result_parts.append(
+                        f"\n{task_id}: {subagent.description} - ⏳ Running ({runtime:.2f}s)"
+                    )
+
             # Clear completed tasks if requested
             if clear_after_retrieval and completed_count > 0:
-                completed_task_ids = [tid for tid, subagent in subagents.items() if subagent.completed]
+                completed_task_ids = [
+                    tid for tid, subagent in subagents.items() if subagent.completed
+                ]
                 for task_id in completed_task_ids:
                     del self.subagent_manager.subagents[task_id]
-                result_parts.append(f"\n--- {len(completed_task_ids)} completed tasks cleared from memory ---")
-            
+                result_parts.append(
+                    f"\n--- {len(completed_task_ids)} completed tasks cleared from memory ---"
+                )
+
             return "\n".join(result_parts)
-        
+
         except Exception as e:
             logger.error(f"Error in _task_results: {e}")
             import traceback
+
             logger.error(f"Traceback: {traceback.format_exc()}")
             return f"Error retrieving task results: {str(e)}"
-    
-    
-    
+
     async def start_mcp_server(self, server_name: str, server_config) -> bool:
         """Start and connect to an MCP server using FastMCP."""
         try:
             logger.info(f"Starting MCP server: {server_name}")
-            
+
             # Construct command and args for FastMCP client
             command = server_config.command[0]
             args = server_config.command[1:] + server_config.args
-            
+
             # Create FastMCP client with stdio transport
-            transport = StdioTransport(command=command, args=args, env=server_config.env)
+            transport = StdioTransport(
+                command=command, args=args, env=server_config.env
+            )
             client = FastMCPClient(transport=transport)
-            
+
             # Enter the context manager and store it for cleanup
             context_manager = client.__aenter__()
             await context_manager
-            
+
             # Store the client and context manager
             self.mcp_clients[server_name] = client
-            self._mcp_contexts = getattr(self, '_mcp_contexts', {})
+            self._mcp_contexts = getattr(self, "_mcp_contexts", {})
             self._mcp_contexts[server_name] = client
-            
+
             # Get available tools from this server
             tools_result = await client.list_tools()
-            if tools_result and hasattr(tools_result, 'tools'):
+            if tools_result and hasattr(tools_result, "tools"):
                 for tool in tools_result.tools:
                     tool_key = f"{server_name}:{tool.name}"
                     self.available_tools[tool_key] = {
                         "server": server_name,
                         "name": tool.name,
                         "description": tool.description,
-                        "schema": tool.inputSchema if hasattr(tool, 'inputSchema') else {},
-                        "client": client
+                        "schema": (
+                            tool.inputSchema if hasattr(tool, "inputSchema") else {}
+                        ),
+                        "client": client,
                     }
                     logger.info(f"Registered tool: {tool_key}")
-            elif hasattr(tools_result, '__len__'):
+            elif hasattr(tools_result, "__len__"):
                 # Handle list format
                 for tool in tools_result:
                     tool_key = f"{server_name}:{tool.name}"
@@ -561,24 +588,27 @@ Runtime: {runtime:.2f} seconds"""
                         "server": server_name,
                         "name": tool.name,
                         "description": tool.description,
-                        "schema": tool.inputSchema if hasattr(tool, 'inputSchema') else {},
-                        "client": client
+                        "schema": (
+                            tool.inputSchema if hasattr(tool, "inputSchema") else {}
+                        ),
+                        "client": client,
                     }
                     logger.info(f"Registered tool: {tool_key}")
-            
+
             logger.info(f"Successfully connected to MCP server: {server_name}")
             return True
-            
+
         except Exception as e:
             import traceback
+
             logger.error(f"Failed to start MCP server {server_name}: {e}")
             logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
-    
+
     async def shutdown(self):
         """Shutdown all MCP connections."""
         logger.info("Shutting down MCP connections...")
-        
+
         # Close FastMCP client sessions
         for server_name, client in self.mcp_clients.items():
             try:
@@ -587,57 +617,61 @@ Runtime: {runtime:.2f} seconds"""
                 logger.info(f"Closed client session for {server_name}")
             except Exception as e:
                 logger.error(f"Error closing client session for {server_name}: {e}")
-        
+
         self.mcp_clients.clear()
         self.available_tools.clear()
-        if hasattr(self, '_mcp_contexts'):
+        if hasattr(self, "_mcp_contexts"):
             self._mcp_contexts.clear()
-        
+
         # Shutdown subagent manager if present
-        if hasattr(self, 'subagent_manager') and self.subagent_manager:
+        if hasattr(self, "subagent_manager") and self.subagent_manager:
             await self.subagent_manager.terminate_all()
-    
+
     # Centralized Subagent Management Methods
     def _handle_subagent_permission_request(self, message, task_id):
         """Handle permission request from subagent."""
         try:
             import asyncio
             import threading
-            
+
             # Get request details from message data
-            request_id = message.data.get('request_id')
-            response_file = message.data.get('response_file')
+            request_id = message.data.get("request_id")
+            response_file = message.data.get("response_file")
             prompt_text = message.content
-            
+
             if not request_id or not response_file:
-                logger.error("Invalid permission request from subagent: missing request_id or response_file")
+                logger.error(
+                    "Invalid permission request from subagent: missing request_id or response_file"
+                )
                 return
-            
+
             # Display the permission request to user
-            print(f"\n🤖 [SUBAGENT-{task_id}] {prompt_text}", end='', flush=True)
-            
+            print(f"\n🤖 [SUBAGENT-{task_id}] {prompt_text}", end="", flush=True)
+
             # Get user input
-            input_handler = getattr(self, '_input_handler', None)
+            input_handler = getattr(self, "_input_handler", None)
             if input_handler:
                 try:
                     # Get user response
                     response = input_handler.get_input("")
                     if response is None:
-                        response = 'n'  # Default to deny if interrupted
+                        response = "n"  # Default to deny if interrupted
                 except Exception as e:
-                    logger.error(f"Error getting user input for subagent permission: {e}")
-                    response = 'n'  # Default to deny on error
+                    logger.error(
+                        f"Error getting user input for subagent permission: {e}"
+                    )
+                    response = "n"  # Default to deny on error
             else:
                 # No input handler, default to deny
-                response = 'n'
-            
+                response = "n"
+
             # Write response to temp file for subagent to read
             try:
-                with open(response_file, 'w') as f:
+                with open(response_file, "w") as f:
                     f.write(response)
             except Exception as e:
                 logger.error(f"Error writing permission response: {e}")
-                
+
         except Exception as e:
             logger.error(f"Error handling subagent permission request: {e}")
 
@@ -645,23 +679,27 @@ Runtime: {runtime:.2f} seconds"""
         """Callback for when a subagent message is received - display during yield period."""
         try:
             # Get task_id for identification (if available in message data)
-            task_id = message.data.get('task_id', 'unknown') if hasattr(message, 'data') and message.data else 'unknown'
-            
-            if message.type == 'output':
+            task_id = (
+                message.data.get("task_id", "unknown")
+                if hasattr(message, "data") and message.data
+                else "unknown"
+            )
+
+            if message.type == "output":
                 formatted = f"🤖 [SUBAGENT-{task_id}] {message.content}"
-            elif message.type == 'status':
+            elif message.type == "status":
                 formatted = f"📋 [SUBAGENT-{task_id}] {message.content}"
-            elif message.type == 'error':
+            elif message.type == "error":
                 formatted = f"❌ [SUBAGENT-{task_id}] {message.content}"
-            elif message.type == 'result':
+            elif message.type == "result":
                 formatted = f"✅ [SUBAGENT-{task_id}] Result: {message.content}"
-            elif message.type == 'permission_request':
+            elif message.type == "permission_request":
                 # Handle permission request from subagent
                 self._handle_subagent_permission_request(message, task_id)
                 return  # Don't display permission requests, handle them directly
             else:
                 formatted = f"[SUBAGENT-{task_id} {message.type}] {message.content}"
-            
+
             # Only display immediately if we're in yielding mode (subagents active)
             # This ensures clean separation between main agent and subagent output
             if self.subagent_manager and self.subagent_manager.get_active_count() > 0:
@@ -669,86 +707,101 @@ Runtime: {runtime:.2f} seconds"""
                 self._display_subagent_message_immediately(formatted, message.type)
             else:
                 # No active subagents - just log for now (main agent controls display)
-                logger.info(f"Subagent message logged: {message.type} - {message.content[:50]}")
-                
+                logger.info(
+                    f"Subagent message logged: {message.type} - {message.content[:50]}"
+                )
+
         except Exception as e:
             logger.error(f"Error handling subagent message: {e}")
-    
+
     def _display_subagent_message_immediately(self, formatted: str, message_type: str):
         """Display subagent message immediately with proper line endings."""
         try:
             import sys
             import termios
-            
+
             try:
                 # Check if we're in raw terminal mode
                 stdin_fd = sys.stdin.fileno()
                 current_attrs = termios.tcgetattr(stdin_fd)
-                in_raw_mode = not (current_attrs[3] & termios.ECHO) and not (current_attrs[3] & termios.ICANON)
-                
+                in_raw_mode = not (current_attrs[3] & termios.ECHO) and not (
+                    current_attrs[3] & termios.ICANON
+                )
+
                 if in_raw_mode:
                     # In raw mode, we need \r\n for proper line breaks
                     # Move to beginning of line and add proper line endings
-                    formatted_with_crlf = formatted.replace('\n', '\r\n')
+                    formatted_with_crlf = formatted.replace("\n", "\r\n")
                     output = f"\r\n{formatted_with_crlf}\r\n"
                     sys.stderr.write(output)
                     sys.stderr.flush()
                 else:
                     # Normal mode - regular print is fine
                     print(formatted, file=sys.stderr, flush=True)
-                    
+
             except (OSError, termios.error):
                 # Terminal control not available - use regular print
                 print(formatted, file=sys.stderr, flush=True)
-                
+
             logger.debug(f"Displayed subagent message: {message_type}")
         except Exception as e:
             logger.error(f"Error displaying subagent message: {e}")
-    
+
     async def _collect_subagent_results(self):
         """Wait for all subagents to complete and collect their results."""
         if not self.subagent_manager:
             return []
-        
+
         import time
+
         results = []
         max_wait_time = 300  # 5 minutes max wait
         start_time = time.time()
-        
+
         # Wait for all active subagents to complete
         while self.subagent_manager.get_active_count() > 0:
             if time.time() - start_time > max_wait_time:
                 logger.error("Timeout waiting for subagents to complete")
                 break
             await asyncio.sleep(0.5)
-        
+
         # Collect results from completed subagents
-        logger.info(f"Checking {len(self.subagent_manager.subagents)} subagents for results")
+        logger.info(
+            f"Checking {len(self.subagent_manager.subagents)} subagents for results"
+        )
         for task_id, subagent in self.subagent_manager.subagents.items():
-            logger.info(f"Subagent {task_id}: completed={subagent.completed}, has_result={subagent.result is not None}")
+            logger.info(
+                f"Subagent {task_id}: completed={subagent.completed}, has_result={subagent.result is not None}"
+            )
             if subagent.completed and subagent.result:
-                results.append({
-                    'task_id': task_id,
-                    'description': subagent.description,
-                    'content': subagent.result,
-                    'runtime': time.time() - subagent.start_time
-                })
-                logger.info(f"Collected result from {task_id}: {len(subagent.result)} chars")
+                results.append(
+                    {
+                        "task_id": task_id,
+                        "description": subagent.description,
+                        "content": subagent.result,
+                        "runtime": time.time() - subagent.start_time,
+                    }
+                )
+                logger.info(
+                    f"Collected result from {task_id}: {len(subagent.result)} chars"
+                )
             elif subagent.completed:
                 logger.warning(f"Subagent {task_id} completed but has no result stored")
             else:
                 logger.info(f"Subagent {task_id} not yet completed")
-        
-        logger.info(f"Collected {len(results)} results from {len(self.subagent_manager.subagents)} subagents")
-        
+
+        logger.info(
+            f"Collected {len(results)} results from {len(self.subagent_manager.subagents)} subagents"
+        )
+
         # Clean up completed subagents that provided results
         if results:
-            completed_task_ids = [result['task_id'] for result in results]
+            completed_task_ids = [result["task_id"] for result in results]
             for task_id in completed_task_ids:
                 if task_id in self.subagent_manager.subagents:
                     del self.subagent_manager.subagents[task_id]
                     logger.info(f"Cleaned up completed subagent: {task_id}")
-            
+
             # Also clear any accumulated messages in the queue since they've been integrated
             if self.subagent_message_queue:
                 # Clear any remaining messages in the queue
@@ -758,35 +811,44 @@ Runtime: {runtime:.2f} seconds"""
                 except asyncio.QueueEmpty:
                     pass
                 logger.info("Cleared subagent message queue after collecting results")
-        
+
         return results
 
-    async def execute_function_calls(self, function_calls: List, interactive: bool = True, input_handler=None, streaming_mode: bool = False) -> tuple:
+    async def execute_function_calls(
+        self,
+        function_calls: List,
+        interactive: bool = True,
+        input_handler=None,
+        streaming_mode: bool = False,
+    ) -> tuple:
         """Centralized function call execution for all host implementations."""
         function_results = []
         all_tool_output = []
-        
+
         # Prepare tool info for parallel execution
         tool_info_list = []
         tool_coroutines = []
-        
+
         # Check for interruption before starting any tool execution
         if input_handler and input_handler.interrupted:
             all_tool_output.append("🛑 Tool execution interrupted by user")
             return function_results, all_tool_output
-        
+
         for i, function_call in enumerate(function_calls, 1):
-            tool_name = function_call.name.replace("_", ":", 1)  # Convert back to MCP format
-            
+            tool_name = function_call.name.replace(
+                "_", ":", 1
+            )  # Convert back to MCP format
+
             # Parse arguments from function call
             arguments = {}
-            if hasattr(function_call, 'args') and function_call.args:
+            if hasattr(function_call, "args") and function_call.args:
                 try:
                     import json
+
                     # First try to access as dict directly
-                    if hasattr(function_call.args, 'items'):
+                    if hasattr(function_call.args, "items"):
                         arguments = dict(function_call.args)
-                    elif hasattr(function_call.args, '__iter__'):
+                    elif hasattr(function_call.args, "__iter__"):
                         arguments = dict(function_call.args)
                     else:
                         # If args is a string, try to parse as JSON
@@ -802,76 +864,94 @@ Runtime: {runtime:.2f} seconds"""
                     logger.warning(f"Error parsing function call args: {e}")
                     logger.warning(f"Raw args: {function_call.args}")
                     arguments = {}
-            
+
             # Store tool info for processing
             tool_info_list.append((i, tool_name, arguments))
-            
+
             # Display tool execution step
-            tool_execution_msg = self.display_tool_execution_step(i, tool_name, arguments, self.is_subagent, interactive=interactive)
+            tool_execution_msg = self.display_tool_execution_step(
+                i, tool_name, arguments, self.is_subagent, interactive=interactive
+            )
             if interactive and not streaming_mode:
                 print(f"\r\x1b[K{tool_execution_msg}", flush=True)
             elif interactive and streaming_mode:
                 print(f"\r\x1b[K{tool_execution_msg}", flush=True)
             else:
                 all_tool_output.append(tool_execution_msg)
-            
+
             # Create coroutine for parallel execution
             tool_coroutines.append(self._execute_mcp_tool(tool_name, arguments))
-        
+
         # Execute all tools in parallel
         if tool_coroutines:
             try:
                 # Execute all tool calls concurrently
-                tool_results = await asyncio.gather(*tool_coroutines, return_exceptions=True)
-                
+                tool_results = await asyncio.gather(
+                    *tool_coroutines, return_exceptions=True
+                )
+
                 # Process results in order
-                for (i, tool_name, arguments), tool_result in zip(tool_info_list, tool_results):
+                for (i, tool_name, arguments), tool_result in zip(
+                    tool_info_list, tool_results
+                ):
                     tool_success = True
-                    
+
                     # Handle exceptions
                     if isinstance(tool_result, Exception):
                         # Re-raise tool permission denials so they can be handled at the chat level
-                        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+                        from cli_agent.core.tool_permissions import (
+                            ToolDeniedReturnToPrompt,
+                        )
+
                         if isinstance(tool_result, ToolDeniedReturnToPrompt):
                             raise tool_result  # Re-raise the exception to bubble up to interactive chat
-                        
+
                         tool_success = False
                         tool_result = f"Exception during execution: {str(tool_result)}"
                     elif isinstance(tool_result, str):
                         # Check if tool result indicates an error
-                        if tool_result.startswith("Error:") or "error" in tool_result.lower()[:100]:
+                        if (
+                            tool_result.startswith("Error:")
+                            or "error" in tool_result.lower()[:100]
+                        ):
                             tool_success = False
                     else:
                         # Convert non-string results to string
                         tool_result = str(tool_result)
-                    
+
                     # Format result with success/failure status
                     status = "SUCCESS" if tool_success else "FAILED"
                     result_content = f"Tool {tool_name} {status}: {tool_result}"
                     if not tool_success:
                         result_content += "\n⚠️  Command failed - take this into account for your next action."
                     function_results.append(result_content)
-                    
+
                     # Use unified tool result display
-                    tool_result_msg = self.display_tool_execution_result(tool_result, not tool_success, self.is_subagent, interactive=interactive)
+                    tool_result_msg = self.display_tool_execution_result(
+                        tool_result,
+                        not tool_success,
+                        self.is_subagent,
+                        interactive=interactive,
+                    )
                     if interactive and not streaming_mode:
                         print(f"\r\x1b[K{tool_result_msg}", flush=True)
                     elif interactive and streaming_mode:
                         print(f"\r\x1b[K{tool_result_msg}", flush=True)
                     else:
                         all_tool_output.append(tool_result_msg)
-            
+
             except Exception as e:
                 # Handle any errors during parallel execution
                 from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+
                 if isinstance(e, ToolDeniedReturnToPrompt):
                     raise  # Re-raise permission denials
-                
+
                 error_msg = f"Error during tool execution: {str(e)}"
                 logger.error(error_msg)
                 all_tool_output.append(error_msg)
                 function_results.append(f"Tool execution FAILED: {error_msg}")
-        
+
         return function_results, all_tool_output
 
     async def _execute_mcp_tool(self, tool_key: str, arguments: Dict[str, Any]) -> str:
@@ -879,21 +959,26 @@ Runtime: {runtime:.2f} seconds"""
         try:
             if tool_key not in self.available_tools:
                 # Debug: show available tools when tool not found
-                available_list = list(self.available_tools.keys())[:10]  # First 10 tools
+                available_list = list(self.available_tools.keys())[
+                    :10
+                ]  # First 10 tools
                 return f"Error: Tool {tool_key} not found. Available tools: {available_list}"
-            
+
             tool_info = self.available_tools[tool_key]
             tool_name = tool_info["name"]
-            
+
             # Check tool permissions (both main agent and subagents)
-            if hasattr(self, 'permission_manager'):
-                from cli_agent.core.tool_permissions import ToolPermissionResult, ToolDeniedReturnToPrompt
-                
-                input_handler = getattr(self, '_input_handler', None)
+            if hasattr(self, "permission_manager"):
+                from cli_agent.core.tool_permissions import (
+                    ToolDeniedReturnToPrompt,
+                    ToolPermissionResult,
+                )
+
+                input_handler = getattr(self, "_input_handler", None)
                 permission_result = await self.permission_manager.check_tool_permission(
                     tool_name, arguments, input_handler
                 )
-                
+
                 if not permission_result.allowed:
                     if permission_result.return_to_prompt and not self.is_subagent:
                         # Only return to prompt for main agent, not subagents
@@ -901,38 +986,43 @@ Runtime: {runtime:.2f} seconds"""
                     else:
                         # For subagents or config-based denials, return error message
                         return f"Tool execution denied: {permission_result.reason}"
-            
+
             # Forward to parent if this is a subagent (except for subagent management tools)
             import sys
+
             if self.is_subagent and self.comm_socket:
-                excluded_tools = ['task', 'task_status', 'task_results']
+                excluded_tools = ["task", "task_status", "task_results"]
                 if tool_name not in excluded_tools:
                     # Tool forwarding happens silently
-                    return await self._forward_tool_to_parent(tool_key, tool_name, arguments)
+                    return await self._forward_tool_to_parent(
+                        tool_key, tool_name, arguments
+                    )
             elif self.is_subagent:
-                sys.stderr.write(f"🤖 [SUBAGENT] WARNING: is_subagent=True but no comm_socket for tool {tool_name}\n")
+                sys.stderr.write(
+                    f"🤖 [SUBAGENT] WARNING: is_subagent=True but no comm_socket for tool {tool_name}\n"
+                )
                 sys.stderr.flush()
-            
+
             # Check if it's a built-in tool
             if tool_info["server"] == "builtin":
                 logger.info(f"Executing built-in tool: {tool_name}")
                 return await self._execute_builtin_tool(tool_name, arguments)
-            
+
             # Handle external MCP tools with FastMCP
             client = tool_info["client"]
             if client is None:
                 return f"Error: No client session for tool {tool_key}"
-            
+
             logger.info(f"Executing MCP tool: {tool_name}")
             result = await client.call_tool(tool_name, arguments)
-            
+
             # Format the result for FastMCP
-            if hasattr(result, 'content') and result.content:
+            if hasattr(result, "content") and result.content:
                 content_parts = []
                 for content in result.content:
-                    if hasattr(content, 'text'):
+                    if hasattr(content, "text"):
                         content_parts.append(content.text)
-                    elif hasattr(content, 'data'):
+                    elif hasattr(content, "data"):
                         content_parts.append(str(content.data))
                     else:
                         content_parts.append(str(content))
@@ -943,25 +1033,28 @@ Runtime: {runtime:.2f} seconds"""
                 return json.dumps(result, indent=2)
             else:
                 return f"Tool executed successfully. Result type: {type(result)}, Content: {result}"
-                
+
         except Exception as e:
             # Re-raise tool permission denials so they can be handled at the chat level
             from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+
             if isinstance(e, ToolDeniedReturnToPrompt):
                 raise  # Re-raise the exception to bubble up to interactive chat
-            
+
             logger.error(f"Error executing tool {tool_key}: {e}")
             return f"Error executing tool {tool_key}: {str(e)}"
 
-    async def _forward_tool_to_parent(self, tool_key: str, tool_name: str, arguments: Dict[str, Any]) -> str:
+    async def _forward_tool_to_parent(
+        self, tool_key: str, tool_name: str, arguments: Dict[str, Any]
+    ) -> str:
         """Forward tool execution to parent agent via communication socket."""
         try:
             import json
             import uuid
-            
+
             # Create unique request ID for tracking
             request_id = str(uuid.uuid4())
-            
+
             # Prepare tool execution message
             message = {
                 "type": "tool_execution_request",
@@ -969,67 +1062,77 @@ Runtime: {runtime:.2f} seconds"""
                 "tool_key": tool_key,
                 "tool_name": tool_name,
                 "tool_args": arguments,
-                "timestamp": time.time()
+                "timestamp": time.time(),
             }
-            
+
             # Send request to parent (synchronous)
             message_json = json.dumps(message) + "\n"
-            self.comm_socket.send(message_json.encode('utf-8'))
-            
+            self.comm_socket.send(message_json.encode("utf-8"))
+
             # Wait for response with timeout
             response_timeout = 300.0  # 5 minutes timeout for tool execution
             self.comm_socket.settimeout(response_timeout)
-            
+
             # Read response (synchronous)
             buffer = ""
             while True:
                 try:
-                    data = self.comm_socket.recv(4096).decode('utf-8')
+                    data = self.comm_socket.recv(4096).decode("utf-8")
                     if not data:
                         break
-                    
+
                     buffer += data
-                    
+
                     # Process complete messages (newline-delimited JSON)
-                    while '\n' in buffer:
-                        line, buffer = buffer.split('\n', 1)
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
                         if line.strip():
                             try:
                                 response = json.loads(line.strip())
-                                if (response.get("type") == "tool_execution_response" and 
-                                    response.get("request_id") == request_id):
-                                    
+                                if (
+                                    response.get("type") == "tool_execution_response"
+                                    and response.get("request_id") == request_id
+                                ):
+
                                     # Return tool result
                                     if response.get("success", False):
-                                        return response.get("result", "Tool executed successfully")
+                                        return response.get(
+                                            "result", "Tool executed successfully"
+                                        )
                                     else:
                                         error = response.get("error", "Unknown error")
                                         return f"Error from parent: {error}"
-                                        
+
                             except json.JSONDecodeError:
                                 continue
-                                
+
                 except Exception as e:
                     logger.error(f"Error receiving response from parent: {e}")
                     break
-            
+
             return f"Error: No response received from parent for tool {tool_name}"
-            
+
         except Exception as e:
             logger.error(f"Error forwarding tool {tool_name} to parent: {e}")
             return f"Error forwarding tool to parent: {str(e)}"
 
-    async def _execute_mcp_tool_with_keepalive(self, tool_key: str, arguments: Dict[str, Any], input_handler=None, keepalive_interval: float = 5.0) -> tuple:
+    async def _execute_mcp_tool_with_keepalive(
+        self,
+        tool_key: str,
+        arguments: Dict[str, Any],
+        input_handler=None,
+        keepalive_interval: float = 5.0,
+    ) -> tuple:
         """Execute an MCP tool with keep-alive messages, returning (result, keepalive_messages)."""
         import asyncio
-        
+
         # Create the tool execution task
         tool_task = asyncio.create_task(self._execute_mcp_tool(tool_key, arguments))
-        
+
         # Keep-alive configuration
         keepalive_messages = []
         start_time = asyncio.get_event_loop().time()
-        
+
         # Monitor the task and collect keep-alive messages
         while not tool_task.done():
             try:
@@ -1042,39 +1145,45 @@ Runtime: {runtime:.2f} seconds"""
                     except asyncio.CancelledError:
                         pass
                     return "Tool execution cancelled", keepalive_messages
-                
+
                 # Wait for either task completion or timeout
-                await asyncio.wait_for(asyncio.shield(tool_task), timeout=keepalive_interval)
+                await asyncio.wait_for(
+                    asyncio.shield(tool_task), timeout=keepalive_interval
+                )
                 break  # Task completed
             except asyncio.TimeoutError:
                 # Task is still running, send keep-alive message
                 current_time = asyncio.get_event_loop().time()
                 elapsed = current_time - start_time
-                
+
                 # Create a keep-alive message
-                keepalive_msg = f"⏳ Tool {tool_key} still running... ({elapsed:.1f}s elapsed)"
+                keepalive_msg = (
+                    f"⏳ Tool {tool_key} still running... ({elapsed:.1f}s elapsed)"
+                )
                 if input_handler:
                     keepalive_msg += ", press ESC to cancel"
                 keepalive_messages.append(keepalive_msg)
                 logger.debug(f"Keep-alive: {keepalive_msg}")
                 continue
-        
+
         # Get the final result
         result = await tool_task
         return result, keepalive_messages
-    
+
     def _create_system_prompt(self, for_first_message: bool = False) -> str:
         """Create a basic system prompt that includes tool information."""
         tool_descriptions = []
-        
+
         for tool_key, tool_info in self.available_tools.items():
             # Use the converted name format (with underscores)
             converted_tool_name = tool_key.replace(":", "_")
             description = tool_info["description"]
             tool_descriptions.append(f"- **{converted_tool_name}**: {description}")
-        
-        tools_text = "\n".join(tool_descriptions) if tool_descriptions else "No tools available"
-        
+
+        tools_text = (
+            "\n".join(tool_descriptions) if tool_descriptions else "No tools available"
+        )
+
         # Customize prompt based on whether this is a subagent
         if self.is_subagent:
             agent_role = "You are a focused subagent responsible for executing a specific task efficiently."
@@ -1097,7 +1206,7 @@ Runtime: {runtime:.2f} seconds"""
 **When to Use Subagents:**
 ✅ **DO delegate:** File searches, large code analysis, running commands, gathering information
 ❌ **DON'T delegate:** Simple edits, single file reads <50 lines, quick tool calls"""
-        
+
         # Basic system prompt - subclasses can override this
         system_prompt = f"""{agent_role}
 
@@ -1139,18 +1248,19 @@ Runtime: {runtime:.2f} seconds"""
 You are the expert. Complete the task."""
 
         return system_prompt
-    
+
     def _read_agent_md(self) -> str:
         """Read the AGENT.md file for prepending to first messages."""
         try:
             import os
+
             # Get the project root directory (where AGENT.md should be)
             current_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(os.path.dirname(current_dir))
-            agent_md_path = os.path.join(project_root, 'AGENT.md')
-            
+            agent_md_path = os.path.join(project_root, "AGENT.md")
+
             if os.path.exists(agent_md_path):
-                with open(agent_md_path, 'r', encoding='utf-8') as f:
+                with open(agent_md_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 return content
             else:
@@ -1159,210 +1269,234 @@ You are the expert. Complete the task."""
         except Exception as e:
             logger.error(f"Error reading AGENT.md: {e}")
             return ""
-    
-    def _prepend_agent_md_to_first_message(self, messages: List[Dict[str, str]], is_first_message: bool = False) -> List[Dict[str, str]]:
+
+    def _prepend_agent_md_to_first_message(
+        self, messages: List[Dict[str, str]], is_first_message: bool = False
+    ) -> List[Dict[str, str]]:
         """Prepend AGENT.md content to the first user message if this is the first message of the session."""
         if not is_first_message or not messages:
             return messages
-        
+
         # Only prepend to the first user message
         first_user_msg_index = None
         for i, msg in enumerate(messages):
             if msg.get("role") == "user":
                 first_user_msg_index = i
                 break
-        
+
         if first_user_msg_index is not None:
             agent_md_content = self._read_agent_md()
             if agent_md_content:
                 # Create a copy of messages to avoid modifying the original
                 messages_copy = messages.copy()
                 original_content = messages_copy[first_user_msg_index]["content"]
-                
+
                 # Prepend AGENT.md with a clear separator
                 enhanced_content = f"""<AGENT_ARCHITECTURE_CONTEXT>
 {agent_md_content}
 </AGENT_ARCHITECTURE_CONTEXT>
 
 {original_content}"""
-                
+
                 messages_copy[first_user_msg_index] = {
                     **messages_copy[first_user_msg_index],
-                    "content": enhanced_content
+                    "content": enhanced_content,
                 }
-                
+
                 logger.info("Prepended AGENT.md to first user message")
                 return messages_copy
-        
+
         return messages
 
     def format_markdown(self, text: str) -> str:
         """Format markdown text for terminal display using Rich."""
         if not text:
             return text
-            
+
         try:
+            from io import StringIO
+
             from rich.console import Console
             from rich.markdown import Markdown
-            from io import StringIO
-            
+
             # Create a console that outputs to a string buffer
             console = Console(file=StringIO(), force_terminal=True, width=80)
-            
+
             # Parse and render markdown
             md = Markdown(text)
             console.print(md)
-            
+
             # Get the formatted output
             formatted = console.file.getvalue()
-            
+
             # Clean up any extra newlines at the end
             return formatted.rstrip()
-            
+
         except ImportError:
             # Fallback to basic formatting if Rich is not available
-            logger.warning("Rich library not available, using basic markdown formatting")
+            logger.warning(
+                "Rich library not available, using basic markdown formatting"
+            )
             return self._basic_markdown_format(text)
-    
+
     def _basic_markdown_format(self, text: str) -> str:
         """Basic fallback markdown formatting."""
         if not text:
             return text
-            
+
         # Simple bold and code formatting as fallback
-        text = re.sub(r'\*\*(.*?)\*\*', r'\033[1m\1\033[0m', text)  # Bold
-        text = re.sub(r'`(.*?)`', r'\033[47m\033[30m\1\033[0m', text)  # Inline code
+        text = re.sub(r"\*\*(.*?)\*\*", r"\033[1m\1\033[0m", text)  # Bold
+        text = re.sub(r"`(.*?)`", r"\033[47m\033[30m\1\033[0m", text)  # Inline code
         return text
-    
-    def display_tool_execution_start(self, tool_count: int, is_subagent: bool = False, interactive: bool = True) -> str:
+
+    def display_tool_execution_start(
+        self, tool_count: int, is_subagent: bool = False, interactive: bool = True
+    ) -> str:
         """Display tool execution start message."""
         if is_subagent:
             return f"🤖 [SUBAGENT] Executing {tool_count} tool(s)..."
         else:
             return f"🔧 Using {tool_count} tool(s)..."
-    
-    def display_tool_execution_step(self, step_num: int, tool_name: str, arguments: dict, is_subagent: bool = False, interactive: bool = True) -> str:
+
+    def display_tool_execution_step(
+        self,
+        step_num: int,
+        tool_name: str,
+        arguments: dict,
+        is_subagent: bool = False,
+        interactive: bool = True,
+    ) -> str:
         """Display individual tool execution step."""
         if is_subagent:
             return f"🤖 [SUBAGENT] Step {step_num}: Executing {tool_name}..."
         else:
             return f"{step_num}. Executing {tool_name}..."
-    
-    def display_tool_execution_result(self, result: str, is_error: bool = False, is_subagent: bool = False, interactive: bool = True) -> str:
+
+    def display_tool_execution_result(
+        self,
+        result: str,
+        is_error: bool = False,
+        is_subagent: bool = False,
+        interactive: bool = True,
+    ) -> str:
         """Display tool execution result."""
         if is_error:
             prefix = "❌ [SUBAGENT] Error:" if is_subagent else "❌ Error:"
         else:
             prefix = "✅ [SUBAGENT] Result:" if is_subagent else "✅ Result:"
-        
+
         # Truncate long results for display
         if len(result) > 200:
             result_preview = result[:200] + "..."
         else:
             result_preview = result
-            
+
         return f"{prefix} {result_preview}"
-    
-    def display_tool_processing(self, is_subagent: bool = False, interactive: bool = True) -> str:
+
+    def display_tool_processing(
+        self, is_subagent: bool = False, interactive: bool = True
+    ) -> str:
         """Display tool processing message."""
         if is_subagent:
             return "🤖 [SUBAGENT] Processing tool results..."
         else:
             return "⚙️ Processing tool results..."
-    
+
     def estimate_tokens(self, text: str) -> int:
         """Rough estimation of tokens (1 token ≈ 4 characters for most models)."""
         return len(text) // 4
-    
+
     def count_conversation_tokens(self, messages: List[Dict[str, Any]]) -> int:
         """Count estimated tokens in the conversation."""
         total_tokens = 0
         for message in messages:
-            if isinstance(message.get('content'), str):
-                total_tokens += self.estimate_tokens(message['content'])
+            if isinstance(message.get("content"), str):
+                total_tokens += self.estimate_tokens(message["content"])
             # Add small overhead for role and structure
             total_tokens += 10
         return total_tokens
-    
+
     def get_token_limit(self) -> int:
         """Get the context token limit for the current model."""
         # Enhanced centralized token limit management with model configuration support
         model_limits = self._get_model_token_limits()
-        
+
         # Try to get model name from config
         model_name = self._get_current_model_name()
-        
+
         if model_name and model_name in model_limits:
             return model_limits[model_name]
-        
+
         # Fallback: check for model patterns
         if model_name:
             for pattern, limit in model_limits.items():
                 if pattern in model_name.lower():
                     return limit
-        
+
         # Conservative default - subclasses can override
         return 32000
-    
+
     def _get_model_token_limits(self) -> Dict[str, int]:
         """Define token limits for known models. Subclasses can extend this."""
         return {
             # DeepSeek models
             "deepseek-reasoner": 128000,
             "deepseek-chat": 64000,
-            
-            # Gemini models  
+            # Gemini models
             "gemini-pro": 128000,
             "pro": 128000,  # Pattern matching for any "pro" model
             "gemini-flash": 64000,
             "flash": 64000,  # Pattern matching for any "flash" model
-            
             # Common defaults
             "gpt-4": 128000,
             "gpt-3.5": 16000,
             "claude": 200000,
         }
-    
+
     def _get_current_model_name(self) -> Optional[str]:
         """Get the current model name. Subclasses should override to provide specific model."""
         # Try common config patterns
-        for attr_name in ['deepseek_config', 'gemini_config', 'openai_config']:
+        for attr_name in ["deepseek_config", "gemini_config", "openai_config"]:
             if hasattr(self, attr_name):
                 config = getattr(self, attr_name)
-                if hasattr(config, 'model'):
+                if hasattr(config, "model"):
                     return config.model
-        
+
         return None
-    
+
     def should_compact(self, messages: List[Dict[str, Any]]) -> bool:
         """Determine if conversation should be compacted."""
         current_tokens = self.count_conversation_tokens(messages)
         limit = self.get_token_limit()
         # Compact when we're at 80% of the limit
         return current_tokens > (limit * 0.8)
-    
-    async def compact_conversation(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+
+    async def compact_conversation(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         """Create a compact summary of the conversation to preserve context while reducing tokens."""
         if len(messages) <= 3:  # Keep conversations that are already short
             return messages
-        
+
         # Always keep the first message (system prompt) and last 2 messages
-        system_message = messages[0] if messages[0].get('role') == 'system' else None
+        system_message = messages[0] if messages[0].get("role") == "system" else None
         recent_messages = messages[-2:]
-        
+
         # Messages to summarize (everything except system and last 2)
         start_idx = 1 if system_message else 0
         messages_to_summarize = messages[start_idx:-2]
-        
+
         if not messages_to_summarize:
             return messages
-        
+
         # Create summary prompt
-        conversation_text = "\n".join([
-            f"{msg.get('role', 'unknown')}: {msg.get('content', '')}"
-            for msg in messages_to_summarize
-        ])
-        
+        conversation_text = "\n".join(
+            [
+                f"{msg.get('role', 'unknown')}: {msg.get('content', '')}"
+                for msg in messages_to_summarize
+            ]
+        )
+
         summary_prompt = f"""Please create a concise summary of this conversation that preserves:
 1. Key decisions and actions taken
 2. Important file changes or tool usage
@@ -1377,25 +1511,31 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
         try:
             # Use the current model to create summary
             summary_messages = [{"role": "user", "content": summary_prompt}]
-            summary_response = await self.generate_response(summary_messages, tools=None)
-            
+            summary_response = await self.generate_response(
+                summary_messages, tools=None
+            )
+
             # Create condensed conversation
             condensed = []
             if system_message:
                 condensed.append(system_message)
-            
+
             # Add summary as a system message
-            condensed.append({
-                "role": "system", 
-                "content": f"[CONVERSATION SUMMARY] {summary_response}"
-            })
-            
+            condensed.append(
+                {
+                    "role": "system",
+                    "content": f"[CONVERSATION SUMMARY] {summary_response}",
+                }
+            )
+
             # Add recent messages
             condensed.extend(recent_messages)
-            
-            print(f"\n🗜️  Conversation compacted: {len(messages)} → {len(condensed)} messages")
+
+            print(
+                f"\n🗜️  Conversation compacted: {len(messages)} → {len(condensed)} messages"
+            )
             return condensed
-            
+
         except Exception as e:
             print(f"⚠️  Failed to compact conversation: {e}")
             # Fallback: just keep system + last 5 messages
@@ -1404,33 +1544,39 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                 fallback.append(system_message)
             fallback.extend(messages[-5:])
             return fallback
-    
-    async def generate_response(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None) -> Union[str, Any]:
+
+    async def generate_response(
+        self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None
+    ) -> Union[str, Any]:
         """Generate a response using the specific LLM. Centralized implementation with subagent yielding."""
         # For subagents, use interactive=False to avoid terminal formatting issues
         interactive = not self.is_subagent
-        
+
         # Default to streaming behavior, but allow subclasses to override
         # Subagents should not stream to avoid generator issues
-        stream = getattr(self, 'stream', True) and not self.is_subagent
-        
+        stream = getattr(self, "stream", True) and not self.is_subagent
+
         # Call the concrete implementation's _generate_completion method
-        tools_list = self.convert_tools_to_llm_format() if self.available_tools else None
-        return await self._generate_completion(messages, tools_list, stream, interactive)
-    
+        tools_list = (
+            self.convert_tools_to_llm_format() if self.available_tools else None
+        )
+        return await self._generate_completion(
+            messages, tools_list, stream, interactive
+        )
+
     # Tool conversion and parsing helper methods
     def normalize_tool_name(self, tool_key: str) -> str:
         """Normalize tool name by replacing colons with underscores."""
         return tool_key.replace(":", "_")
-    
+
     def generate_default_description(self, tool_info: dict) -> str:
         """Generate a default description for a tool if none exists."""
         return tool_info.get("description") or f"Execute {tool_info['name']} tool"
-    
+
     def get_tool_schema(self, tool_info: dict) -> dict:
         """Get tool schema with fallback to basic object schema."""
         return tool_info.get("schema") or {"type": "object", "properties": {}}
-    
+
     def validate_json_arguments(self, args_json: str) -> bool:
         """Validate that a string contains valid JSON."""
         try:
@@ -1438,15 +1584,15 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
             return True
         except (json.JSONDecodeError, TypeError):
             return False
-    
+
     def validate_tool_name(self, tool_name: str) -> bool:
         """Validate tool name format."""
         return tool_name and (tool_name.startswith("builtin_") or "_" in tool_name)
-    
+
     def create_tool_call_object(self, name: str, args: str, call_id: str = None):
         """Create a standardized tool call object."""
         import types
-        
+
         # Create a SimpleNamespace object similar to OpenAI's format
         tool_call = types.SimpleNamespace()
         tool_call.function = types.SimpleNamespace()
@@ -1454,188 +1600,246 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
         tool_call.function.arguments = args
         tool_call.id = call_id or f"call_{name}_{int(time.time())}"
         tool_call.type = "function"
-        
+
         return tool_call
-    
+
     @abstractmethod
     def convert_tools_to_llm_format(self) -> List[Dict]:
         """Convert tools to the specific LLM's format. Must be implemented by subclasses."""
         pass
-    
+
     @abstractmethod
     def parse_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
         """Parse tool calls from the LLM response. Must be implemented by subclasses."""
         pass
-    
+
     @abstractmethod
-    async def _generate_completion(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None, stream: bool = True, interactive: bool = True) -> Any:
+    async def _generate_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict]] = None,
+        stream: bool = True,
+        interactive: bool = True,
+    ) -> Any:
         """Generate completion using the specific LLM. Must be implemented by subclasses."""
         pass
-    
-    
+
     @abstractmethod
-    def _add_tool_results_to_conversation(self, messages: List[Dict[str, Any]], tool_calls: List[Any], tool_results: List[str]) -> List[Dict[str, Any]]:
+    def _add_tool_results_to_conversation(
+        self,
+        messages: List[Dict[str, Any]],
+        tool_calls: List[Any],
+        tool_results: List[str],
+    ) -> List[Dict[str, Any]]:
         """Add tool results to conversation in model-specific format. Must be implemented by subclasses."""
         pass
-    
-    def _prepend_agent_md_to_first_message(self, messages: List[Dict[str, Any]], is_first_message: bool) -> List[Dict[str, Any]]:
+
+    def _prepend_agent_md_to_first_message(
+        self, messages: List[Dict[str, Any]], is_first_message: bool
+    ) -> List[Dict[str, Any]]:
         """Prepend AGENT.md content to first message."""
         if not is_first_message or not messages:
             return messages
-            
+
         # Read AGENT.md file and prepend to first user message
         import os
+
         agent_md_path = "AGENT.md"
         agent_content = ""
-        
+
         if os.path.exists(agent_md_path):
             try:
-                with open(agent_md_path, 'r', encoding='utf-8') as f:
+                with open(agent_md_path, "r", encoding="utf-8") as f:
                     agent_content = f.read().strip()
             except Exception as e:
                 logger.warning(f"Could not read AGENT.md: {e}")
-        
+
         enhanced_messages = messages.copy()
-        if agent_content and enhanced_messages and enhanced_messages[0].get("role") == "user":
+        if (
+            agent_content
+            and enhanced_messages
+            and enhanced_messages[0].get("role") == "user"
+        ):
             original_content = enhanced_messages[0]["content"]
-            enhanced_messages[0]["content"] = f"{agent_content}\n\n---\n\n{original_content}"
-        
+            enhanced_messages[0][
+                "content"
+            ] = f"{agent_content}\n\n---\n\n{original_content}"
+
         return enhanced_messages
-    
-    async def chat_completion(self, messages: List[Dict[str, Any]], stream: bool = True, interactive: bool = True) -> Union[str, Any]:
+
+    async def chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        stream: bool = True,
+        interactive: bool = True,
+    ) -> Union[str, Any]:
         """Centralized chat completion with tool execution logic."""
         enhanced_messages = messages.copy()
         is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
-        
+
         # Add system prompt if this is the first message and no system prompt exists
-        if is_first_message and (not enhanced_messages or enhanced_messages[0].get("role") != "system"):
+        if is_first_message and (
+            not enhanced_messages or enhanced_messages[0].get("role") != "system"
+        ):
             system_prompt = self._create_system_prompt()
             enhanced_messages.insert(0, {"role": "system", "content": system_prompt})
-        
+
         # Prepare tools
         tools = self.convert_tools_to_llm_format() if self.available_tools else None
-        
+
         # For streaming responses, we need to handle tool execution differently
         if stream:
-            return await self._handle_streaming_chat_completion(enhanced_messages, tools, interactive)
+            return await self._handle_streaming_chat_completion(
+                enhanced_messages, tools, interactive
+            )
         else:
-            return await self._handle_non_streaming_chat_completion(enhanced_messages, tools, interactive)
-    
-    async def _handle_streaming_chat_completion(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]], interactive: bool) -> Any:
+            return await self._handle_non_streaming_chat_completion(
+                enhanced_messages, tools, interactive
+            )
+
+    async def _handle_streaming_chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict]],
+        interactive: bool,
+    ) -> Any:
         """Handle streaming chat completion with tool execution."""
         # Generate streaming response
         response = await self._generate_completion(messages, tools, stream=True)
-        
+
         # For streaming, we need to collect the full response first
-        if hasattr(response, '__aiter__'):
+        if hasattr(response, "__aiter__"):
             # It's an async generator, collect the full response
             full_content = ""
             collected_response = None
-            
+
             async for chunk in response:
                 if isinstance(chunk, str):
                     full_content += chunk
                 else:
                     # Store the last non-string chunk as it may contain tool calls
                     collected_response = chunk
-            
+
             # If we collected a response object, parse tool calls from it
             if collected_response:
                 tool_calls = self.parse_tool_calls(collected_response)
             else:
                 # Try to parse tool calls from the full content string
                 tool_calls = self._extract_tool_calls_from_content(full_content)
-            
+
             if tool_calls:
                 # Execute tools and continue conversation
-                return await self._execute_tools_and_continue(messages, full_content, tool_calls, True, interactive)
+                return await self._execute_tools_and_continue(
+                    messages, full_content, tool_calls, True, interactive
+                )
             else:
                 # No tool calls, return the full content
                 return full_content
         else:
             # Not a generator, handle as non-streaming
-            return await self._handle_non_streaming_chat_completion(messages, tools, interactive)
-    
-    async def _handle_non_streaming_chat_completion(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]], interactive: bool) -> Any:
+            return await self._handle_non_streaming_chat_completion(
+                messages, tools, interactive
+            )
+
+    async def _handle_non_streaming_chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict]],
+        interactive: bool,
+    ) -> Any:
         """Handle non-streaming chat completion with tool execution."""
         # Generate completion
         response = await self._generate_completion(messages, tools, stream=False)
-        
+
         # Parse tool calls from response
         tool_calls = self.parse_tool_calls(response)
-        
+
         if tool_calls:
             # Execute tools and continue conversation
-            return await self._execute_tools_and_continue(messages, response, tool_calls, False, interactive)
+            return await self._execute_tools_and_continue(
+                messages, response, tool_calls, False, interactive
+            )
         else:
             # No tool calls, return the response
             return self._extract_content_from_response(response)
-    
+
     def _extract_tool_calls_from_content(self, content: str) -> List[Dict[str, Any]]:
         """Extract tool calls from content string. Override in subclasses if needed."""
         # Default implementation - try to find JSON-like tool calls
-        import re
         import json
-        
+        import re
+
         tool_calls = []
         # Look for function call patterns in the content
         # This is a simple fallback - subclasses should override for better parsing
-        function_pattern = r'function_call\s*:\s*({[^}]+})'
+        function_pattern = r"function_call\s*:\s*({[^}]+})"
         matches = re.findall(function_pattern, content)
-        
+
         for match in matches:
             try:
                 call_data = json.loads(match)
-                if 'name' in call_data:
-                    tool_calls.append({
-                        'id': f'call_{len(tool_calls)}',
-                        'function': {
-                            'name': call_data['name'],
-                            'arguments': call_data.get('arguments', {})
+                if "name" in call_data:
+                    tool_calls.append(
+                        {
+                            "id": f"call_{len(tool_calls)}",
+                            "function": {
+                                "name": call_data["name"],
+                                "arguments": call_data.get("arguments", {}),
+                            },
                         }
-                    })
+                    )
             except:
                 pass
-        
+
         return tool_calls
-    
+
     def _extract_content_from_response(self, response: Any) -> str:
         """Extract text content from response. Override in subclasses for model-specific parsing."""
         if isinstance(response, str):
             return response
-        
+
         # Try common response formats
-        if hasattr(response, 'choices') and response.choices:
-            if hasattr(response.choices[0], 'message'):
+        if hasattr(response, "choices") and response.choices:
+            if hasattr(response.choices[0], "message"):
                 return response.choices[0].message.content or ""
-        
-        if hasattr(response, 'candidates') and response.candidates:
-            if hasattr(response.candidates[0], 'content'):
-                if hasattr(response.candidates[0].content, 'parts'):
+
+        if hasattr(response, "candidates") and response.candidates:
+            if hasattr(response.candidates[0], "content"):
+                if hasattr(response.candidates[0].content, "parts"):
                     parts = response.candidates[0].content.parts
-                    text_parts = [part.text for part in parts if hasattr(part, 'text') and part.text]
-                    return ''.join(text_parts)
-        
+                    text_parts = [
+                        part.text
+                        for part in parts
+                        if hasattr(part, "text") and part.text
+                    ]
+                    return "".join(text_parts)
+
         return str(response)
-    
-    async def _execute_tools_and_continue(self, messages: List[Dict[str, Any]], response: Any, 
-                                        tool_calls: List[Dict[str, Any]], stream: bool, interactive: bool) -> Any:
+
+    async def _execute_tools_and_continue(
+        self,
+        messages: List[Dict[str, Any]],
+        response: Any,
+        tool_calls: List[Dict[str, Any]],
+        stream: bool,
+        interactive: bool,
+    ) -> Any:
         """Execute tool calls and continue the conversation."""
         # Extract text content from response for assistant message
         response_content = self._extract_content_from_response(response)
-        
-        # Add assistant message with tool calls 
+
+        # Add assistant message with tool calls
         assistant_msg = {"role": "assistant", "content": response_content}
         if tool_calls:
             assistant_msg["tool_calls"] = tool_calls
         messages.append(assistant_msg)
-        
+
         # Execute tools in parallel
         tool_results = await asyncio.gather(
             *[self._execute_single_tool(tool_call) for tool_call in tool_calls],
-            return_exceptions=True
+            return_exceptions=True,
         )
-        
+
         # Convert results to strings
         string_results = []
         for result in tool_results:
@@ -1643,72 +1847,88 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                 string_results.append(f"Error: {str(result)}")
             else:
                 string_results.append(str(result))
-        
+
         # Let the model-specific implementation handle how to add tool results to conversation
-        messages = self._add_tool_results_to_conversation(messages, tool_calls, string_results)
-        
+        messages = self._add_tool_results_to_conversation(
+            messages, tool_calls, string_results
+        )
+
         # Generate next completion with tool results
         tools = self.convert_tools_to_llm_format() if self.available_tools else None
         next_response = await self._generate_completion(messages, tools, stream)
-        
+
         # Check for more tool calls
         next_tool_calls = self.parse_tool_calls(next_response)
-        
+
         if next_tool_calls:
             # Continue recursively if there are more tool calls
-            return await self._execute_tools_and_continue(messages, next_response, next_tool_calls, stream, interactive)
+            return await self._execute_tools_and_continue(
+                messages, next_response, next_tool_calls, stream, interactive
+            )
         else:
             # No more tool calls, return final response
             return self._extract_content_from_response(next_response)
-    
+
     async def _execute_single_tool(self, tool_call: Any) -> str:
         """Execute a single tool call."""
         try:
             # Handle different tool call formats (dict vs SimpleNamespace)
-            if hasattr(tool_call, 'get'):
+            if hasattr(tool_call, "get"):
                 # Dictionary format (DeepSeek)
                 function_name = tool_call.get("function", {}).get("name", "")
                 arguments = tool_call.get("function", {}).get("arguments", {})
             else:
                 # SimpleNamespace format (Gemini)
-                function_name = getattr(tool_call, 'name', "")
-                arguments = getattr(tool_call, 'args', {})
-            
+                function_name = getattr(tool_call, "name", "")
+                arguments = getattr(tool_call, "args", {})
+
             if isinstance(arguments, str):
                 import json
+
                 arguments = json.loads(arguments)
-            
+
             # Create a simple namespace object that execute_function_calls expects
             from types import SimpleNamespace
+
             function_call = SimpleNamespace()
             function_call.name = function_name
             function_call.args = arguments
-            
+
             # Use centralized tool execution
             results, outputs = await self.execute_function_calls([function_call])
             return results[0] if results else ""
-            
+
         except Exception as e:
             logger.error(f"Error executing tool {function_name}: {e}")
             return f"Error executing tool: {str(e)}"
-    
-    async def interactive_chat(self, input_handler, existing_messages: List[Dict[str, Any]] = None):
+
+    async def interactive_chat(
+        self, input_handler, existing_messages: List[Dict[str, Any]] = None
+    ):
         """Interactive chat session with shared functionality."""
         from cli_agent.core.input_handler import InterruptibleInput
-        
+
         # Store input handler for tool permission prompts
         self._input_handler = input_handler
-        
+
         messages = existing_messages or []
         current_task = None
-        
-        print("Starting interactive chat. Type /quit or /exit to end, /tools to list available tools.")
-        print("Use /help for slash commands. Press ESC at any time to interrupt operations.\n")
-        
+
+        print(
+            "Starting interactive chat. Type /quit or /exit to end, /tools to list available tools."
+        )
+        print(
+            "Use /help for slash commands. Press ESC at any time to interrupt operations.\n"
+        )
+
         while True:
             try:
                 # Cancel any pending task if interrupted
-                if input_handler.interrupted and current_task and not current_task.done():
+                if (
+                    input_handler.interrupted
+                    and current_task
+                    and not current_task.done()
+                ):
                     current_task.cancel()
                     try:
                         await current_task
@@ -1717,10 +1937,10 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                     input_handler.interrupted = False
                     current_task = None
                     continue
-                
+
                 # Get user input with smart multiline detection
                 user_input = input_handler.get_multiline_input("You: ")
-                
+
                 if user_input is None:  # Interrupted
                     if current_task and not current_task.done():
                         current_task.cancel()
@@ -1728,17 +1948,21 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                     input_handler.interrupted = False
                     current_task = None
                     continue
-                
+
                 # Handle slash commands
-                if user_input.strip().startswith('/'):
+                if user_input.strip().startswith("/"):
                     try:
-                        slash_response = await self.slash_commands.handle_slash_command(user_input.strip(), messages)
+                        slash_response = await self.slash_commands.handle_slash_command(
+                            user_input.strip(), messages
+                        )
                         if slash_response:
                             # Handle special command responses
                             if isinstance(slash_response, dict):
                                 if "compacted_messages" in slash_response:
                                     print(f"\n{slash_response['status']}\n")
-                                    messages[:] = slash_response["compacted_messages"]  # Update messages in place
+                                    messages[:] = slash_response[
+                                        "compacted_messages"
+                                    ]  # Update messages in place
                                 elif "clear_messages" in slash_response:
                                     print(f"\n{slash_response['status']}\n")
                                     messages.clear()  # Clear the local messages list
@@ -1747,7 +1971,10 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                                     break  # Exit the chat loop
                                 elif "reload_host" in slash_response:
                                     print(f"\n{slash_response['status']}")
-                                    return {"reload_host": slash_response["reload_host"], "messages": messages}
+                                    return {
+                                        "reload_host": slash_response["reload_host"],
+                                        "messages": messages,
+                                    }
                                 elif "send_to_llm" in slash_response:
                                     # Special case: send the content to LLM for processing
                                     if "status" in slash_response:
@@ -1755,36 +1982,43 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                                     user_input = slash_response["send_to_llm"]
                                     # Don't continue - fall through to normal LLM processing
                                 else:
-                                    print(f"\n{slash_response.get('status', str(slash_response))}\n")
+                                    print(
+                                        f"\n{slash_response.get('status', str(slash_response))}\n"
+                                    )
                             else:
                                 print(f"\n{slash_response}\n")
                             # Only continue if we're not sending to LLM
-                            if not (isinstance(slash_response, dict) and "send_to_llm" in slash_response):
+                            if not (
+                                isinstance(slash_response, dict)
+                                and "send_to_llm" in slash_response
+                            ):
                                 continue
                     except Exception as e:
                         print(f"\nError handling slash command: {e}\n")
                         continue
-                
+
                 if not user_input.strip():
                     # Empty input, just continue
                     continue
-                
+
                 # Add user message
                 messages.append({"role": "user", "content": user_input})
-                
+
                 # Check if this is the first message and prepend AGENT.md if so
                 is_first_message = len(messages) == 1
-                enhanced_messages = self._prepend_agent_md_to_first_message(messages, is_first_message)
-                
+                enhanced_messages = self._prepend_agent_md_to_first_message(
+                    messages, is_first_message
+                )
+
                 # Show thinking message
                 print("\nThinking...")
-                
+
                 # Create response task
                 tools_list = self.convert_tools_to_llm_format()
                 current_task = asyncio.create_task(
                     self.generate_response(enhanced_messages, tools_list)
                 )
-                
+
                 # Wait for response with simple interruption handling
                 try:
                     await current_task
@@ -1796,6 +2030,7 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                 except Exception as e:
                     # Check if this is a tool permission denial that should return to prompt
                     from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+
                     if isinstance(e, ToolDeniedReturnToPrompt):
                         # Tool denial message already printed by permission manager
                         # Remove the last user message since we're not processing it
@@ -1807,62 +2042,64 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                         print(f"\nError generating response: {e}")
                         current_task = None
                         continue
-                
+
                 # Get the response
                 response = current_task.result()
                 current_task = None
-                
-                if hasattr(response, '__aiter__'):
+
+                if hasattr(response, "__aiter__"):
                     # Streaming response
                     print("\nAssistant (press ESC to interrupt):")
                     sys.stdout.flush()
                     full_response = ""
-                    
+
                     # Set up non-blocking input monitoring
                     stdin_fd = sys.stdin.fileno()
                     old_settings = termios.tcgetattr(stdin_fd)
                     tty.setraw(stdin_fd)
-                    
+
                     interrupted = False
                     try:
                         async for chunk in response:
                             # Check for escape key on each chunk
-                            if select.select([sys.stdin], [], [], 0)[0]:  # Non-blocking check
+                            if select.select([sys.stdin], [], [], 0)[
+                                0
+                            ]:  # Non-blocking check
                                 char = sys.stdin.read(1)
-                                if char == '\x1b':  # Escape key
+                                if char == "\x1b":  # Escape key
                                     interrupted = True
                                     break
-                            
+
                             # Check for interruption flag
                             if input_handler.interrupted:
                                 interrupted = True
                                 input_handler.interrupted = False
                                 break
-                                
+
                             if isinstance(chunk, str):
                                 # Apply markdown formatting for terminal display
                                 formatted_chunk = self.format_markdown(chunk)
                                 # Convert \n to \r\n for proper terminal display in raw mode
-                                display_chunk = formatted_chunk.replace('\n', '\r\n')
+                                display_chunk = formatted_chunk.replace("\n", "\r\n")
                                 print(display_chunk, end="", flush=True)
                                 full_response += chunk
                             else:
                                 # Handle any non-string chunks if needed
                                 formatted_chunk = self.format_markdown(str(chunk))
-                                display_chunk = formatted_chunk.replace('\n', '\r\n')
+                                display_chunk = formatted_chunk.replace("\n", "\r\n")
                                 print(display_chunk, end="", flush=True)
                                 full_response += str(chunk)
                     finally:
                         # Always restore terminal settings first
                         termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
-                        
+
                         # Clean up display if interrupted
                         if interrupted:
                             print("\n🛑 Streaming interrupted by user")
                             sys.stdout.flush()
                         else:
                             print()  # Normal newline after streaming
-                    
+
                     # Add assistant response to messages
                     if full_response:  # Only add if not interrupted
                         messages.append({"role": "assistant", "content": full_response})
@@ -1871,10 +2108,10 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                     formatted_response = self.format_markdown(str(response))
                     print(f"\nAssistant: {formatted_response}")
                     messages.append({"role": "assistant", "content": str(response)})
-                
+
             except KeyboardInterrupt:
                 # Move to beginning of line and clear, then print exit message
-                sys.stdout.write('\r\x1b[KExiting...\n')
+                sys.stdout.write("\r\x1b[KExiting...\n")
                 sys.stdout.flush()
                 break
             except Exception as e:

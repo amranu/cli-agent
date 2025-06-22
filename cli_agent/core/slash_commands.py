@@ -1,8 +1,8 @@
 """Slash command management system for CLI agents."""
 
 import logging
-from typing import Any, Dict, List, Optional
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -10,51 +10,53 @@ logger = logging.getLogger(__name__)
 
 class SlashCommandManager:
     """Manages slash commands similar to Claude Code's system."""
-    
-    def __init__(self, agent: 'BaseMCPAgent'):
+
+    def __init__(self, agent: "BaseMCPAgent"):
         self.agent = agent
         self.custom_commands = {}
         self.load_custom_commands()
-    
+
     def load_custom_commands(self):
         """Load custom commands from .claude/commands/ and ~/.claude/commands/"""
         # Project-specific commands
         project_commands_dir = Path(".claude/commands")
         if project_commands_dir.exists():
             self._load_commands_from_dir(project_commands_dir, "project")
-        
+
         # Personal commands
         personal_commands_dir = Path.home() / ".claude/commands"
         if personal_commands_dir.exists():
             self._load_commands_from_dir(personal_commands_dir, "personal")
-    
+
     def _load_commands_from_dir(self, commands_dir: Path, command_type: str):
         """Load commands from a directory."""
         for command_file in commands_dir.glob("*.md"):
             try:
-                with open(command_file, 'r', encoding='utf-8') as f:
+                with open(command_file, "r", encoding="utf-8") as f:
                     content = f.read()
-                
+
                 command_name = command_file.stem
                 self.custom_commands[command_name] = {
                     "content": content,
                     "type": command_type,
-                    "file": str(command_file)
+                    "file": str(command_file),
                 }
                 logger.debug(f"Loaded {command_type} command: {command_name}")
             except Exception as e:
                 logger.warning(f"Failed to load command {command_file}: {e}")
-    
-    async def handle_slash_command(self, command_line: str, messages: List[Dict[str, Any]] = None) -> Optional[str]:
+
+    async def handle_slash_command(
+        self, command_line: str, messages: List[Dict[str, Any]] = None
+    ) -> Optional[str]:
         """Handle a slash command and return response if handled."""
-        if not command_line.startswith('/'):
+        if not command_line.startswith("/"):
             return None
-        
+
         # Parse command and arguments
-        parts = command_line[1:].split(' ', 1)
+        parts = command_line[1:].split(" ", 1)
         command = parts[0]
         args = parts[1] if len(parts) > 1 else ""
-        
+
         # Handle built-in commands
         if command == "help":
             return self._handle_help()
@@ -94,7 +96,7 @@ class SlashCommandManager:
             return await self._handle_custom_command(command, args)
         else:
             return f"Unknown command: /{command}. Type /help for available commands."
-    
+
     def _handle_help(self) -> str:
         """Handle /help command."""
         help_text = """Available Commands:
@@ -118,155 +120,179 @@ Model Switching:
   /switch-gemini-pro - Switch to Gemini Pro 2.5 backend
 
 Custom Commands:"""
-        
+
         if self.custom_commands:
             for cmd_name, cmd_info in self.custom_commands.items():
                 help_text += f"\n  /{cmd_name}         - {cmd_info['type']} command"
         else:
             help_text += "\n  (No custom commands found)"
-        
+
         # Add MCP commands if available
         mcp_commands = self._get_mcp_commands()
         if mcp_commands:
             help_text += "\n\nMCP Commands:"
             for cmd in mcp_commands:
                 help_text += f"\n  /{cmd}"
-        
+
         return help_text
-    
+
     def _handle_clear(self) -> Dict[str, Any]:
         """Handle /clear command."""
-        if hasattr(self.agent, 'conversation_history'):
+        if hasattr(self.agent, "conversation_history"):
             self.agent.conversation_history.clear()
         return {"status": "Conversation history cleared.", "clear_messages": True}
-    
+
     def _handle_quit(self) -> Dict[str, Any]:
         """Handle /quit and /exit commands."""
         return {"status": "Goodbye!", "quit": True}
-    
+
     def _handle_tools(self) -> str:
         """Handle /tools command."""
         if not self.agent.available_tools:
             return "No tools available."
-        
+
         tools_text = "Available tools:\n"
         for tool_name, tool_info in self.agent.available_tools.items():
             tools_text += f"  {tool_name}: {tool_info['description']}\n"
-        
+
         return tools_text.rstrip()
-    
+
     async def _handle_compact(self, messages: List[Dict[str, Any]] = None) -> str:
         """Handle /compact command."""
         if messages is None:
             return "No conversation history provided to compact."
-        
+
         if len(messages) <= 3:
             return "Conversation is too short to compact (3 messages or fewer)."
-        
+
         # Get token count before compacting
-        if hasattr(self.agent, 'count_conversation_tokens'):
+        if hasattr(self.agent, "count_conversation_tokens"):
             tokens_before = self.agent.count_conversation_tokens(messages)
         else:
             tokens_before = "unknown"
-        
+
         try:
             # Use the agent's compact_conversation method
-            if hasattr(self.agent, 'compact_conversation'):
+            if hasattr(self.agent, "compact_conversation"):
                 compacted_messages = await self.agent.compact_conversation(messages)
-                
+
                 # Get token count after compacting
-                if hasattr(self.agent, 'count_conversation_tokens'):
-                    tokens_after = self.agent.count_conversation_tokens(compacted_messages)
+                if hasattr(self.agent, "count_conversation_tokens"):
+                    tokens_after = self.agent.count_conversation_tokens(
+                        compacted_messages
+                    )
                     result = f"✅ Conversation compacted: {len(messages)} → {len(compacted_messages)} messages\n📊 Token usage: ~{tokens_before} → ~{tokens_after} tokens"
                 else:
                     result = f"✅ Conversation compacted: {len(messages)} → {len(compacted_messages)} messages"
-                
+
                 # Return both the result message and the compacted messages
                 # The interactive chat will need to update its messages list
                 return {"status": result, "compacted_messages": compacted_messages}
             else:
                 return "❌ Conversation compacting not available for this agent type."
-                
+
         except Exception as e:
             return f"❌ Failed to compact conversation: {str(e)}"
-    
+
     def _handle_tokens(self, messages: List[Dict[str, Any]] = None) -> str:
         """Handle /tokens command."""
-        if not hasattr(self.agent, 'count_conversation_tokens'):
+        if not hasattr(self.agent, "count_conversation_tokens"):
             return "❌ Token counting not available for this agent type."
-        
+
         if messages is None or len(messages) == 0:
             return "No conversation history to analyze."
-        
+
         tokens = self.agent.count_conversation_tokens(messages)
-        limit = self.agent.get_token_limit() if hasattr(self.agent, 'get_token_limit') else 32000
+        limit = (
+            self.agent.get_token_limit()
+            if hasattr(self.agent, "get_token_limit")
+            else 32000
+        )
         percentage = (tokens / limit) * 100
-        
+
         result = f"📊 Token usage: ~{tokens}/{limit} ({percentage:.1f}%)"
         if percentage > 80:
             result += "\n⚠️  Consider using '/compact' to reduce token usage"
-        
+
         return result
-    
+
     def _handle_switch_chat(self) -> Dict[str, Any]:
         """Handle /switch-chat command."""
         try:
             from config import load_config
+
             config = load_config()
             config.deepseek_model = "deepseek-chat"
             config.save()
-            return {"status": f"✅ Model switched to: {config.deepseek_model}", "reload_host": "deepseek"}
+            return {
+                "status": f"✅ Model switched to: {config.deepseek_model}",
+                "reload_host": "deepseek",
+            }
         except Exception as e:
             return f"❌ Failed to switch model: {str(e)}"
-    
+
     def _handle_switch_reason(self) -> Dict[str, Any]:
         """Handle /switch-reason command."""
         try:
             from config import load_config
+
             config = load_config()
             config.deepseek_model = "deepseek-reasoner"
             config.save()
-            return {"status": f"✅ Model switched to: {config.deepseek_model}", "reload_host": "deepseek"}
+            return {
+                "status": f"✅ Model switched to: {config.deepseek_model}",
+                "reload_host": "deepseek",
+            }
         except Exception as e:
             return f"❌ Failed to switch model: {str(e)}"
-    
+
     def _handle_switch_gemini(self) -> Dict[str, Any]:
         """Handle /switch-gemini command."""
         try:
             from config import load_config
+
             config = load_config()
             config.deepseek_model = "gemini"
             config.gemini_model = "gemini-2.5-flash"
             config.save()
-            return {"status": f"✅ Backend switched to: Gemini Flash 2.5 ({config.gemini_model})", "reload_host": "gemini"}
+            return {
+                "status": f"✅ Backend switched to: Gemini Flash 2.5 ({config.gemini_model})",
+                "reload_host": "gemini",
+            }
         except Exception as e:
             return f"❌ Failed to switch backend: {str(e)}"
-    
+
     def _handle_switch_gemini_pro(self) -> Dict[str, Any]:
         """Handle /switch-gemini-pro command."""
         try:
             from config import load_config
+
             config = load_config()
             config.deepseek_model = "gemini"
             config.gemini_model = "gemini-2.5-pro"
             config.save()
-            return {"status": f"✅ Backend switched to: Gemini Pro 2.5 ({config.gemini_model})", "reload_host": "gemini"}
+            return {
+                "status": f"✅ Backend switched to: Gemini Pro 2.5 ({config.gemini_model})",
+                "reload_host": "gemini",
+            }
         except Exception as e:
             return f"❌ Failed to switch backend: {str(e)}"
-    
+
     def _handle_model(self, args: str) -> str:
         """Handle /model command."""
         if not args.strip():
             # Show current model
-            if hasattr(self.agent, 'config'):
-                if hasattr(self.agent.config, 'get_deepseek_config'):
+            if hasattr(self.agent, "config"):
+                if hasattr(self.agent.config, "get_deepseek_config"):
                     return f"Current model: {self.agent.config.get_deepseek_config().model}"
-                elif hasattr(self.agent.config, 'get_gemini_config'):
-                    return f"Current model: {self.agent.config.get_gemini_config().model}"
+                elif hasattr(self.agent.config, "get_gemini_config"):
+                    return (
+                        f"Current model: {self.agent.config.get_gemini_config().model}"
+                    )
             return "Current model: Unknown"
         else:
             return "Model switching not implemented yet. Use environment variables to change models."
-    
+
     def _handle_review(self, args: str) -> str:
         """Handle /review command."""
         if args.strip():
@@ -274,27 +300,32 @@ Custom Commands:"""
             return f"Code review requested for: {file_path}\n\nNote: Automated code review not implemented yet. Please use the agent's normal chat to request code review."
         else:
             return "Please specify a file to review: /review <file_path>"
-    
+
     async def _handle_mcp_command(self, command: str, args: str) -> str:
         """Handle MCP slash commands."""
         # Parse MCP command: mcp__<server-name>__<prompt-name>
-        parts = command.split('__')
+        parts = command.split("__")
         if len(parts) != 3 or parts[0] != "mcp":
             return f"Invalid MCP command format: /{command}"
-        
+
         server_name = parts[1]
         prompt_name = parts[2]
-        
+
         # Check if we have this MCP server
-        if hasattr(self.agent, 'available_tools'):
+        if hasattr(self.agent, "available_tools"):
             # Look for matching tools from this server
-            matching_tools = [tool for tool in self.agent.available_tools.keys() 
-                             if tool.startswith(f"{server_name}:")]
+            matching_tools = [
+                tool
+                for tool in self.agent.available_tools.keys()
+                if tool.startswith(f"{server_name}:")
+            ]
             if not matching_tools:
-                return f"MCP server '{server_name}' not found or has no available tools."
-        
+                return (
+                    f"MCP server '{server_name}' not found or has no available tools."
+                )
+
         return f"MCP command execution not fully implemented yet.\nServer: {server_name}\nPrompt: {prompt_name}\nArgs: {args}"
-    
+
     async def _handle_custom_command(self, command: str, args: str) -> str:
         """Handle custom commands."""
         # Handle namespaced commands (prefix:command)
@@ -304,34 +335,34 @@ Custom Commands:"""
         else:
             cmd_name = command
             full_command = command
-        
+
         if cmd_name not in self.custom_commands:
             return f"Custom command not found: /{full_command}"
-        
+
         cmd_info = self.custom_commands[cmd_name]
         content = cmd_info["content"]
-        
+
         # Replace $ARGUMENTS placeholder
         if args:
             content = content.replace("$ARGUMENTS", args)
         else:
             content = content.replace("$ARGUMENTS", "")
-        
+
         return f"Executing custom command '{cmd_name}':\n\n{content}"
-    
+
     async def _handle_init(self) -> str:
         """Handle /init command - prompt LLM to analyze codebase and create AGENT.md."""
         try:
             import os
-            
+
             # Get project root directory
             current_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(os.path.dirname(current_dir))
-            
+
             # Key files to analyze for comprehensive understanding
             analysis_files = [
                 "agent.py",
-                "config.py", 
+                "config.py",
                 "mcp_deepseek_host.py",
                 "mcp_gemini_host.py",
                 "subagent.py",
@@ -340,24 +371,24 @@ Custom Commands:"""
                 "cli_agent/core/input_handler.py",
                 "cli_agent/tools/builtin_tools.py",
                 "cli_agent/utils/tool_conversion.py",
-                "cli_agent/utils/tool_parsing.py"
+                "cli_agent/utils/tool_parsing.py",
             ]
-            
+
             # Check which files exist
             existing_files = []
             total_lines = 0
-            
+
             for file_path in analysis_files:
                 full_path = os.path.join(project_root, file_path)
                 if os.path.exists(full_path):
                     existing_files.append(file_path)
                     try:
-                        with open(full_path, 'r', encoding='utf-8') as f:
+                        with open(full_path, "r", encoding="utf-8") as f:
                             content = f.read()
-                            total_lines += len(content.split('\n'))
+                            total_lines += len(content.split("\n"))
                     except Exception:
                         pass
-            
+
             # Create the prompt for the LLM to analyze and create AGENT.md
             analysis_prompt = f"""Please comprehensively analyze this MCP Agent codebase and create a detailed AGENT.md file that documents the entire system architecture for other AI coding agents.
 
@@ -409,92 +440,100 @@ Please start by reading the key files to understand the architecture, then write
             # Return the analysis prompt to be sent to LLM
             return {
                 "status": f"🔍 Initiating codebase analysis of {len(existing_files)} files (~{total_lines} lines total)...",
-                "send_to_llm": analysis_prompt
+                "send_to_llm": analysis_prompt,
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to create init prompt: {e}")
             return f"❌ Failed to create codebase analysis prompt: {str(e)}"
-    
+
     def _get_mcp_commands(self) -> List[str]:
         """Get available MCP commands."""
         mcp_commands = []
-        if hasattr(self.agent, 'available_tools'):
+        if hasattr(self.agent, "available_tools"):
             # Group tools by server and create MCP commands
             servers = set()
             for tool_name in self.agent.available_tools.keys():
                 if ":" in tool_name and not tool_name.startswith("builtin:"):
                     server_name = tool_name.split(":")[0]
                     servers.add(server_name)
-            
+
             for server in servers:
                 mcp_commands.append(f"mcp__{server}__<prompt-name>")
-        
+
         return mcp_commands
-    
+
     def _handle_permissions(self, args: str) -> str:
         """Handle tool permissions command."""
-        if not hasattr(self.agent, 'permission_manager'):
+        if not hasattr(self.agent, "permission_manager"):
             return "❌ Tool permission system not available."
-        
+
         permission_manager = self.agent.permission_manager
-        
+
         parts = args.split()
         if not parts:
             # Show current status
             status = permission_manager.get_session_status()
-            
+
             result = "🔧 Tool Permission Status:\n\n"
-            
-            if status['auto_approve']:
+
+            if status["auto_approve"]:
                 result += "🟢 Auto-approval: ENABLED for all tools\n\n"
             else:
                 result += "🔴 Auto-approval: DISABLED\n\n"
-            
-            if status['config_allowed']:
+
+            if status["config_allowed"]:
                 result += f"✅ Configuration allowed tools: {', '.join(status['config_allowed'])}\n"
-            
-            if status['config_disallowed']:
+
+            if status["config_disallowed"]:
                 result += f"❌ Configuration disallowed tools: {', '.join(status['config_disallowed'])}\n"
-            
-            if status['approved_tools']:
+
+            if status["approved_tools"]:
                 result += f"✅ Session approved tools: {', '.join(status['approved_tools'])}\n"
-            
-            if status['denied_tools']:
-                result += f"❌ Session denied tools: {', '.join(status['denied_tools'])}\n"
-            
-            if not any([status['config_allowed'], status['config_disallowed'], 
-                       status['approved_tools'], status['denied_tools']]):
+
+            if status["denied_tools"]:
+                result += (
+                    f"❌ Session denied tools: {', '.join(status['denied_tools'])}\n"
+                )
+
+            if not any(
+                [
+                    status["config_allowed"],
+                    status["config_disallowed"],
+                    status["approved_tools"],
+                    status["denied_tools"],
+                ]
+            ):
                 result += "ℹ️ No specific tool permissions configured.\n"
-            
+
             result += "\nCommands:\n"
             result += "  /permissions reset     - Reset session permissions\n"
             result += "  /permissions allow <tool>  - Allow tool for session\n"
             result += "  /permissions deny <tool>   - Deny tool for session\n"
             result += "  /permissions auto      - Enable auto-approval for session\n"
-            
+
             return result
-        
+
         command = parts[0].lower()
-        
+
         if command == "reset":
             permission_manager.reset_session_permissions()
             return "✅ Session permissions reset."
-        
+
         elif command == "allow" and len(parts) > 1:
             tool_name = parts[1]
             permission_manager.add_session_approval(tool_name)
             return f"✅ Tool '{tool_name}' approved for this session."
-        
+
         elif command == "deny" and len(parts) > 1:
             tool_name = parts[1]
             permission_manager.add_session_denial(tool_name)
             return f"❌ Tool '{tool_name}' denied for this session."
-        
+
         elif command == "auto":
             permission_manager.session_auto_approve = True
             permission_manager._save_session_permissions()
             return "✅ Auto-approval enabled for all tools in this session."
-        
+
         else:
             return "❌ Invalid permissions command. Use: reset, allow <tool>, deny <tool>, or auto"

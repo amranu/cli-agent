@@ -37,7 +37,7 @@ def sample_host_config(monkeypatch):
     monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
     monkeypatch.setenv("GEMINI_TEMPERATURE", "0.7")
     monkeypatch.setenv("GEMINI_MAX_TOKENS", "8192")
-    
+
     # Create config with environment variables
     return HostConfig()
 
@@ -48,47 +48,50 @@ def mock_tools():
     return {
         "builtin:bash_execute": {
             "server": "builtin",
-            "name": "bash_execute", 
+            "name": "bash_execute",
             "description": "Execute bash commands",
             "schema": {
                 "type": "object",
-                "properties": {
-                    "command": {"type": "string"}
-                },
-                "required": ["command"]
-            }
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            },
         },
         "builtin:read_file": {
             "server": "builtin",
             "name": "read_file",
-            "description": "Read file contents", 
+            "description": "Read file contents",
             "schema": {
                 "type": "object",
-                "properties": {
-                    "file_path": {"type": "string"}
-                },
-                "required": ["file_path"]
-            }
-        }
+                "properties": {"file_path": {"type": "string"}},
+                "required": ["file_path"],
+            },
+        },
     }
 
 
 @pytest.fixture
 def mock_base_agent(sample_host_config, mock_tools):
     """Create a mock BaseMCPAgent for testing."""
+
     class MockAgent(BaseMCPAgent):
         def convert_tools_to_llm_format(self) -> List[Dict]:
             return []
-        
+
         def parse_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
             return []
-        
-        async def _generate_completion(self, messages: List[Dict[str, Any]], tools=None, stream=True, interactive=True) -> Any:
+
+        async def _generate_completion(
+            self,
+            messages: List[Dict[str, Any]],
+            tools=None,
+            stream=True,
+            interactive=True,
+        ) -> Any:
             return "Mock response"
-        
+
         def _add_tool_results_to_conversation(self, messages, tool_calls, tool_results):
             return messages
-    
+
     agent = MockAgent(sample_host_config, is_subagent=False)
     agent.available_tools = mock_tools
     return agent
@@ -97,39 +100,41 @@ def mock_base_agent(sample_host_config, mock_tools):
 @pytest.fixture
 def mock_deepseek_response():
     """Mock DeepSeek API response."""
+
     class MockChoice:
         def __init__(self):
             self.message = MagicMock()
             self.message.content = "Test response from DeepSeek"
             self.message.tool_calls = None
-    
+
     class MockResponse:
         def __init__(self):
             self.choices = [MockChoice()]
-    
+
     return MockResponse()
 
 
 @pytest.fixture
 def mock_gemini_response():
     """Mock Gemini API response."""
+
     class MockPart:
         def __init__(self, text=None, function_call=None):
             self.text = text
             self.function_call = function_call
-    
+
     class MockContent:
         def __init__(self, parts):
             self.parts = parts
-    
+
     class MockCandidate:
         def __init__(self, content):
             self.content = content
-    
+
     class MockResponse:
         def __init__(self, text="Test response from Gemini"):
             self.candidates = [MockCandidate(MockContent([MockPart(text=text)]))]
-    
+
     return MockResponse()
 
 
@@ -139,7 +144,7 @@ def sample_messages():
     return [
         {"role": "user", "content": "Hello, please help me"},
         {"role": "assistant", "content": "I'll help you with that."},
-        {"role": "user", "content": "List the files in the current directory"}
+        {"role": "user", "content": "List the files in the current directory"},
     ]
 
 
@@ -149,11 +154,11 @@ def sample_tool_calls():
     return [
         {
             "id": "call_1",
-            "type": "function", 
+            "type": "function",
             "function": {
                 "name": "builtin_bash_execute",
-                "arguments": json.dumps({"command": "ls -la"})
-            }
+                "arguments": json.dumps({"command": "ls -la"}),
+            },
         }
     ]
 
@@ -180,6 +185,7 @@ def mock_input_handler():
 def disable_logging():
     """Disable logging during tests to reduce noise."""
     import logging
+
     logging.disable(logging.CRITICAL)
     yield
     logging.disable(logging.NOTSET)
@@ -220,12 +226,12 @@ def assert_tool_called_with(mock_agent, tool_name: str, args: Dict[str, Any]):
 @pytest.fixture
 def mock_openai_client():
     """Mock OpenAI client for DeepSeek testing."""
-    with patch('openai.OpenAI') as mock:
+    with patch("openai.OpenAI") as mock:
         yield mock
 
 
-@pytest.fixture 
+@pytest.fixture
 def mock_gemini_client():
     """Mock Gemini client for testing."""
-    with patch('google.genai.Client') as mock:
+    with patch("google.genai.Client") as mock:
         yield mock

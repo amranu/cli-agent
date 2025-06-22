@@ -14,7 +14,7 @@ __version__ = "1.0.0"
 
 __all__ = [
     "BaseMCPAgent",
-    "InterruptibleInput", 
+    "InterruptibleInput",
     "SlashCommandManager",
-    "get_all_builtin_tools"
+    "get_all_builtin_tools",
 ]

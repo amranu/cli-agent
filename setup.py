@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
 """Setup script for CLI Agent package."""
 
-from setuptools import setup, find_packages
 import os
+
+from setuptools import find_packages, setup
+
 
 # Read the README file for long description
 def read_readme():
-    readme_path = os.path.join(os.path.dirname(__file__), 'README.md')
+    readme_path = os.path.join(os.path.dirname(__file__), "README.md")
     if os.path.exists(readme_path):
-        with open(readme_path, 'r', encoding='utf-8') as f:
+        with open(readme_path, "r", encoding="utf-8") as f:
             return f.read()
     return "CLI Agent - MCP-enabled AI assistant with tool integration"
 
+
 # Read requirements from requirements.txt
 def read_requirements():
-    req_path = os.path.join(os.path.dirname(__file__), 'requirements.txt')
+    req_path = os.path.join(os.path.dirname(__file__), "requirements.txt")
     if os.path.exists(req_path):
-        with open(req_path, 'r', encoding='utf-8') as f:
-            return [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        with open(req_path, "r", encoding="utf-8") as f:
+            return [
+                line.strip() for line in f if line.strip() and not line.startswith("#")
+            ]
     return []
+
 
 setup(
     name="cli-agent",
@@ -30,16 +36,11 @@ setup(
     author_email="",
     url="https://github.com/anthropics/cli-agent",
     packages=find_packages(),
-    py_modules=[
-        'agent',
-        'config', 
-        'mcp_deepseek_host',
-        'mcp_gemini_host'
-    ],
+    py_modules=["agent", "config", "mcp_deepseek_host", "mcp_gemini_host"],
     install_requires=read_requirements(),
     entry_points={
-        'console_scripts': [
-            'agent=agent:main',
+        "console_scripts": [
+            "agent=agent:main",
         ],
     },
     classifiers=[
