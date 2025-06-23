@@ -1177,7 +1177,7 @@ Based on these tool results, please provide your final response. Do not re-execu
 
                             # Indicate we're getting the follow-up response (via print to avoid LLM contamination)
                             print(
-                                f"\n\r\n\r{self.display_tool_processing(self.is_subagent, interactive=not self.is_subagent)}\n\r",
+                                f"\n\r\n\r{self.formatter.display_tool_processing(self.is_subagent, interactive=not self.is_subagent)}\n\r",
                                 flush=True,
                             )
 
