@@ -19,12 +19,12 @@ from typing import Any, Dict, List, Optional, Union
 from fastmcp.client import Client as FastMCPClient
 from fastmcp.client import StdioTransport
 
-from cli_agent.core.slash_commands import SlashCommandManager
-from cli_agent.tools.builtin_tools import get_all_builtin_tools
-from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
-from cli_agent.core.token_manager import TokenManager
-from cli_agent.core.tool_schema import ToolSchemaManager
 from cli_agent.core.formatting import ResponseFormatter
+from cli_agent.core.slash_commands import SlashCommandManager
+from cli_agent.core.token_manager import TokenManager
+from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+from cli_agent.core.tool_schema import ToolSchemaManager
+from cli_agent.tools.builtin_tools import get_all_builtin_tools
 from config import HostConfig
 
 # Configure logging
@@ -86,8 +86,8 @@ class BaseMCPAgent(ABC):
         # Initialize tool permission manager
         try:
             from cli_agent.core.tool_permissions import (
-                ToolPermissionManager,
                 ToolPermissionConfig,
+                ToolPermissionManager,
             )
 
             # Create default permission config (prompts for all tools by default)
@@ -1836,6 +1836,7 @@ You are the expert. Complete the task."""
     ):
         """Interactive chat session with shared functionality."""
         import sys
+
         from cli_agent.core.input_handler import InterruptibleInput
 
         # Store input handler for tool permission prompts

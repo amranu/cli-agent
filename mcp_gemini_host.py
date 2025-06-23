@@ -1132,6 +1132,7 @@ Based on these tool results, please provide your final response. Do not re-execu
     ):
         """Handle streaming response from Gemini with iterative tool calling."""
         import asyncio
+
         from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 
         async def async_stream_generator():
