@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +38,10 @@ class FormattingUtils:
     def apply_rich_console_formatting(self, chunk: str) -> str:
         """Apply rich console formatting if rich is available."""
         try:
+            import io
+
             from rich.console import Console
             from rich.markdown import Markdown
-            import io
 
             console = Console(file=io.StringIO(), force_terminal=True, width=80)
             md = Markdown(chunk)
