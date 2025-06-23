@@ -224,7 +224,11 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
     ) -> str:
         """Handle non-streaming response from Gemini, processing tool calls if needed."""
 
-        current_messages = original_messages.copy()
+        # Use original messages list if modify_messages_in_place is enabled for session persistence
+        if getattr(self, '_modify_messages_in_place', False):
+            current_messages = original_messages
+        else:
+            current_messages = original_messages.copy()
         max_rounds = 10  # Prevent infinite loops
 
         for round_num in range(max_rounds):
@@ -1108,9 +1112,13 @@ Based on these tool results, please provide your final response. Do not re-execu
                     consecutive_failures = 0
 
                     # Use centralized tool call processing for streaming
-                    current_messages = (
-                        []
-                    )  # Create empty messages list for centralized processing
+                    # Use original messages list if modify_messages_in_place is enabled for session persistence
+                    if getattr(self, '_modify_messages_in_place', False):
+                        current_messages = original_messages
+                    else:
+                        current_messages = (
+                            []
+                        )  # Create empty messages list for centralized processing
                     try:
                         updated_messages, continuation_message, has_tool_calls = (
                             await self._process_tool_calls_centralized(

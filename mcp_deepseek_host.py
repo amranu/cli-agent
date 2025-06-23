@@ -380,7 +380,11 @@ class MCPDeepseekHost(BaseMCPAgent):
         """Handle non-streaming response from Deepseek."""
         from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 
-        current_messages = original_messages.copy()
+        # Use original messages list if modify_messages_in_place is enabled for session persistence
+        if getattr(self, '_modify_messages_in_place', False):
+            current_messages = original_messages
+        else:
+            current_messages = original_messages.copy()
 
         # Debug log the raw response
         logger.debug(f"Raw LLM response: {response}")
@@ -536,7 +540,11 @@ class MCPDeepseekHost(BaseMCPAgent):
         context = StreamingContext()
 
         async def async_stream_generator():
-            current_messages = original_messages.copy() if original_messages else []
+            # Use original messages list if modify_messages_in_place is enabled for session persistence
+            if getattr(self, '_modify_messages_in_place', False):
+                current_messages = original_messages if original_messages else []
+            else:
+                current_messages = original_messages.copy() if original_messages else []
             current_response = response  # Store the initial response
 
             round_num = 0
