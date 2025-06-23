@@ -19,8 +19,12 @@ from typing import Any, Dict, List, Optional, Union
 from fastmcp.client import Client as FastMCPClient
 from fastmcp.client import StdioTransport
 
+from cli_agent.core.builtin_tool_executor import BuiltinToolExecutor
 from cli_agent.core.formatting import ResponseFormatter
+from cli_agent.core.formatting_utils import FormattingUtils
 from cli_agent.core.slash_commands import SlashCommandManager
+from cli_agent.core.subagent_coordinator import SubagentCoordinator
+from cli_agent.core.system_prompt_builder import SystemPromptBuilder
 from cli_agent.core.token_manager import TokenManager
 from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 from cli_agent.core.tool_schema import ToolSchemaManager
@@ -68,14 +72,20 @@ class BaseMCPAgent(ABC):
                 # Event-driven message handling
                 self.subagent_message_queue = asyncio.Queue()
                 self.subagent_manager.add_message_callback(self._on_subagent_message)
+
+                # Track last message time for timeout management
+                self.last_subagent_message_time = None
+
                 logger.info("Initialized centralized subagent management system")
             except ImportError as e:
                 logger.warning(f"Failed to import subagent manager: {e}")
                 self.subagent_manager = None
                 self.subagent_message_queue = None
+                self.last_subagent_message_time = None
         else:
             self.subagent_manager = None
             self.subagent_message_queue = None
+            self.last_subagent_message_time = None
 
         # Add built-in tools
         self._add_builtin_tools()
@@ -115,6 +125,13 @@ class BaseMCPAgent(ABC):
         # Initialize response formatter
         self.formatter = ResponseFormatter(config)
         logger.debug("Initialized response formatter")
+
+        # Initialize utility classes
+        self.builtin_executor = BuiltinToolExecutor(self)
+        self.subagent_coordinator = SubagentCoordinator(self)
+        self.system_prompt_builder = SystemPromptBuilder(self)
+        self.formatting_utils = FormattingUtils(self)
+        logger.debug("Initialized utility classes")
 
         # Centralized LLM client initialization
         self._initialize_llm_client()
@@ -156,29 +173,29 @@ class BaseMCPAgent(ABC):
     async def _execute_builtin_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Execute a built-in tool."""
         if tool_name == "bash_execute":
-            return self._bash_execute(args)
+            return self.builtin_executor.bash_execute(args)
         elif tool_name == "read_file":
-            return self._read_file(args)
+            return self.builtin_executor.read_file(args)
         elif tool_name == "write_file":
-            return self._write_file(args)
+            return self.builtin_executor.write_file(args)
         elif tool_name == "list_directory":
-            return self._list_directory(args)
+            return self.builtin_executor.list_directory(args)
         elif tool_name == "get_current_directory":
-            return self._get_current_directory(args)
+            return self.builtin_executor.get_current_directory(args)
         elif tool_name == "todo_read":
-            return self._todo_read(args)
+            return self.builtin_executor.todo_read(args)
         elif tool_name == "todo_write":
-            return self._todo_write(args)
+            return self.builtin_executor.todo_write(args)
         elif tool_name == "replace_in_file":
-            return self._replace_in_file(args)
+            return self.builtin_executor.replace_in_file(args)
         elif tool_name == "webfetch":
-            return self._webfetch(args)
+            return self.builtin_executor.webfetch(args)
         elif tool_name == "task":
-            return await self._task(args)
+            return await self.builtin_executor.task(args)
         elif tool_name == "task_status":
-            return self._task_status(args)
+            return self.builtin_executor.task_status(args)
         elif tool_name == "task_results":
-            return self._task_results(args)
+            return self.builtin_executor.task_results(args)
         elif tool_name == "emit_result":
             return await self._emit_result(args)
         else:
@@ -211,383 +228,6 @@ class BaseMCPAgent(ABC):
 
         except Exception as e:
             return f"Error emitting result: {str(e)}"
-
-    def _bash_execute(self, args: Dict[str, Any]) -> str:
-        """Execute a bash command and return the output."""
-        command = args.get("command", "")
-        timeout = args.get("timeout", 120)
-
-        if not command:
-            return "Error: No command provided"
-
-        try:
-            result = subprocess.run(
-                command, shell=True, capture_output=True, text=True, timeout=timeout
-            )
-
-            output = ""
-            if result.stdout:
-                output += f"STDOUT:\n{result.stdout}"
-            if result.stderr:
-                output += f"\nSTDERR:\n{result.stderr}"
-            if result.returncode != 0:
-                output += f"\nReturn code: {result.returncode}"
-
-            return output if output else "Command executed successfully (no output)"
-
-        except subprocess.TimeoutExpired:
-            return f"Error: Command timed out after {timeout} seconds"
-        except Exception as e:
-            return f"Error executing command: {str(e)}"
-
-    def _read_file(self, args: Dict[str, Any]) -> str:
-        """Read contents of a file with line numbers."""
-        file_path = args.get("file_path", "")
-        offset = args.get("offset", 1)
-        limit = args.get("limit", None)
-
-        if not file_path:
-            return "Error: No file path provided"
-
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-
-            start_idx = max(0, offset - 1)  # Convert to 0-based index
-            end_idx = (
-                len(lines) if limit is None else min(len(lines), start_idx + limit)
-            )
-
-            result = []
-            for i in range(start_idx, end_idx):
-                result.append(f"{i + 1:6d}→{lines[i].rstrip()}")
-
-            return "\n".join(result)
-
-        except FileNotFoundError:
-            return f"Error: File not found: {file_path}"
-        except Exception as e:
-            return f"Error reading file: {str(e)}"
-
-    def _write_file(self, args: Dict[str, Any]) -> str:
-        """Write content to a file."""
-        file_path = args.get("file_path", "")
-        content = args.get("content", "")
-
-        if not file_path:
-            return "Error: No file path provided"
-
-        try:
-            # Create directory if it doesn't exist
-            dir_path = os.path.dirname(file_path)
-            if (
-                dir_path
-            ):  # Only create directory if it's not empty (i.e., file is not in current dir)
-                os.makedirs(dir_path, exist_ok=True)
-
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(content)
-
-            return f"Successfully wrote {len(content)} characters to {file_path}"
-
-        except Exception as e:
-            return f"Error writing file: {str(e)}"
-
-    def _list_directory(self, args: Dict[str, Any]) -> str:
-        """List contents of a directory."""
-        directory_path = args.get("directory_path", ".")
-
-        try:
-            path = Path(directory_path)
-            if not path.exists():
-                return f"Error: Directory does not exist: {directory_path}"
-
-            if not path.is_dir():
-                return f"Error: Path is not a directory: {directory_path}"
-
-            items = []
-            for item in sorted(path.iterdir()):
-                if item.is_dir():
-                    items.append(f"📁 {item.name}/")
-                else:
-                    size = item.stat().st_size
-                    items.append(f"📄 {item.name} ({size} bytes)")
-
-            return "\n".join(items) if items else "Directory is empty"
-
-        except Exception as e:
-            return f"Error listing directory: {str(e)}"
-
-    def _get_current_directory(self, args: Dict[str, Any]) -> str:
-        """Get the current working directory."""
-        try:
-            return os.getcwd()
-        except Exception as e:
-            return f"Error getting current directory: {str(e)}"
-
-    def _todo_read(self, args: Dict[str, Any]) -> str:
-        """Read the current todo list."""
-        todo_file = "todo.json"
-
-        try:
-            if not os.path.exists(todo_file):
-                return "[]"  # Empty todo list
-
-            with open(todo_file, "r", encoding="utf-8") as f:
-                return f.read()
-
-        except Exception as e:
-            return f"Error reading todo list: {str(e)}"
-
-    def _todo_write(self, args: Dict[str, Any]) -> str:
-        """Write/update the todo list."""
-        todos = args.get("todos", [])
-        todo_file = "todo.json"
-
-        try:
-            with open(todo_file, "w", encoding="utf-8") as f:
-                json.dump(todos, f, indent=2)
-
-            # Return the actual todo list data to the LLM for proper feedback
-            return f"Successfully updated todo list with {len(todos)} items. Current todo list:\n{json.dumps(todos, indent=2)}"
-
-        except Exception as e:
-            return f"Error writing todo list: {str(e)}"
-
-    def _replace_in_file(self, args: Dict[str, Any]) -> str:
-        """Replace text in a file."""
-        file_path = args.get("file_path", "")
-        old_text = args.get("old_text", "")
-        new_text = args.get("new_text", "")
-
-        if not file_path:
-            return "Error: No file path provided"
-        if not old_text:
-            return "Error: No old text provided"
-
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            if old_text not in content:
-                return f"Error: Text not found in file: {old_text}"
-
-            new_content = content.replace(old_text, new_text)
-
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-
-            count = content.count(old_text)
-            return f"Successfully replaced {count} occurrence(s) of text in {file_path}"
-
-        except FileNotFoundError:
-            return f"Error: File not found: {file_path}"
-        except Exception as e:
-            return f"Error replacing text in file: {str(e)}"
-
-    def _webfetch(self, args: Dict[str, Any]) -> str:
-        """Fetch a webpage using curl and return its content."""
-        url = args.get("url", "")
-        limit = args.get("limit", 1000)  # Default to 1000 lines
-
-        if not url:
-            return "Error: No URL provided"
-
-        # Use curl to fetch the webpage with a timeout, capturing raw output
-        result = subprocess.run(
-            ["curl", "-L", "--max-time", "30", url],
-            capture_output=True,
-            timeout=35,  # Slightly longer than curl timeout
-        )
-
-        # Try to decode with utf-8, then fall back to latin-1 (which rarely fails)
-        try:
-            content = result.stdout.decode("utf-8")
-        except UnicodeDecodeError:
-            logger.warning(f"UTF-8 decoding failed for {url}. Falling back to latin-1.")
-            content = result.stdout.decode("latin-1", errors="replace")
-
-        if result.returncode != 0:
-            # Try to decode stderr for a better error message
-            try:
-                stderr = result.stderr.decode("utf-8", errors="replace")
-            except:
-                stderr = repr(result.stderr)
-
-            error_msg = (
-                f"Error fetching URL (curl return code {result.returncode}): {stderr}"
-            )
-
-            # If we have content despite the error, include it
-            if content.strip():
-                return f"{error_msg}\n\nContent retrieved:\n{content}"
-            else:
-                return error_msg
-
-        # Truncate the content by lines if limit is specified
-        if limit is not None and isinstance(limit, int) and limit > 0:
-            lines = content.split("\n")
-            if len(lines) > limit:
-                content = "\n".join(lines[:limit])
-                content += f"\n\n[Content truncated at {limit} lines. Original had {len(lines)} lines.]"
-
-        # Return the content (truncated if limit was provided)
-        return content
-
-    async def _task(self, args: Dict[str, Any]) -> str:
-        """Spawn a new subagent task using the centralized SubagentManager."""
-        if not self.subagent_manager:
-            return "Error: Subagent management not available"
-
-        description = args.get("description", "Investigation task")
-        prompt = args.get("prompt", "")
-        context = args.get("context", "")
-        model = args.get("model", None)  # None means inherit from main agent
-
-        if not prompt:
-            return "Error: prompt is required"
-
-        # Add context to prompt if provided
-        full_prompt = prompt
-        if context:
-            full_prompt += f"\n\nAdditional context: {context}"
-
-        try:
-            # If no model specified, detect and use the current running model
-            if model is None:
-                model = self._get_current_runtime_model()
-
-            # Track active count before and after spawning
-            initial_count = self.subagent_manager.get_active_count()
-            task_id = await self.subagent_manager.spawn_subagent(
-                description, full_prompt, model=model
-            )
-            final_count = self.subagent_manager.get_active_count()
-
-            # Display spawn confirmation with active count and model info
-            active_info = (
-                f" (Now {final_count} active subagents)" if final_count > 1 else ""
-            )
-            model_info = (
-                f" using {model}" if model else " (inheriting main agent model)"
-            )
-            return f"Spawned subagent task: {task_id}\nDescription: {description}\nModel: {model_info}{active_info}\nTask is running in the background - output will appear in the chat as it becomes available."
-        except Exception as e:
-            return f"Error spawning subagent: {e}"
-
-    def _task_status(self, args: Dict[str, Any]) -> str:
-        """Check the status of running subagent tasks using SubagentManager."""
-        if not self.subagent_manager:
-            return "Subagent management not available"
-
-        task_id = args.get("task_id", None)
-
-        if task_id:
-            # Check specific task
-            if task_id not in self.subagent_manager.subagents:
-                return f"Task {task_id} not found."
-
-            subagent = self.subagent_manager.subagents[task_id]
-            status = "Completed" if subagent.completed else "Running"
-            runtime = time.time() - subagent.start_time
-
-            result = f"""Task Status: {task_id}
-Description: {subagent.description}
-Status: {status}
-Runtime: {runtime:.2f} seconds"""
-
-            if subagent.completed:
-                result += f"\nResult available: {subagent.result is not None}"
-
-            return result
-        else:
-            # Check all tasks
-            subagents = self.subagent_manager.subagents
-            if not subagents:
-                return "No tasks are currently running."
-
-            result = f"Task Status Summary ({len(subagents)} tasks):\n"
-            for tid, subagent in subagents.items():
-                status = "Completed" if subagent.completed else "Running"
-                runtime = time.time() - subagent.start_time
-                result += f"\n{tid}: {subagent.description} - {status} ({runtime:.1f}s)"
-
-            return result
-
-    def _task_results(self, args: Dict[str, Any]) -> str:
-        """Retrieve the results and summaries from completed subagent tasks using SubagentManager."""
-        try:
-            if not self.subagent_manager:
-                return "Subagent management not available"
-
-            include_running = args.get("include_running", False)
-            clear_after_retrieval = args.get("clear_after_retrieval", True)
-
-            subagents = self.subagent_manager.subagents
-            if not subagents:
-                return "No tasks found."
-
-            # Count tasks
-            task_count = len(subagents)
-            completed_count = sum(
-                1 for subagent in subagents.values() if subagent.completed
-            )
-            running_count = task_count - completed_count
-
-            result_parts = [
-                f"=== TASK RESULTS SUMMARY ===",
-                f"Total tasks: {task_count}",
-                f"Completed: {completed_count}",
-                f"Running: {running_count}",
-                "",
-            ]
-
-            # Show completed tasks
-            if completed_count > 0:
-                result_parts.append("=== COMPLETED TASKS ===")
-                for task_id, subagent in subagents.items():
-                    if not subagent.completed:
-                        continue
-
-                    runtime = time.time() - subagent.start_time
-                    result_parts.append(
-                        f"\n{task_id}: {subagent.description} - ✅ Completed ({runtime:.2f}s)"
-                    )
-
-                    if subagent.result:
-                        result_parts.append(f"Result: {subagent.result}")
-
-            # Show running tasks if requested
-            if include_running and running_count > 0:
-                result_parts.append("\n=== RUNNING TASKS ===")
-                for task_id, subagent in subagents.items():
-                    if subagent.completed:
-                        continue
-
-                    runtime = time.time() - subagent.start_time
-                    result_parts.append(
-                        f"\n{task_id}: {subagent.description} - ⏳ Running ({runtime:.2f}s)"
-                    )
-
-            # Clear completed tasks if requested
-            if clear_after_retrieval and completed_count > 0:
-                completed_task_ids = [
-                    tid for tid, subagent in subagents.items() if subagent.completed
-                ]
-                for task_id in completed_task_ids:
-                    del self.subagent_manager.subagents[task_id]
-                result_parts.append(
-                    f"\n--- {len(completed_task_ids)} completed tasks cleared from memory ---"
-                )
-
-            return "\n".join(result_parts)
-
-        except Exception as e:
-            logger.error(f"Error in _task_results: {e}")
-            import traceback
-
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            return f"Error retrieving task results: {str(e)}"
 
     async def start_mcp_server(self, server_name: str, server_config) -> bool:
         """Start and connect to an MCP server using FastMCP."""
@@ -676,56 +316,15 @@ Runtime: {runtime:.2f} seconds"""
             await self.subagent_manager.terminate_all()
 
     # Centralized Subagent Management Methods
-    def _handle_subagent_permission_request(self, message, task_id):
-        """Handle permission request from subagent."""
-        try:
-            import asyncio
-            import threading
-
-            # Get request details from message data
-            request_id = message.data.get("request_id")
-            response_file = message.data.get("response_file")
-            prompt_text = message.content
-
-            if not request_id or not response_file:
-                logger.error(
-                    "Invalid permission request from subagent: missing request_id or response_file"
-                )
-                return
-
-            # Display the permission request to user
-            print(f"\n🤖 [SUBAGENT-{task_id}] {prompt_text}", end="", flush=True)
-
-            # Get user input
-            input_handler = getattr(self, "_input_handler", None)
-            if input_handler:
-                try:
-                    # Get user response
-                    response = input_handler.get_input("")
-                    if response is None:
-                        response = "n"  # Default to deny if interrupted
-                except Exception as e:
-                    logger.error(
-                        f"Error getting user input for subagent permission: {e}"
-                    )
-                    response = "n"  # Default to deny on error
-            else:
-                # No input handler, default to deny
-                response = "n"
-
-            # Write response to temp file for subagent to read
-            try:
-                with open(response_file, "w") as f:
-                    f.write(response)
-            except Exception as e:
-                logger.error(f"Error writing permission response: {e}")
-
-        except Exception as e:
-            logger.error(f"Error handling subagent permission request: {e}")
 
     def _on_subagent_message(self, message):
         """Callback for when a subagent message is received - display during yield period."""
         try:
+            # Update timeout tracking - reset timer whenever we receive any message
+            import time
+
+            self.last_subagent_message_time = time.time()
+
             # Get task_id for identification (if available in message data)
             task_id = (
                 message.data.get("task_id", "unknown")
@@ -743,7 +342,9 @@ Runtime: {runtime:.2f} seconds"""
                 formatted = f"✅ [SUBAGENT-{task_id}] Result: {message.content}"
             elif message.type == "permission_request":
                 # Handle permission request from subagent
-                self._handle_subagent_permission_request(message, task_id)
+                self.subagent_coordinator.handle_subagent_permission_request(
+                    message, task_id
+                )
                 return  # Don't display permission requests, handle them directly
             else:
                 formatted = f"[SUBAGENT-{task_id} {message.type}] {message.content}"
@@ -752,7 +353,9 @@ Runtime: {runtime:.2f} seconds"""
             # This ensures clean separation between main agent and subagent output
             if self.subagent_manager and self.subagent_manager.get_active_count() > 0:
                 # Subagents are active - display immediately during yield period
-                self._display_subagent_message_immediately(formatted, message.type)
+                self.subagent_coordinator.display_subagent_message_immediately(
+                    formatted, message.type
+                )
             else:
                 # No active subagents - just log for now (main agent controls display)
                 logger.info(
@@ -761,217 +364,6 @@ Runtime: {runtime:.2f} seconds"""
 
         except Exception as e:
             logger.error(f"Error handling subagent message: {e}")
-
-    def _display_subagent_message_immediately(self, formatted: str, message_type: str):
-        """Display subagent message immediately with proper line endings."""
-        try:
-            import sys
-            import termios
-
-            try:
-                # Check if we're in raw terminal mode
-                stdin_fd = sys.stdin.fileno()
-                current_attrs = termios.tcgetattr(stdin_fd)
-                in_raw_mode = not (current_attrs[3] & termios.ECHO) and not (
-                    current_attrs[3] & termios.ICANON
-                )
-
-                if in_raw_mode:
-                    # In raw mode, we need \r\n for proper line breaks
-                    # Move to beginning of line and add proper line endings
-                    formatted_with_crlf = formatted.replace("\n", "\r\n")
-                    output = f"\r\n{formatted_with_crlf}\r\n"
-                    sys.stderr.write(output)
-                    sys.stderr.flush()
-                else:
-                    # Normal mode - regular print is fine
-                    print(formatted, file=sys.stderr, flush=True)
-
-            except (OSError, termios.error):
-                # Terminal control not available - use regular print
-                print(formatted, file=sys.stderr, flush=True)
-
-            logger.debug(f"Displayed subagent message: {message_type}")
-        except Exception as e:
-            logger.error(f"Error displaying subagent message: {e}")
-
-    async def _collect_subagent_results(self):
-        """Wait for all subagents to complete and collect their results."""
-        if not self.subagent_manager:
-            return []
-
-        import time
-
-        results = []
-        max_wait_time = 300  # 5 minutes max wait
-        start_time = time.time()
-
-        # Wait for all active subagents to complete
-        while self.subagent_manager.get_active_count() > 0:
-            if time.time() - start_time > max_wait_time:
-                logger.error("Timeout waiting for subagents to complete")
-                break
-            await asyncio.sleep(0.5)
-
-        # Collect results from completed subagents
-        logger.info(
-            f"Checking {len(self.subagent_manager.subagents)} subagents for results"
-        )
-        for task_id, subagent in self.subagent_manager.subagents.items():
-            logger.info(
-                f"Subagent {task_id}: completed={subagent.completed}, has_result={subagent.result is not None}"
-            )
-            if subagent.completed and subagent.result:
-                results.append(
-                    {
-                        "task_id": task_id,
-                        "description": subagent.description,
-                        "content": subagent.result,
-                        "runtime": time.time() - subagent.start_time,
-                    }
-                )
-                logger.info(
-                    f"Collected result from {task_id}: {len(subagent.result)} chars"
-                )
-            elif subagent.completed:
-                logger.warning(f"Subagent {task_id} completed but has no result stored")
-            else:
-                logger.info(f"Subagent {task_id} not yet completed")
-
-        logger.info(
-            f"Collected {len(results)} results from {len(self.subagent_manager.subagents)} subagents"
-        )
-
-        # Clean up completed subagents that provided results
-        if results:
-            completed_task_ids = [result["task_id"] for result in results]
-            for task_id in completed_task_ids:
-                if task_id in self.subagent_manager.subagents:
-                    del self.subagent_manager.subagents[task_id]
-                    logger.info(f"Cleaned up completed subagent: {task_id}")
-
-            # Also clear any accumulated messages in the queue since they've been integrated
-            if self.subagent_message_queue:
-                # Clear any remaining messages in the queue
-                try:
-                    while True:
-                        self.subagent_message_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-                logger.info("Cleared subagent message queue after collecting results")
-
-        return results
-
-    def _detect_task_tool_execution(self, tool_calls) -> bool:
-        """Detect if any task tools were executed that spawn subagents."""
-        for tool_call in tool_calls:
-            # Handle different tool call formats
-            tool_name = ""
-
-            if isinstance(tool_call, dict):
-                # Dict format (Gemini function calls)
-                if "function" in tool_call:
-                    # DeepSeek-style dict format
-                    tool_name = tool_call["function"].get("name", "")
-                elif "name" in tool_call:
-                    # Simple dict format
-                    tool_name = tool_call["name"]
-                else:
-                    # Gemini function call dict format
-                    tool_name = getattr(tool_call, "name", "")
-            elif hasattr(tool_call, "function"):
-                # SimpleNamespace with function attribute (DeepSeek)
-                tool_name = tool_call.function.name
-            elif hasattr(tool_call, "name"):
-                # SimpleNamespace with direct name attribute (Gemini)
-                tool_name = tool_call.name
-            else:
-                # Fallback - try to get name from any available attribute
-                tool_name = getattr(tool_call, "name", "")
-
-            if "task" in tool_name:
-                return True
-
-        return False
-
-    def _create_subagent_continuation_message(
-        self, original_request: str, subagent_results: List[Dict]
-    ) -> Dict:
-        """Create standardized continuation message with subagent results."""
-        results_summary = "\n".join(
-            [
-                f"**Subagent Task: {result['description']}**\n{result['content']}"
-                for result in subagent_results
-            ]
-        )
-
-        return {
-            "role": "user",
-            "content": f"""I requested: {original_request}
-
-You spawned subagents and they have completed their tasks. Here are the results:
-
-{results_summary}
-
-Please provide your final analysis based on these subagent results. Do not spawn any new subagents - just analyze the provided data.""",
-        }
-
-    async def _handle_subagent_coordination(
-        self,
-        tool_calls,
-        original_messages: List[Dict],
-        interactive: bool = True,
-        streaming_mode: bool = False,
-    ) -> Optional[Dict]:
-        """
-        Centralized subagent coordination logic.
-
-        Returns None if no subagents were spawned, or a continuation message dict if subagents completed.
-        """
-        if not self.subagent_manager:
-            return None
-
-        # Check if any task tools were executed
-        task_tools_executed = self._detect_task_tool_execution(tool_calls)
-
-        if not (task_tools_executed and self.subagent_manager.get_active_count() > 0):
-            return None
-
-        # Output appropriate message for subagent spawning
-        interrupt_msg = (
-            "\n🔄 Subagents spawned - interrupting to wait for completion..."
-        )
-        if streaming_mode:
-            # For streaming mode, this should be yielded by the caller
-            pass  # Caller will handle yielding
-        elif interactive:
-            print(interrupt_msg, flush=True)
-
-        # Wait for all subagents to complete and collect results
-        subagent_results = await self._collect_subagent_results()
-
-        if subagent_results:
-            completion_msg = f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results..."
-            if streaming_mode:
-                # For streaming mode, this should be yielded by the caller
-                pass  # Caller will handle yielding
-            elif interactive:
-                print(completion_msg, flush=True)
-
-            # Create continuation message with subagent results
-            original_request = (
-                original_messages[-1]["content"]
-                if original_messages
-                else "your request"
-            )
-            continuation_message = self._create_subagent_continuation_message(
-                original_request, subagent_results
-            )
-
-            return continuation_message
-        else:
-            logger.warning("No results collected from subagents")
-            return None
 
     async def execute_function_calls(
         self,
@@ -997,7 +389,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
         text_buffer = getattr(self, "_text_buffer", "")
         if text_buffer.strip() and interactive:
             # Format and display the buffered text before showing tool execution
-            formatted_response = self.format_markdown(text_buffer)
+            formatted_response = self.formatter.format_markdown(text_buffer)
             # Replace newlines with \r\n for proper terminal handling
             formatted_response = formatted_response.replace("\n", "\r\n")
             print(f"\r\x1b[K\r\nAssistant: {formatted_response}")
@@ -1039,7 +431,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
             tool_info_list.append((i, tool_name, arguments))
 
             # Display tool execution step
-            tool_execution_msg = self.display_tool_execution_step(
+            tool_execution_msg = self.formatter.display_tool_execution_step(
                 i, tool_name, arguments, self.is_subagent, interactive=interactive
             )
             if interactive and not streaming_mode:
@@ -1097,7 +489,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
                     function_results.append(result_content)
 
                     # Use unified tool result display
-                    tool_result_msg = self.display_tool_execution_result(
+                    tool_result_msg = self.formatter.display_tool_execution_result(
                         tool_result,
                         not tool_success,
                         self.is_subagent,
@@ -1350,7 +742,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
     def _create_system_prompt(self, for_first_message: bool = False) -> str:
         """Create a centralized system prompt with LLM-specific customization points."""
         # Build the system prompt using centralized template system
-        base_prompt = self._build_base_system_prompt()
+        base_prompt = self.system_prompt_builder.build_base_system_prompt()
 
         # Add LLM-specific customizations
         llm_customizations = self._get_llm_specific_instructions()
@@ -1361,97 +753,6 @@ Please provide your final analysis based on these subagent results. Do not spawn
             final_prompt = base_prompt
 
         return final_prompt
-
-    def _build_base_system_prompt(self) -> str:
-        """Build the base system prompt template - centralized and reusable."""
-        tool_descriptions = []
-
-        for tool_key, tool_info in self.available_tools.items():
-            # Use the converted name format (with underscores)
-            converted_tool_name = tool_key.replace(":", "_")
-            description = tool_info["description"]
-            tool_descriptions.append(f"- **{converted_tool_name}**: {description}")
-
-        tools_text = (
-            "\n".join(tool_descriptions) if tool_descriptions else "No tools available"
-        )
-
-        # Customize prompt based on whether this is a subagent
-        if self.is_subagent:
-            agent_role = "You are a focused subagent responsible for executing a specific task efficiently."
-            subagent_strategy = """**CRITICAL SUBAGENT REQUIREMENTS:**
-- **Tool-First Approach:** You MUST use tools to gather information and perform actions - do NOT just describe what you would do
-- **Take Action:** When a task requires running commands, reading files, or analysis, immediately use the appropriate tools
-- **Cannot Spawn Subagents:** You are already a subagent - you cannot create other subagents (no builtin_task calls)
-- **Must Emit Summary:** You MUST end your response by calling `emit_result` with a summary of your findings and results
-- **Be Comprehensive:** Include all relevant details, data, and analysis in your emit_result summary
-- **Focus on Execution:** Don't ask questions or seek clarification - use tools to investigate and provide definitive answers
-
-**Subagent Workflow:**
-1. **Understand the task:** Analyze what you've been asked to do
-2. **Use tools:** Execute the necessary tool calls to gather information and perform actions  
-3. **Analyze results:** Process the tool outputs to understand what you've found
-4. **Emit summary:** Call `emit_result` with a comprehensive summary of your findings, conclusions, and any recommendations"""
-        else:
-            agent_role = "You are a top-tier autonomous software development agent. You are in control and responsible for completing the user's request."
-            subagent_strategy = """**Context Management & Subagent Strategy:**
-- **Preserve your context:** Your context window is precious - don't waste it on tasks that can be delegated.
-- **Delegate context-heavy tasks:** Use `builtin_task` to spawn subagents for tasks that would consume significant context:
-  - Large file analysis or searches across multiple files
-  - Complex investigations requiring reading many files
-  - Running multiple commands or gathering system information
-  - Any task that involves reading >200 lines of code
-- **Parallel execution:** For complex investigations requiring multiple independent tasks, spawn multiple subagents simultaneously by making multiple `builtin_task` calls in the same response.
-- **Stay focused:** Keep your main context for planning, coordination, and final synthesis of results.
-- **Automatic coordination:** After spawning subagents, the main agent automatically pauses, waits for all subagents to complete, then restarts with their combined results.
-- **Do not poll status:** Avoid calling `builtin_task_status` repeatedly - the system handles coordination automatically.
-- **Single response spawning:** To spawn multiple subagents, include all `builtin_task` calls in one response, not across multiple responses.
-
-**When to Use Subagents:**
-✅ **DO delegate:** File searches, large code analysis, running commands, gathering information
-❌ **DON'T delegate:** Simple edits, single file reads <50 lines, quick tool calls"""
-
-        # Base system prompt template
-        base_prompt = f"""{agent_role}
-
-**Mission:** Use the available tools to solve the user's request.
-
-**Guiding Principles:**
-- **Ponder, then proceed:** Briefly outline your plan before you act. State your assumptions.
-- **Bias for action:** You are empowered to take initiative. Do not ask for permission, just do the work.
-- **Problem-solve:** If a tool fails, analyze the error and try a different approach.
-- **Break large changes into smaller chunks:** For large code changes, divide the work into smaller, manageable tasks to ensure clarity and reduce errors.
-
-**File Reading Strategy:**
-- **Be surgical:** Do not read entire files at once. It is a waste of your context window.
-- **Locate, then read:** Use tools like `grep` or `find` to locate the specific line numbers or functions you need to inspect.
-- **Read in chunks:** Read files in smaller, targeted chunks of 50-100 lines using the `offset` and `limit` parameters in the `read_file` tool.
-- **Full reads as a last resort:** Only read a full file if you have no other way to find what you are looking for.
-
-**File Editing Workflow:**
-1.  **Read first:** Always read a file before you try to edit it, following the file reading strategy above.
-2.  **Greedy Grepping:** Always `grep` or look for a small section around where you want to do an edit. This is faster and more reliable than reading the whole file.
-3.  **Use `replace_in_file`:** For all file changes, use `builtin_replace_in_file` to replace text in files.
-4.  **Chunk changes:** Break large edits into smaller, incremental changes to maintain control and clarity.
-
-**Todo List Workflow:**
-- **Use the Todo list:** Use `builtin_todo_read` and `builtin_todo_write` to manage your tasks.
-- **Start with a plan:** At the beginning of your session, create a todo list to outline your steps.
-- **Update as you go:** As you complete tasks, update the todo list to reflect your progress.
-
-{subagent_strategy}
-
-**Workflow:**
-1.  **Reason:** Outline your plan.
-2.  **Act:** Use one or more tool calls to execute your plan. Use parallel tool calls when it makes sense.
-3.  **Respond:** When you have completed the request, provide the final answer to the user.
-
-**Available Tools:**
-{tools_text}
-
-You are the expert. Complete the task."""
-
-        return base_prompt
 
     def _get_llm_specific_instructions(self) -> str:
         """Override in subclasses to add LLM-specific instructions.
@@ -1557,90 +858,6 @@ You are the expert. Complete the task."""
     # Centralized Agent.md Integration
     # ===============================
 
-    def _get_agent_md_content(self) -> str:
-        """Centralized Agent.md content retrieval with robust path resolution."""
-        try:
-            import os
-
-            # Try multiple path resolution strategies for different deployment scenarios
-            current_file = os.path.abspath(__file__)
-
-            # Strategy 1: cli_agent/core/base_agent.py -> project root (2 levels up)
-            project_root_1 = os.path.dirname(
-                os.path.dirname(os.path.dirname(current_file))
-            )
-            agent_md_path_1 = os.path.join(project_root_1, "AGENT.md")
-
-            # Strategy 2: Same directory as current file
-            current_dir = os.path.dirname(current_file)
-            agent_md_path_2 = os.path.join(current_dir, "AGENT.md")
-
-            # Strategy 3: Working directory
-            agent_md_path_3 = "AGENT.md"
-
-            # Try paths in order of preference
-            for path in [agent_md_path_1, agent_md_path_2, agent_md_path_3]:
-                if os.path.exists(path):
-                    with open(path, "r", encoding="utf-8") as f:
-                        content = f.read().strip()
-                        logger.debug(f"Successfully read AGENT.md from {path}")
-                        return content
-
-            logger.warning("AGENT.md not found in any expected location")
-            return ""
-
-        except Exception as e:
-            logger.error(f"Error reading AGENT.md: {e}")
-            return ""
-
-    def _enhance_first_message_with_agent_md(
-        self, messages: List[Dict[str, Any]], is_first_message: bool = False
-    ) -> List[Dict[str, Any]]:
-        """Centralized Agent.md prepending with consistent formatting."""
-        if not is_first_message or not messages:
-            return messages
-
-        # Find first user message
-        first_user_idx = None
-        for i, msg in enumerate(messages):
-            if msg.get("role") == "user":
-                first_user_idx = i
-                break
-
-        if first_user_idx is None:
-            return messages
-
-        # Get Agent.md content
-        agent_md_content = self._get_agent_md_content()
-        if not agent_md_content:
-            return messages
-
-        # Create enhanced message copy
-        enhanced_messages = messages.copy()
-        original_content = enhanced_messages[first_user_idx]["content"]
-
-        # Apply consistent formatting
-        enhanced_content = f"""<AGENT_ARCHITECTURE_CONTEXT>
-{agent_md_content}
-</AGENT_ARCHITECTURE_CONTEXT>
-
-{original_content}"""
-
-        enhanced_messages[first_user_idx] = {
-            **enhanced_messages[first_user_idx],
-            "content": enhanced_content,
-        }
-
-        logger.info("Enhanced first user message with AGENT.md content")
-        return enhanced_messages
-
-    # Legacy method for backward compatibility
-    def _prepend_agent_md_to_first_message(
-        self, messages: List[Dict[str, Any]], is_first_message: bool = False
-    ) -> List[Dict[str, Any]]:
-        """Legacy method - redirects to centralized implementation."""
-        return self._enhance_first_message_with_agent_md(messages, is_first_message)
-
     # Centralized Text Processing Utilities
     # ====================================
 
@@ -1651,105 +868,6 @@ You are the expert. Complete the task."""
         Must be implemented by subclasses to handle their specific tool call formats.
         """
         pass
-
-    def _format_chunk_safely(self, chunk: str) -> str:
-        """Apply basic formatting to streaming chunks without losing spaces."""
-        return self.formatter.format_chunk_safely(chunk)
-
-    def _apply_simple_formatting(self, chunk: str) -> str:
-        """Apply simple visible formatting that definitely works."""
-        return self.formatter._apply_simple_formatting(chunk)
-
-    def _apply_rich_console_formatting(self, chunk: str) -> str:
-        """Use Rich Console to apply formatting directly to stdout."""
-        return self.formatter._apply_rich_console_formatting(chunk)
-
-    def _apply_direct_ansi_formatting(self, chunk: str) -> str:
-        """Apply ANSI formatting with proper terminal handling."""
-        return self.formatter._apply_direct_ansi_formatting(chunk)
-
-    def _chunk_has_complete_markdown(self, chunk: str) -> bool:
-        """Check if chunk contains complete markdown patterns that are safe to format."""
-        return self.formatter._chunk_has_complete_markdown(chunk)
-
-    def _apply_basic_markdown_to_text(self, text, chunk: str):
-        """Apply basic markdown styling to Rich Text object."""
-        return self.formatter._apply_basic_markdown_to_text(text, chunk)
-
-    def _find_safe_markdown_boundary(self, text: str, start_pos: int) -> int:
-        """Find a safe position to apply markdown formatting without breaking syntax."""
-        return self.formatter._find_safe_markdown_boundary(text, start_pos)
-
-    def format_markdown(self, text: str) -> str:
-        """Format markdown text for terminal display using Rich."""
-        return self.formatter.format_markdown(text)
-
-    def _basic_markdown_format(self, text: str) -> str:
-        """Basic fallback markdown formatting."""
-        return self.formatter._basic_markdown_format(text)
-
-    def display_tool_execution_start(
-        self, tool_count: int, is_subagent: bool = False, interactive: bool = True
-    ) -> str:
-        """Display tool execution start message."""
-        return self.formatter.display_tool_execution_start(
-            tool_count, is_subagent, interactive
-        )
-
-    def display_tool_execution_step(
-        self,
-        step_num: int,
-        tool_name: str,
-        arguments: dict,
-        is_subagent: bool = False,
-        interactive: bool = True,
-    ) -> str:
-        """Display individual tool execution step."""
-        return self.formatter.display_tool_execution_step(
-            step_num, tool_name, arguments, is_subagent, interactive
-        )
-
-    def display_tool_execution_result(
-        self,
-        result: str,
-        is_error: bool = False,
-        is_subagent: bool = False,
-        interactive: bool = True,
-    ) -> str:
-        """Display tool execution result."""
-        return self.formatter.display_tool_execution_result(
-            result, is_error, is_subagent, interactive
-        )
-
-    def display_tool_processing(
-        self, is_subagent: bool = False, interactive: bool = True
-    ) -> str:
-        """Display tool processing message."""
-        return self.formatter.display_tool_processing(is_subagent, interactive)
-
-    def estimate_tokens(self, text: str) -> int:
-        """Rough estimation of tokens (1 token ≈ 4 characters for most models)."""
-        return self.token_manager.estimate_tokens(text)
-
-    def count_conversation_tokens(self, messages: List[Dict[str, Any]]) -> int:
-        """Count estimated tokens in the conversation."""
-        return self.token_manager.count_conversation_tokens(messages)
-
-    def get_token_limit(self) -> int:
-        """Get the context token limit for the current model."""
-        return self.token_manager.get_token_limit()
-
-    def should_compact(self, messages: List[Dict[str, Any]]) -> bool:
-        """Determine if conversation should be compacted."""
-        return self.token_manager.should_compact(messages)
-
-    async def compact_conversation(
-        self, messages: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """Create a compact summary of the conversation to preserve context while reducing tokens."""
-        return await self.token_manager.compact_conversation(
-            messages, generate_response_func=self.generate_response
-        )
 
     async def generate_response(
         self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None
@@ -1900,7 +1018,7 @@ You are the expert. Complete the task."""
             if interactive and hasattr(self, "_text_buffer"):
                 text_buffer = getattr(self, "_text_buffer", "")
                 if text_buffer.strip():
-                    formatted_response = self.format_markdown(text_buffer)
+                    formatted_response = self.formatter.format_markdown(text_buffer)
                     formatted_response = formatted_response.replace("\n", "\r\n")
                     print(f"\r\x1b[K\r\nAssistant: {formatted_response}")
                     self._text_buffer = ""
@@ -1908,7 +1026,7 @@ You are the expert. Complete the task."""
             # Display tool execution start
             if interactive and not self.is_subagent:
                 print(
-                    f"\r\n{self.display_tool_execution_start(len(tool_calls), self.is_subagent, interactive=True)}"
+                    f"\r\n{self.formatter.display_tool_execution_start(len(tool_calls), self.is_subagent, interactive=True)}"
                 )
 
             # Execute the tools (this will raise ToolDeniedReturnToPrompt if denied)
@@ -2272,9 +1390,14 @@ You are the expert. Complete the task."""
 
                 # Check if this is the first message and enhance with AGENT.md if so
                 is_first_message = len(messages) == 1
-                enhanced_messages = self._enhance_first_message_with_agent_md(
-                    messages, is_first_message
-                )
+                if is_first_message:
+                    enhanced_messages = (
+                        self.system_prompt_builder.enhance_first_message_with_agent_md(
+                            messages
+                        )
+                    )
+                else:
+                    enhanced_messages = messages
 
                 # Reset tool execution state for new message
                 self._tool_execution_started = False
@@ -2391,8 +1514,10 @@ You are the expert. Complete the task."""
 
                                     # Display buffered pre-tool text if any
                                     if current_buffer.strip():
-                                        formatted_response = self.format_markdown(
-                                            current_buffer
+                                        formatted_response = (
+                                            self.formatter.format_markdown(
+                                                current_buffer
+                                            )
                                         )
                                         display_response = formatted_response.replace(
                                             "\n", "\r\n"
@@ -2477,7 +1602,9 @@ You are the expert. Complete the task."""
                             else:
                                 # Handle any non-string chunks if needed
                                 chunk_str = str(chunk)
-                                formatted_chunk = self._format_chunk_safely(chunk_str)
+                                formatted_chunk = (
+                                    self.formatting_utils.format_chunk_safely(chunk_str)
+                                )
                                 display_chunk = formatted_chunk.replace("\n", "\r\n")
                                 print(display_chunk, end="", flush=True)
                                 full_response += chunk_str
@@ -2491,7 +1618,7 @@ You are the expert. Complete the task."""
                             remaining_text_buffer = getattr(self, "_text_buffer", "")
                             if remaining_text_buffer.strip():
                                 # Format and display the remaining buffered text
-                                formatted_response = self.format_markdown(
+                                formatted_response = self.formatter.format_markdown(
                                     remaining_text_buffer
                                 )
                                 display_response = formatted_response.replace(
@@ -2505,7 +1632,9 @@ You are the expert. Complete the task."""
                                 print(
                                     f"\033[1A\033[KAssistant: ", end=""
                                 )  # Move up one line, clear it, write "Assistant: "
-                                formatted_response = self.format_markdown(full_response)
+                                formatted_response = self.formatter.format_markdown(
+                                    full_response
+                                )
                                 print(formatted_response)
                                 sys.stdout.flush()
                             else:
@@ -2522,7 +1651,7 @@ You are the expert. Complete the task."""
                         messages.append({"role": "assistant", "content": full_response})
                 else:
                     # Non-streaming response with markdown formatting
-                    formatted_response = self.format_markdown(str(response))
+                    formatted_response = self.formatter.format_markdown(str(response))
                     print(f"\nAssistant: {formatted_response}")
                     messages.append({"role": "assistant", "content": str(response)})
 
@@ -2798,7 +1927,7 @@ You are the expert. Complete the task."""
         if interactive and response_content and function_calls:
             text_before_tools = self._extract_text_before_tool_calls(response_content)
             if text_before_tools:
-                formatted_text = self.format_markdown(text_before_tools)
+                formatted_text = self.formatter.format_markdown(text_before_tools)
                 print(f"\n{formatted_text}", flush=True)
                 # Use only the extracted text for conversation history
                 response_content = text_before_tools
@@ -2836,11 +1965,13 @@ You are the expert. Complete the task."""
                 raise
 
         # Handle subagent coordination using existing centralized logic
-        continuation_message = await self._handle_subagent_coordination(
-            tool_calls,
-            original_messages,
-            interactive=interactive,
-            streaming_mode=streaming_mode,
+        continuation_message = (
+            await self.subagent_coordinator.handle_subagent_coordination(
+                tool_calls,
+                original_messages,
+                interactive=interactive,
+                streaming_mode=streaming_mode,
+            )
         )
 
         if continuation_message:

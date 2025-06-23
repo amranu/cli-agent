@@ -766,3 +766,22 @@ class MCPDeepseekHost(BaseMCPAgent):
                     raise context.tool_denial_exception
 
         return wrapper()
+
+    async def chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        stream: bool = True,
+        interactive: bool = True,
+    ) -> Union[str, Any]:
+        """Chat completion method for compatibility with agent.py."""
+        # Store original stream setting
+        original_stream = getattr(self, "stream", True)
+
+        # Temporarily set stream based on parameter
+        self.stream = stream
+
+        try:
+            return await self.generate_response(messages)
+        finally:
+            # Restore original stream setting
+            self.stream = original_stream
