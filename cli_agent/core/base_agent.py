@@ -2037,6 +2037,13 @@ You are the expert. Complete the task."""
                                 # Check if this chunk indicates tool processing is complete
                                 tool_processing_end = (
                                     "⚙️ Processing tool results..." in chunk
+                                    or "✅ Result:" in chunk
+                                    or "❌ Error:" in chunk
+                                    or ("Tool " in chunk and "SUCCESS:" in chunk)
+                                    or ("Tool " in chunk and "FAILED:" in chunk)
+                                    or chunk.strip().endswith(
+                                        "FAILED: Tool execution cancelled"
+                                    )
                                 )
 
                                 if tool_start and not tool_execution_started:
@@ -2073,6 +2080,52 @@ You are the expert. Complete the task."""
                                     self._tool_execution_started = False
                                     self._text_buffer = ""
                                     continue  # Don't process this chunk again below
+
+                                # Fallback: if we're in tool execution mode but see regular text patterns,
+                                # assume tool execution is complete and reset to buffering mode
+                                if (
+                                    tool_execution_started
+                                    and not tool_start
+                                    and not tool_processing_end
+                                ):
+                                    # Check if this looks like regular response text (not tool-related)
+                                    regular_text_patterns = [
+                                        chunk.strip().startswith(
+                                            (
+                                                "I'll",
+                                                "I will",
+                                                "I can",
+                                                "I need",
+                                                "Let me",
+                                                "Now",
+                                                "The",
+                                                "This",
+                                                "Based on",
+                                            )
+                                        ),
+                                        len(chunk.strip()) > 20
+                                        and not any(
+                                            pattern in chunk
+                                            for pattern in [
+                                                "Tool",
+                                                "Executing",
+                                                "🔧",
+                                                "✅",
+                                                "❌",
+                                                "function",
+                                                "arguments",
+                                            ]
+                                        ),
+                                        chunk.count(".") > 0
+                                        and chunk.count(" ")
+                                        > 5,  # Likely sentence structure
+                                    ]
+
+                                    if any(regular_text_patterns):
+                                        # We're seeing regular text, reset tool execution state
+                                        tool_execution_started = False
+                                        self._tool_execution_started = False
+                                        self._text_buffer = ""
 
                                 # Output behavior based on current mode
                                 if tool_execution_started:

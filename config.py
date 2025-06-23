@@ -22,7 +22,7 @@ class DeepseekConfig(BaseModel):
     api_key: str
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-chat"  # or "deepseek-reasoner"
-    temperature: float = 0.5
+    temperature: float = 0.6
     max_tokens: int = 4096
     stream: bool = True
     keepalive_interval: float = 10.0  # Keep-alive interval in seconds
@@ -53,7 +53,7 @@ class HostConfig(BaseSettings):
     # Deepseek configuration
     deepseek_api_key: str = Field(default="", alias="DEEPSEEK_API_KEY")
     deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
-    deepseek_temperature: float = Field(default=0.7, alias="DEEPSEEK_TEMPERATURE")
+    deepseek_temperature: float = Field(default=0.6, alias="DEEPSEEK_TEMPERATURE")
     deepseek_max_tokens: int = Field(default=4096, alias="DEEPSEEK_MAX_TOKENS")
     deepseek_stream: bool = Field(default=True, alias="DEEPSEEK_STREAM")
 
@@ -308,7 +308,7 @@ def create_sample_env():
     sample_content = """# Deepseek API Configuration
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
 DEEPSEEK_MODEL=deepseek-chat
-DEEPSEEK_TEMPERATURE=0.7
+DEEPSEEK_TEMPERATURE=0.6
 DEEPSEEK_MAX_TOKENS=4096
 DEEPSEEK_STREAM=true
 
