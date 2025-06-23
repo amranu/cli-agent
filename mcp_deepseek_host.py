@@ -712,9 +712,9 @@ class MCPDeepseekHost(BaseMCPAgent):
 
                         yield "\n✅ Tool execution complete. Continuing...\n"
 
-                except ToolDeniedReturnToPrompt:
+                except ToolDeniedReturnToPrompt as e:
                     # Store the exception to raise after generator completes
-                    context.tool_denial_exception = ToolDeniedReturnToPrompt()
+                    context.tool_denial_exception = e
                     # yield "\nTool execution denied - returning to prompt.\n"
                     return  # Exit the generator
 

@@ -1223,7 +1223,10 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
 
                             # Indicate we're getting the follow-up response (via print to avoid LLM contamination)
                             # Skip output if in streaming JSON mode
-                            if not (hasattr(self, "streaming_json_callback") and self.streaming_json_callback):
+                            if not (
+                                hasattr(self, "streaming_json_callback")
+                                and self.streaming_json_callback
+                            ):
                                 print(
                                     f"\n\r\n\r{self.formatter.display_tool_processing(self.is_subagent, interactive=not self.is_subagent)}\n\r",
                                     flush=True,

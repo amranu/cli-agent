@@ -431,7 +431,10 @@ class BaseMCPAgent(ABC):
             tool_info_list.append((i, tool_name, arguments))
 
             # Display tool execution step (skip in streaming JSON mode)
-            if not (hasattr(self, "streaming_json_callback") and self.streaming_json_callback):
+            if not (
+                hasattr(self, "streaming_json_callback")
+                and self.streaming_json_callback
+            ):
                 tool_execution_msg = self.formatter.display_tool_execution_step(
                     i, tool_name, arguments, self.is_subagent, interactive=interactive
                 )
@@ -511,7 +514,10 @@ class BaseMCPAgent(ABC):
                         )
 
                     # Use unified tool result display (skip in streaming JSON mode)
-                    if not (hasattr(self, "streaming_json_callback") and self.streaming_json_callback):
+                    if not (
+                        hasattr(self, "streaming_json_callback")
+                        and self.streaming_json_callback
+                    ):
                         tool_result_msg = self.formatter.display_tool_execution_result(
                             tool_result,
                             not tool_success,
@@ -2092,7 +2098,7 @@ class BaseMCPAgent(ABC):
         # Skip output if in streaming JSON mode
         if hasattr(self, "streaming_json_callback") and self.streaming_json_callback:
             return
-            
+
         if not interactive or not tool_calls:
             return
 
