@@ -66,9 +66,11 @@ class ToolPermissionManager:
         """Load persistent session permissions from file."""
         # Skip loading if session permissions file is disabled
         if not self.config.session_permissions_file:
-            logger.info("Session permissions file disabled - starting with empty approvals")
+            logger.info(
+                "Session permissions file disabled - starting with empty approvals"
+            )
             return
-            
+
         try:
             permissions_file = Path(self.config.session_permissions_file)
             if permissions_file.exists():
@@ -86,7 +88,7 @@ class ToolPermissionManager:
         if not self.config.session_permissions_file:
             logger.info("Session permissions file disabled - not saving approvals")
             return
-            
+
         try:
             permissions_file = Path(self.config.session_permissions_file)
             permissions_file.parent.mkdir(parents=True, exist_ok=True)

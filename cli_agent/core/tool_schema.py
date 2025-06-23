@@ -60,22 +60,22 @@ class ToolSchemaManager:
         """Parse tool arguments from various formats into a dict."""
         if args is None:
             return {}
-        
+
         if isinstance(args, dict):
             return args
-        
+
         if isinstance(args, str):
             try:
                 return json.loads(args)
             except (json.JSONDecodeError, TypeError):
                 logger.warning(f"Failed to parse tool arguments as JSON: {args}")
                 return {}
-        
+
         # Try to convert other types to dict
         try:
-            if hasattr(args, '__dict__'):
+            if hasattr(args, "__dict__"):
                 return vars(args)
-            elif hasattr(args, 'items'):
+            elif hasattr(args, "items"):
                 return dict(args)
             else:
                 logger.warning(f"Unknown argument type: {type(args)}")
@@ -88,7 +88,7 @@ class ToolSchemaManager:
     def format_tool_arguments(args: Dict[str, Any]) -> str:
         """Format tool arguments as JSON string."""
         try:
-            return json.dumps(args, indent=None, separators=(',', ':'))
+            return json.dumps(args, indent=None, separators=(",", ":"))
         except (TypeError, ValueError) as e:
             logger.warning(f"Failed to format arguments as JSON: {e}")
             return "{}"
@@ -98,14 +98,14 @@ class ToolSchemaManager:
         """Validate that a tool schema is properly formatted."""
         if not isinstance(schema, dict):
             return False
-        
+
         # Basic schema validation - should have type and properties
-        if 'type' not in schema:
+        if "type" not in schema:
             return False
-        
-        if schema['type'] == 'object' and 'properties' not in schema:
+
+        if schema["type"] == "object" and "properties" not in schema:
             return False
-        
+
         return True
 
     @staticmethod
@@ -113,13 +113,13 @@ class ToolSchemaManager:
         """Extract required parameters from tool schema."""
         if not isinstance(schema, dict):
             return []
-        
-        return schema.get('required', [])
+
+        return schema.get("required", [])
 
     @staticmethod
     def get_tool_parameter_info(schema: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         """Extract parameter information from tool schema."""
-        if not isinstance(schema, dict) or 'properties' not in schema:
+        if not isinstance(schema, dict) or "properties" not in schema:
             return {}
-        
-        return schema['properties']
+
+        return schema["properties"]
