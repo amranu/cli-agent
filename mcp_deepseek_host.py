@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""This is the MCP host implementation that integrates with Deepseek's API."""
 """MCP Host implementation using Deepseek as the language model backend."""
 import asyncio
 import json
@@ -37,7 +36,8 @@ class MCPDeepseekHost(BaseMCPAgent):
 
         # Initialize Deepseek client with appropriate timeout for reasoner model
         timeout_seconds = (
-            600 if self.deepseek_config.model == "deepseek-reasoner" else 600
+            600 if self.deepseek_config.model == "deepseek-reasoner" 
+            else 600
         )
         self.deepseek_client = OpenAI(
             api_key=self.deepseek_config.api_key,
@@ -51,10 +51,12 @@ class MCPDeepseekHost(BaseMCPAgent):
 
     def _extract_text_before_tool_calls(self, content: str) -> str:
         """Extract any text that appears before tool calls in the response."""
-        import re
 
         # Pattern to find text before tool call markers
-        before_tool_pattern = r'^(.*?)(?=<｜tool▁calls▁begin｜>|<｜tool▁call▁begin｜>|```json\s*\{\s*"function"|```python\s*<｜tool▁calls▁begin｜>)'
+        before_tool_pattern = (
+            r'^(.*?)(?=<｜tool▁calls▁begin｜>|<｜tool▁call▁begin｜>'
+            r'|```json\s*\{\s*"function"|```python\s*<｜tool▁calls▁begin｜>)'
+        )
         match = re.search(before_tool_pattern, content, re.DOTALL)
 
         if match:
@@ -244,7 +246,7 @@ class MCPDeepseekHost(BaseMCPAgent):
     ) -> Union[str, Any]:
         """Handle non-streaming response from Deepseek."""
         from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
-        
+
         current_messages = original_messages.copy()
 
         # Debug log the raw response
@@ -337,7 +339,7 @@ class MCPDeepseekHost(BaseMCPAgent):
                                 else str(args)
                             )
                             print(f"   {i}. {tool_name} - {args_preview}", flush=True)
-                        except:
+                        except Exception:
                             print(f"   {i}. {tool_name}", flush=True)
 
                 # Add assistant message with tool calls
@@ -374,7 +376,10 @@ class MCPDeepseekHost(BaseMCPAgent):
                         )
                     except json.JSONDecodeError as e:
                         # Handle JSON parsing errors immediately
-                        error_content = f"Error parsing arguments for {tool_name}: {e}\n⚠️  Command failed - take this into account for your next action."
+                        error_content = (
+                            f"Error parsing arguments for {tool_name}: {e}\n"
+                            "⚠️  Command failed - take this into account for your next action."
+                        )
                         current_messages.append(
                             {
                                 "role": "tool",
@@ -399,7 +404,7 @@ class MCPDeepseekHost(BaseMCPAgent):
                 ):
                     if interactive:
                         print(
-                            f"\n🔄 Subagents spawned - interrupting to wait for completion...",
+                            "\n🔄 Subagents spawned - interrupting to wait for completion...",
                             flush=True,
                         )
 
@@ -462,12 +467,12 @@ Please provide your final analysis based on these subagent results. Do not spawn
                             for msg in keepalive_messages:
                                 logger.info(f"Keep-alive: {msg}")
                             # Continue to add tool result below
-                    
+
                     # CHECK FOR PERMISSION DENIAL FIRST - before adding anything to conversation
                     if isinstance(result, Exception):
                         if isinstance(result, ToolDeniedReturnToPrompt):
                             raise result  # Exit immediately - don't add ANYTHING to conversation
-                    
+
                     # If we get here, permission was granted, process the result normally
                     if isinstance(result, Exception):
                         tool_result_content = f"Error executing tool: {result}"
@@ -497,7 +502,6 @@ Please provide your final analysis based on these subagent results. Do not spawn
                         }
                     )
 
-                
                 # Make another request with tool results
                 response = self.deepseek_client.chat.completions.create(
                     model=self.deepseek_config.model,
@@ -544,7 +548,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
     ):
         """Handle streaming response from Deepseek with tool call support."""
         from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
-        
+
         class StreamingContext:
             """Context to store exceptions that need to be raised after streaming."""
             def __init__(self):
@@ -751,7 +755,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
                                         if isinstance(result, ToolDeniedReturnToPrompt):
                                             # Store the exception to raise after generator completes
                                             context.tool_denial_exception = result
-                                            yield f"\nTool execution denied - returning to prompt.\n"
+                                            yield "\nTool execution denied - returning to prompt.\n"
                                             return  # Exit the generator
 
                                         error_msg = f"Error executing tool: {str(result)} ⚠️  Command failed - take this into account for your next action."
@@ -795,9 +799,9 @@ Please provide your final analysis based on these subagent results. Do not spawn
                                     # Handle tool permission denials specially - don't add to conversation
                                     if isinstance(e, ToolDeniedReturnToPrompt):
                                         context.tool_denial_exception = e
-                                        yield f"\nTool execution denied - returning to prompt.\n"
+                                        yield "\nTool execution denied - returning to prompt.\n"
                                         return  # Exit the generator
-                                    
+
                                     error_msg = f"Error executing tool: {str(e)} ⚠️  Command failed - take this into account for your next action."
                                     yield f"\nTool {completed_count} Result: {error_msg}\n"
                                     current_messages.append(
@@ -817,7 +821,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
                         and self.subagent_manager
                         and self.subagent_manager.get_active_count() > 0
                     ):
-                        yield f"\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
+                        yield "\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
 
                         # Wait for all subagents to complete and collect results
                         subagent_results = await self._collect_subagent_results()
@@ -846,7 +850,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
 
                             # Restart with subagent results
                             new_messages = [continuation_message]
-                            yield f"\n🔄 Restarting conversation with subagent results...\n"
+                            yield "\n🔄 Restarting conversation with subagent results...\n"
 
                             new_response = await self._generate_completion(
                                 new_messages,
@@ -861,7 +865,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
                                 yield str(new_response)
                             return
                         else:
-                            yield f"\n⚠️ No results collected from subagents.\n"
+                            yield "\n⚠️ No results collected from subagents.\n"
                             return
 
                     yield "\n✅ Tool execution complete. Continuing...\n"
@@ -926,7 +930,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
         # Create a wrapper to handle tool denial exceptions
         async def wrapper():
             generator = async_stream_generator()
-            
+
             try:
                 async for chunk in generator:
                     yield chunk
@@ -934,5 +938,5 @@ Please provide your final analysis based on these subagent results. Do not spawn
                 # If we collected a tool denial exception, raise it now
                 if context.tool_denial_exception:
                     raise context.tool_denial_exception
-                    
+
         return wrapper()
