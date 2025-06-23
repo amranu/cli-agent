@@ -21,6 +21,7 @@ from fastmcp.client import StdioTransport
 
 from cli_agent.core.slash_commands import SlashCommandManager
 from cli_agent.tools.builtin_tools import get_all_builtin_tools
+from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 from config import HostConfig
 
 # Configure logging
@@ -86,9 +87,9 @@ class BaseMCPAgent(ABC):
             # Create default permission config (prompts for all tools by default)
             # Set empty session file to ensure no persistent approvals across sessions
             permission_config = ToolPermissionConfig()
-            permission_config.session_permissions_file = ""  # Disable persistent storage
+            permission_config.session_permissions_file = None  # Disable persistent storage
             self.permission_manager = ToolPermissionManager(permission_config)
-            logger.info("Initialized tool permission manager")
+            logger.info(f"Initialized tool permission manager with session file: '{permission_config.session_permissions_file}'")
         except ImportError as e:
             logger.warning(f"Failed to import tool permission manager: {e}")
             self.permission_manager = None
@@ -847,6 +848,17 @@ Runtime: {runtime:.2f} seconds"""
         if input_handler and input_handler.interrupted:
             all_tool_output.append("🛑 Tool execution interrupted by user")
             return function_results, all_tool_output
+            
+        # Check if there's any buffered text that needs to be displayed before tool execution
+        text_buffer = getattr(self, '_text_buffer', "")
+        if text_buffer.strip() and interactive:
+            # Format and display the buffered text before showing tool execution
+            formatted_response = self.format_markdown(text_buffer)
+            # Replace newlines with \r\n for proper terminal handling
+            formatted_response = formatted_response.replace("\n", "\r\n")
+            print(f"\r\x1b[K\r\nAssistant: {formatted_response}")
+            # Clear the buffer
+            self._text_buffer = ""
 
         for i, function_call in enumerate(function_calls, 1):
             tool_name = function_call.name.replace(
@@ -1181,7 +1193,14 @@ Runtime: {runtime:.2f} seconds"""
                 continue
 
         # Get the final result
-        result = await tool_task
+        try:
+            result = await tool_task
+        except ToolDeniedReturnToPrompt:
+            # Re-raise this exception immediately without wrapping in tuple
+            raise
+        except Exception as e:
+            # Other exceptions become part of the result
+            result = e
         return result, keepalive_messages
 
     def _create_system_prompt(self, for_first_message: bool = False) -> str:
@@ -1911,35 +1930,61 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
 
         return enhanced_messages
 
-    async def chat_completion(
+    async def handle_tool_execution(
         self,
+        tool_calls: List[Any],
         messages: List[Dict[str, Any]],
-        stream: bool = True,
         interactive: bool = True,
-    ) -> Union[str, Any]:
-        """Centralized chat completion with tool execution logic."""
-        enhanced_messages = messages.copy()
-        is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
-
-        # Add system prompt if this is the first message and no system prompt exists
-        if is_first_message and (
-            not enhanced_messages or enhanced_messages[0].get("role") != "system"
-        ):
-            system_prompt = self._create_system_prompt()
-            enhanced_messages.insert(0, {"role": "system", "content": system_prompt})
-
-        # Prepare tools
-        tools = self.convert_tools_to_llm_format() if self.available_tools else None
-
-        # For streaming responses, we need to handle tool execution differently
-        if stream:
-            return await self._handle_streaming_chat_completion(
-                enhanced_messages, tools, interactive
+        streaming_mode: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Centralized tool execution handler.
+        
+        This method handles:
+        1. Displaying buffered text before tools
+        2. Showing tool execution start message
+        3. Executing tools with proper error handling
+        4. Updating conversation with results
+        
+        Returns updated messages list with tool results added.
+        Raises ToolDeniedReturnToPrompt if user denies permission.
+        """
+        try:
+            # Display buffered text before tool execution if interactive
+            if interactive and hasattr(self, '_text_buffer'):
+                text_buffer = getattr(self, '_text_buffer', "")
+                if text_buffer.strip():
+                    formatted_response = self.format_markdown(text_buffer)
+                    formatted_response = formatted_response.replace("\n", "\r\n")
+                    print(f"\r\x1b[K\r\nAssistant: {formatted_response}")
+                    self._text_buffer = ""
+            
+            # Display tool execution start
+            if interactive and not self.is_subagent:
+                print(f"\r\n{self.display_tool_execution_start(len(tool_calls), self.is_subagent, interactive=True)}")
+            
+            # Execute the tools (this will raise ToolDeniedReturnToPrompt if denied)
+            function_results, _ = await self.execute_function_calls(
+                tool_calls, 
+                interactive=interactive,
+                streaming_mode=streaming_mode
             )
-        else:
-            return await self._handle_non_streaming_chat_completion(
-                enhanced_messages, tools, interactive
+            
+            # Add tool results to the conversation
+            updated_messages = self._add_tool_results_to_conversation(
+                messages, tool_calls, function_results
             )
+            
+            return updated_messages
+            
+        except ToolDeniedReturnToPrompt:
+            # Clear any buffered content
+            if hasattr(self, '_text_buffer'):
+                self._text_buffer = ""
+            # Clear the last line that might have tool execution start message
+            if interactive:
+                print("\r\x1b[K", end="", flush=True)
+            # Re-raise to bubble up
+            raise
 
     async def _handle_streaming_chat_completion(
         self,
@@ -2255,6 +2300,11 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                     messages, is_first_message
                 )
 
+                # Reset tool execution state for new message
+                self._tool_execution_started = False
+                self._post_tool_buffer = ""
+                self._text_buffer = ""
+
                 # Show thinking message
                 print("\nThinking...")
 
@@ -2278,10 +2328,16 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
 
                     if isinstance(e, ToolDeniedReturnToPrompt):
                         # Tool denial message already printed by permission manager
+                        # Clear any partial output that might have been displayed
+                        print("\r\x1b[K", end="", flush=True)  # Clear current line
                         # Remove the last user message since we're not processing it
                         if messages and messages[-1]["role"] == "user":
                             messages.pop()
+                        # Clear any buffered text
+                        self._text_buffer = ""
                         current_task = None
+                        # Show clean prompt on next line
+                        print()  # New line for clean prompt
                         continue
                     else:
                         print(f"\nError generating response: {e}")
@@ -2297,8 +2353,9 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                     print("\nAssistant (press ESC to interrupt):")
                     sys.stdout.flush()
                     full_response = ""
-                    currently_in_tool_execution = False
-                    post_tool_buffer = ""  # Buffer for text after tool execution
+                    # Use instance variables that are reset per message
+                    tool_execution_started = getattr(self, '_tool_execution_started', False)
+                    post_tool_buffer = getattr(self, '_post_tool_buffer', "")
 
                     # Set up non-blocking input monitoring
                     stdin_fd = sys.stdin.fileno()
@@ -2325,39 +2382,53 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
 
                             if isinstance(chunk, str):
                                 # Check if this chunk indicates tool calls are starting
-                                tool_start = ("🔧 Executing" in chunk or "Tool 1" in chunk or "Tool 2" in chunk or 
-                                            "tool_calls" in chunk or "function\":" in chunk)
+                                tool_start = ("🔧 Using" in chunk or "🔧 Executing" in chunk or "Tool 1" in chunk or 
+                                            "tool_calls" in chunk or "function\":" in chunk or "Executing " in chunk)
+                                            
+                                # Check if this chunk indicates tool processing is complete
+                                tool_processing_end = ("⚙️ Processing tool results..." in chunk)
                                 
-                                # Check if tool execution is ending
-                                tool_end = ("✅ Tool execution complete" in chunk or "Result:" in chunk or 
-                                          "Tool " in chunk and "Result:" in chunk)
-                                
-                                if tool_start and not currently_in_tool_execution:
-                                    # Tool execution starting - output buffered content with formatting
-                                    currently_in_tool_execution = True
-                                    if full_response:
-                                        formatted_response = self.format_markdown(full_response)
-                                        print(formatted_response, end="", flush=True)
+                                if tool_start and not tool_execution_started:
+                                    # Tool execution starting - format and display any buffered content first
+                                    tool_execution_started = True
+                                    self._tool_execution_started = True
                                     
-                                elif tool_end and currently_in_tool_execution:
-                                    # Tool execution ending - prepare to buffer again
-                                    currently_in_tool_execution = False
-                                    # Output this chunk (the tool result) and continue
+                                    # Get the most current buffer content
+                                    current_buffer = getattr(self, '_text_buffer', "")
+                                    
+                                    # Display buffered pre-tool text if any
+                                    if current_buffer.strip():
+                                        formatted_response = self.format_markdown(current_buffer)
+                                        display_response = formatted_response.replace("\n", "\r\n")
+                                        print(display_response, end="", flush=True)
+                                        print("\r\n", end="", flush=True)  # Separator
+                                    
+                                    # Clear the text buffer since we displayed it
+                                    self._text_buffer = ""
+                                
+                                # Handle tool processing completion
+                                if tool_processing_end and tool_execution_started:
+                                    # Tool processing complete - stream this chunk then switch back to buffering mode
                                     display_chunk = chunk.replace("\n", "\r\n")
                                     print(display_chunk, end="", flush=True)
                                     full_response += chunk
-                                    continue
+                                    
+                                    # Reset for post-tool text buffering
+                                    tool_execution_started = False
+                                    self._tool_execution_started = False
+                                    self._text_buffer = ""
+                                    continue  # Don't process this chunk again below
                                     
                                 # Output behavior based on current mode
-                                if currently_in_tool_execution:
-                                    # In tool execution - stream directly
+                                if tool_execution_started:
+                                    # In tool execution mode - stream directly
                                     display_chunk = chunk.replace("\n", "\r\n")
                                     print(display_chunk, end="", flush=True)
+                                    full_response += chunk
                                 else:
-                                    # Buffer for later formatting
-                                    pass  # We'll format and output at the end
-                                    
-                                full_response += chunk
+                                    # In text mode (pre-tool or post-tool) - buffer for markdown formatting
+                                    self._text_buffer = getattr(self, '_text_buffer', "") + chunk
+                                    full_response += chunk
                             else:
                                 # Handle any non-string chunks if needed
                                 chunk_str = str(chunk)
@@ -2369,21 +2440,26 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
                         # Always restore terminal settings first
                         termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
                         
-                        # Apply Rich markdown formatting to the complete response (only if not already output)
-                        if not interrupted and full_response and not currently_in_tool_execution:
-                            # Move to new line, then clear and rewrite the response with Rich formatting
-                            print()  # New line after streaming
-                            print(f"\033[1A\033[KAssistant: ", end="")  # Move up one line, clear it, write "Assistant: "
-                            
-                            # Apply Rich markdown formatting to the complete response
-                            formatted_response = self.format_markdown(full_response)
-                            
-                            # Display the formatted response
-                            print(formatted_response)
-                            sys.stdout.flush()
-                        elif not interrupted and has_tool_calls:
-                            # For responses with tool calls, just add a newline (already displayed during streaming)
-                            print()
+                        # Handle any remaining buffered text and final formatting
+                        if not interrupted:
+                            # Check if there's buffered text that needs to be displayed
+                            remaining_text_buffer = getattr(self, '_text_buffer', "")
+                            if remaining_text_buffer.strip():
+                                # Format and display the remaining buffered text
+                                formatted_response = self.format_markdown(remaining_text_buffer)
+                                display_response = formatted_response.replace("\n", "\r\n")
+                                print(display_response, end="", flush=True)
+                                print()  # Final newline
+                            elif full_response and not tool_execution_started:
+                                # No tools were executed and no separate buffer - format the entire response
+                                print()  # New line after streaming
+                                print(f"\033[1A\033[KAssistant: ", end="")  # Move up one line, clear it, write "Assistant: "
+                                formatted_response = self.format_markdown(full_response)
+                                print(formatted_response)
+                                sys.stdout.flush()
+                            else:
+                                # Tools were executed - just add a newline (content already displayed)
+                                print()
                         elif interrupted:
                             print("\n🛑 Streaming interrupted by user")
                             sys.stdout.flush()

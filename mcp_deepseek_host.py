@@ -5,20 +5,14 @@ import asyncio
 import json
 import logging
 import re
-import select
-import sys
-import termios
-import time
-import tty
 from typing import Any, Dict, List, Optional, Union
 
 from openai import OpenAI
 
 from cli_agent.core.base_agent import BaseMCPAgent
-from cli_agent.core.input_handler import InterruptibleInput
 from cli_agent.utils.tool_conversion import OpenAIStyleToolConverter
 from cli_agent.utils.tool_parsing import DeepSeekToolCallParser
-from config import HostConfig, create_sample_env, load_config
+from config import HostConfig
 
 # Configure logging
 logging.basicConfig(
@@ -249,6 +243,8 @@ class MCPDeepseekHost(BaseMCPAgent):
         interactive: bool = True,
     ) -> Union[str, Any]:
         """Handle non-streaming response from Deepseek."""
+        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+        
         current_messages = original_messages.copy()
 
         # Debug log the raw response
@@ -452,27 +448,32 @@ Please provide your final analysis based on these subagent results. Do not spawn
                         current_messages = new_messages
                         continue
 
-                # Process results
+                # Process results - check for permission denials FIRST before adding to conversation
                 for i, result in enumerate(tool_results):
                     tool_call = tool_calls[i]
-                    if isinstance(result, Exception):
-                        # Re-raise tool permission denials so they can be handled at the chat level
-                        from cli_agent.core.tool_permissions import (
-                            ToolDeniedReturnToPrompt,
-                        )
-
-                        if isinstance(result, ToolDeniedReturnToPrompt):
-                            raise result  # Re-raise the exception to bubble up to interactive chat
-                        tool_result_content = f"Error executing tool: {result}"
-                    else:
-                        # Handle tuple return from keep-alive version
-                        if isinstance(result, tuple) and len(result) == 2:
+                    # Handle tuple return from keep-alive version first
+                    if isinstance(result, tuple) and len(result) == 2:
+                        actual_result, keepalive_messages = result
+                        if isinstance(actual_result, Exception):
+                            result = actual_result  # Extract the exception from tuple
+                        else:
                             tool_result_content, keepalive_messages = result
                             # In non-interactive mode, we can log keep-alive messages
                             for msg in keepalive_messages:
                                 logger.info(f"Keep-alive: {msg}")
-                        else:
-                            tool_result_content = result
+                            # Continue to add tool result below
+                    
+                    # CHECK FOR PERMISSION DENIAL FIRST - before adding anything to conversation
+                    if isinstance(result, Exception):
+                        if isinstance(result, ToolDeniedReturnToPrompt):
+                            raise result  # Exit immediately - don't add ANYTHING to conversation
+                    
+                    # If we get here, permission was granted, process the result normally
+                    if isinstance(result, Exception):
+                        tool_result_content = f"Error executing tool: {result}"
+                    else:
+                        # Result is not an exception, use the extracted value from tuple
+                        tool_result_content = result if not isinstance(result, tuple) else tool_result_content
 
                     # Check if tool failed and add notice to the content sent to the model
                     tool_failed = (
@@ -496,6 +497,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
                         }
                     )
 
+                
                 # Make another request with tool results
                 response = self.deepseek_client.chat.completions.create(
                     model=self.deepseek_config.model,
@@ -541,6 +543,14 @@ Please provide your final analysis based on these subagent results. Do not spawn
         interactive: bool = True,
     ):
         """Handle streaming response from Deepseek with tool call support."""
+        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+        
+        class StreamingContext:
+            """Context to store exceptions that need to be raised after streaming."""
+            def __init__(self):
+                self.tool_denial_exception = None
+
+        context = StreamingContext()
 
         async def async_stream_generator():
             current_messages = original_messages.copy() if original_messages else []
@@ -738,13 +748,11 @@ Please provide your final analysis based on these subagent results. Do not spawn
                                     result = task.result()
 
                                     if isinstance(result, Exception):
-                                        # Re-raise tool permission denials so they can be handled at the chat level
-                                        from cli_agent.core.tool_permissions import (
-                                            ToolDeniedReturnToPrompt,
-                                        )
-
                                         if isinstance(result, ToolDeniedReturnToPrompt):
-                                            raise result  # Re-raise the exception to bubble up to interactive chat
+                                            # Store the exception to raise after generator completes
+                                            context.tool_denial_exception = result
+                                            yield f"\nTool execution denied - returning to prompt.\n"
+                                            return  # Exit the generator
 
                                         error_msg = f"Error executing tool: {str(result)} ⚠️  Command failed - take this into account for your next action."
                                         yield f"\nTool {completed_count} Result: {error_msg}\n"
@@ -784,6 +792,12 @@ Please provide your final analysis based on these subagent results. Do not spawn
                                         )
 
                                 except Exception as e:
+                                    # Handle tool permission denials specially - don't add to conversation
+                                    if isinstance(e, ToolDeniedReturnToPrompt):
+                                        context.tool_denial_exception = e
+                                        yield f"\nTool execution denied - returning to prompt.\n"
+                                        return  # Exit the generator
+                                    
                                     error_msg = f"Error executing tool: {str(e)} ⚠️  Command failed - take this into account for your next action."
                                     yield f"\nTool {completed_count} Result: {error_msg}\n"
                                     current_messages.append(
@@ -909,4 +923,16 @@ Please provide your final analysis based on these subagent results. Do not spawn
                         self.last_reasoning_content = accumulated_reasoning_content
                     break
 
-        return async_stream_generator()
+        # Create a wrapper to handle tool denial exceptions
+        async def wrapper():
+            generator = async_stream_generator()
+            
+            try:
+                async for chunk in generator:
+                    yield chunk
+            finally:
+                # If we collected a tool denial exception, raise it now
+                if context.tool_denial_exception:
+                    raise context.tool_denial_exception
+                    
+        return wrapper()

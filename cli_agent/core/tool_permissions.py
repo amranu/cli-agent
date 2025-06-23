@@ -66,6 +66,7 @@ class ToolPermissionManager:
         """Load persistent session permissions from file."""
         # Skip loading if session permissions file is disabled
         if not self.config.session_permissions_file:
+            logger.info("Session permissions file disabled - starting with empty approvals")
             return
             
         try:
@@ -83,6 +84,7 @@ class ToolPermissionManager:
         """Save persistent session permissions to file."""
         # Skip saving if session permissions file is disabled
         if not self.config.session_permissions_file:
+            logger.info("Session permissions file disabled - not saving approvals")
             return
             
         try:
