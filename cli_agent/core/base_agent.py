@@ -430,16 +430,17 @@ class BaseMCPAgent(ABC):
             # Store tool info for processing
             tool_info_list.append((i, tool_name, arguments))
 
-            # Display tool execution step
-            tool_execution_msg = self.formatter.display_tool_execution_step(
-                i, tool_name, arguments, self.is_subagent, interactive=interactive
-            )
-            if interactive and not streaming_mode:
-                print(f"\r\x1b[K{tool_execution_msg}", flush=True)
-            elif interactive and streaming_mode:
-                print(f"\r\x1b[K{tool_execution_msg}", flush=True)
-            else:
-                all_tool_output.append(tool_execution_msg)
+            # Display tool execution step (skip in streaming JSON mode)
+            if not (hasattr(self, "streaming_json_callback") and self.streaming_json_callback):
+                tool_execution_msg = self.formatter.display_tool_execution_step(
+                    i, tool_name, arguments, self.is_subagent, interactive=interactive
+                )
+                if interactive and not streaming_mode:
+                    print(f"\r\x1b[K{tool_execution_msg}", flush=True)
+                elif interactive and streaming_mode:
+                    print(f"\r\x1b[K{tool_execution_msg}", flush=True)
+                else:
+                    all_tool_output.append(tool_execution_msg)
 
             # Emit tool use if streaming JSON callback is set
             import uuid
@@ -509,19 +510,20 @@ class BaseMCPAgent(ABC):
                             tool_use_id, str(tool_result), not tool_success
                         )
 
-                    # Use unified tool result display
-                    tool_result_msg = self.formatter.display_tool_execution_result(
-                        tool_result,
-                        not tool_success,
-                        self.is_subagent,
-                        interactive=interactive,
-                    )
-                    if interactive and not streaming_mode:
-                        print(f"\r\x1b[K{tool_result_msg}\n", flush=True)
-                    elif interactive and streaming_mode:
-                        print(f"\r\x1b[K{tool_result_msg}\n", flush=True)
-                    else:
-                        all_tool_output.append(tool_result_msg)
+                    # Use unified tool result display (skip in streaming JSON mode)
+                    if not (hasattr(self, "streaming_json_callback") and self.streaming_json_callback):
+                        tool_result_msg = self.formatter.display_tool_execution_result(
+                            tool_result,
+                            not tool_success,
+                            self.is_subagent,
+                            interactive=interactive,
+                        )
+                        if interactive and not streaming_mode:
+                            print(f"\r\x1b[K{tool_result_msg}\n", flush=True)
+                        elif interactive and streaming_mode:
+                            print(f"\r\x1b[K{tool_result_msg}\n", flush=True)
+                        else:
+                            all_tool_output.append(tool_result_msg)
 
             except Exception as e:
                 # Handle any errors during parallel execution
@@ -2087,6 +2089,10 @@ class BaseMCPAgent(ABC):
         streaming_mode: bool,
     ) -> None:
         """Display tool execution information to user."""
+        # Skip output if in streaming JSON mode
+        if hasattr(self, "streaming_json_callback") and self.streaming_json_callback:
+            return
+            
         if not interactive or not tool_calls:
             return
 

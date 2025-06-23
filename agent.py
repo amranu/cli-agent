@@ -828,16 +828,8 @@ async def handle_streaming_json_chat(
 
                             if output_format == "stream-json":
                                 # Stream response in JSON format
-                                print(
-                                    "DEBUG: Calling stream_json_response",
-                                    file=sys.stderr,
-                                )
                                 await stream_json_response(
                                     host, handler, messages, model_name
-                                )
-                                print(
-                                    "DEBUG: stream_json_response completed",
-                                    file=sys.stderr,
                                 )
                             else:
                                 # Regular text response
@@ -892,23 +884,16 @@ async def stream_json_response(host, handler, messages, model_name):
     # Set up streaming JSON callback to emit events when content is ready
     def on_streaming_content(content):
         nonlocal current_text
-        print(f"DEBUG: Callback triggered with: {repr(content[:50])}", file=sys.stderr)
         current_text = content
         # Don't send immediately - we'll send combined message at the end
 
     # Set up tool execution callbacks to emit tool use/result messages
     def on_tool_use(tool_name, tool_input, tool_use_id):
-        nonlocal current_tool_calls
-        print(f"DEBUG: Tool use: {tool_name} with id {tool_use_id}", file=sys.stderr)
         current_tool_calls.append(
             {"id": tool_use_id, "name": tool_name, "input": tool_input}
         )
 
     def on_tool_result(tool_use_id, content, is_error=False):
-        print(
-            f"DEBUG: Tool result for {tool_use_id}: {repr(content[:50])}",
-            file=sys.stderr,
-        )
         handler.send_tool_result(tool_use_id, content, is_error)
 
     # Set session info for proper Claude Code format
@@ -920,36 +905,20 @@ async def stream_json_response(host, handler, messages, model_name):
     host.streaming_json_callback = on_streaming_content
     host.streaming_json_tool_use_callback = on_tool_use
     host.streaming_json_tool_result_callback = on_tool_result
-    print(
-        f"DEBUG: Using buffered streaming approach with tool callbacks...",
-        file=sys.stderr,
-    )
 
     try:
         # Generate response - this will handle the complete flow including tool calls
         response = await host.generate_response(messages, stream=True)
-        print(f"DEBUG: Got response type: {type(response)}", file=sys.stderr)
 
         # The buffered response contains everything we need
         if isinstance(response, str):
-            print(
-                f"DEBUG: String response received: {repr(response[:30])}",
-                file=sys.stderr,
-            )
             # Text-only responses are handled by streaming callback during generation
+            pass
         elif hasattr(response, "__aiter__"):
-            print(
-                "DEBUG: Async iterator received - should not happen with buffering",
-                file=sys.stderr,
-            )
             # Fallback: consume any remaining async iterator
             async for chunk in response:
                 pass
         elif hasattr(response, "choices"):
-            print(
-                f"DEBUG: Response object received with tool calls - processing manually",
-                file=sys.stderr,
-            )
             # This is a mock response object with tool calls - process it manually
             # since we're in streaming JSON mode and bypassed the normal flow
 
@@ -964,9 +933,6 @@ async def stream_json_response(host, handler, messages, model_name):
 
                 # Tools are executed automatically during the response generation
                 # The results are already sent via the centralized Claude Code format
-        else:
-            # Handle other non-streaming responses
-            print(f"DEBUG: Other response type: {type(response)}", file=sys.stderr)
 
     finally:
         # Clean up callbacks
@@ -974,7 +940,6 @@ async def stream_json_response(host, handler, messages, model_name):
         host.streaming_json_tool_use_callback = None
         host.streaming_json_tool_result_callback = None
         host._streaming_json_mode = False
-        print("DEBUG: Callbacks cleaned up", file=sys.stderr)
 
 
 async def handle_text_chat(

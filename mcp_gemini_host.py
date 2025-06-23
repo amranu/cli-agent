@@ -1222,10 +1222,12 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                             # The tool results will be included in the next iteration's prompt context
 
                             # Indicate we're getting the follow-up response (via print to avoid LLM contamination)
-                            print(
-                                f"\n\r\n\r{self.formatter.display_tool_processing(self.is_subagent, interactive=not self.is_subagent)}\n\r",
-                                flush=True,
-                            )
+                            # Skip output if in streaming JSON mode
+                            if not (hasattr(self, "streaming_json_callback") and self.streaming_json_callback):
+                                print(
+                                    f"\n\r\n\r{self.formatter.display_tool_processing(self.is_subagent, interactive=not self.is_subagent)}\n\r",
+                                    flush=True,
+                                )
 
                             # Use the updated messages from centralized processing to maintain context
                             # Convert the conversation history (which now includes tool calls and results) back to Gemini format
