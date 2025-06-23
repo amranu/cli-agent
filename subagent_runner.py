@@ -244,14 +244,30 @@ CRITICAL INSTRUCTIONS:
 
             try:
                 result = await original_execute_mcp_tool(tool_key, arguments)
-                # Show result preview
-                result_str = (
-                    str(result)[:300] + "..." if len(str(result)) > 300 else str(result)
+                # Use proper formatting for tool results (same as main agent)
+                from cli_agent.core.formatting import ResponseFormatter
+
+                formatter = ResponseFormatter()
+                tool_result_msg = formatter.display_tool_execution_result(
+                    result,
+                    is_error=False,
+                    is_subagent=True,
+                    interactive=True,
                 )
-                emit_output_with_id(f"✅ Tool result: {result_str}")
+                emit_output_with_id(tool_result_msg)
                 return result
             except Exception as e:
-                emit_output_with_id(f"❌ Tool error: {str(e)}")
+                # Use proper formatting for tool errors (same as main agent)
+                from cli_agent.core.formatting import ResponseFormatter
+
+                formatter = ResponseFormatter()
+                tool_error_msg = formatter.display_tool_execution_result(
+                    str(e),
+                    is_error=True,
+                    is_subagent=True,
+                    interactive=True,
+                )
+                emit_output_with_id(tool_error_msg)
                 raise
 
         host._execute_mcp_tool = emit_tool_execution
@@ -300,7 +316,7 @@ CRITICAL INSTRUCTIONS:
         except SystemExit:
             # This is expected when emit_result calls sys.exit(0)
             # The subagent has completed successfully
-            pass
+            return
         except Exception as e:
             emit_error_with_id(f"Task execution error: {str(e)}", str(e))
             raise

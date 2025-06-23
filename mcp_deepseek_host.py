@@ -705,8 +705,10 @@ class MCPDeepseekHost(BaseMCPAgent):
                                     f"\r\n📋 Collected subagent result(s). Restarting with results...\n"
                                 )
 
-                            # Restart with subagent results
-                            new_messages = [continuation_message]
+                            # Preserve user context but replace assistant response with continuation
+                            new_messages = current_messages[:-1] + [
+                                continuation_message
+                            ]
                             if not (
                                 hasattr(self, "streaming_json_callback")
                                 and self.streaming_json_callback

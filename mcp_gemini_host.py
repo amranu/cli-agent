@@ -695,8 +695,19 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
 
         # Use the stream parameter passed in (centralized logic decides streaming behavior)
 
+        # Add system prompt for subagents or first messages (similar to DeepSeek logic)
+        enhanced_messages = messages
+        is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
+
+        if self.is_subagent or is_first_message:
+            system_prompt = self._create_system_prompt(for_first_message=True)
+            # Add system message at the beginning
+            enhanced_messages = [
+                {"role": "system", "content": system_prompt}
+            ] + messages
+
         # Convert messages to Gemini format
-        gemini_prompt = self._convert_messages_to_gemini_format(messages)
+        gemini_prompt = self._convert_messages_to_gemini_format(enhanced_messages)
 
         # Configure tool calling behavior
         tool_config = None
@@ -1163,8 +1174,8 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                         current_messages = original_messages
                     else:
                         current_messages = (
-                            []
-                        )  # Create empty messages list for centralized processing
+                            original_messages.copy() if original_messages else []
+                        )
                     try:
                         updated_messages, continuation_message, has_tool_calls = (
                             await self._process_tool_calls_centralized(
@@ -1208,8 +1219,18 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                                         "\r\n📋 Collected subagent result(s). Restarting with results...\n"
                                     )
 
-                                # Replace conversation with just the continuation context
-                                new_messages = [continuation_message]
+                                # Create a modified continuation message that doesn't repeat the tool-spawning request
+                                modified_continuation = {
+                                    "role": "user",
+                                    "content": f"""Subagent results have been collected:
+
+{continuation_message['content'].split('Subagent results:')[1] if 'Subagent results:' in continuation_message['content'] else continuation_message['content']}
+
+Please continue with your task.""",
+                                }
+                                new_messages = current_messages[:-1] + [
+                                    modified_continuation
+                                ]
 
                                 # Restart the conversation with subagent results
                                 yield "\n🔄 Restarting conversation with subagent results...\n"
@@ -1302,13 +1323,11 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                                 # but frames it as analysis rather than a new spawning request
                                 continuation_message = {
                                     "role": "user",
-                                    "content": f"""I requested: {original_messages[-1]['content']}
-
-You spawned subagents and they have completed their tasks. Here are the results:
+                                    "content": f"""Subagent tasks have completed. Here are the results:
 
 {results_summary}
 
-Please provide your final analysis based on these subagent results. Do not spawn any new subagents - just analyze the provided data.""",
+Please continue with your task.""",
                                 }
 
                                 # Replace conversation with just the continuation context

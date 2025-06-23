@@ -354,3 +354,31 @@ class BuiltinToolExecutor:
             result_lines.append(f"\nCleared {len(tasks_to_remove)} completed task(s)")
 
         return "\n".join(result_lines)
+
+    def emit_result(self, args: Dict[str, Any]) -> str:
+        """Emit the final result of a subagent task and terminate the subagent."""
+        if not self.agent.is_subagent:
+            return "Error: emit_result can only be called by subagents"
+
+        result = args.get("result", "")
+        summary = args.get("summary", "")
+
+        if not result:
+            return "Error: result parameter is required"
+
+        # Import here to avoid circular imports
+        from subagent import emit_result
+
+        # Emit the result through the subagent communication system
+        emit_result(result)
+
+        # If summary is provided, also emit it
+        if summary:
+            from subagent import emit_message
+
+            emit_message("result", f"Summary: {summary}")
+
+        # Terminate the subagent process
+        import sys
+
+        sys.exit(0)

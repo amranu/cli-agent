@@ -298,9 +298,7 @@ class ResponseFormatter:
             lines = result_preview.split("\n")
             formatted_lines = [f"{prefix} {lines[0]}"]
             for line in lines[1:]:
-                formatted_lines.append(
-                    f"\r{line}"
-                )  # Add carriage return to start of each line
+                formatted_lines.append(f"\r{line}")  # Carriage return to start of line
             return "\n".join(formatted_lines)
         else:
             return f"{prefix} {result_preview}"

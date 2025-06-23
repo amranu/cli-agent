@@ -112,13 +112,22 @@ class SubagentCoordinator:
     def display_subagent_message_immediately(self, formatted: str, message_type: str):
         """Display subagent message immediately during streaming or collection periods."""
         try:
-            # Use carriage return to overwrite any current line, then print message
-            if message_type in ["output", "result", "error"]:
-                # For important messages, ensure they're visible
-                print(f"\r{formatted}", flush=True)
+            # Handle multi-line content properly
+            if "\n" in formatted:
+                lines = formatted.split("\n")
+                # First line with clear
+                print(f"\r\x1b[K{lines[0]}", flush=True)
+                # Subsequent lines with carriage return to start at beginning of line
+                for line in lines[1:]:
+                    print(f"\r{line}", flush=True)
             else:
-                # For status messages, display but allow overwriting
-                print(f"\r{formatted}", end="", flush=True)
+                # Use carriage return and clear line sequence (same as main agent)
+                if message_type in ["output", "result", "error"]:
+                    # For important messages, ensure they're visible with proper line clearing
+                    print(f"\r\x1b[K{formatted}", flush=True)
+                else:
+                    # For status messages, display but allow overwriting
+                    print(f"\r\x1b[K{formatted}", end="", flush=True)
         except Exception as e:
             logger.error(f"Error displaying message immediately: {e}")
 
