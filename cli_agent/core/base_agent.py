@@ -1686,6 +1686,9 @@ class BaseMCPAgent(ABC):
                 break
             except Exception as e:
                 print(f"\nError: {e}")
+        
+        # Return the updated messages list for session saving
+        return messages
 
     # Centralized Tool Call Processing Methods
     # ========================================

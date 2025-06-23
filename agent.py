@@ -956,18 +956,25 @@ async def handle_text_chat(
         while True:
             chat_result = await host.interactive_chat(input_handler, messages)
 
+            # Update messages from the interactive chat result
+            if chat_result is not None:
+                if isinstance(chat_result, dict) and "reload_host" in chat_result:
+                    messages = chat_result.get("messages", [])
+                    # Save updated messages to session
+                    session_manager.current_messages = messages
+                elif isinstance(chat_result, list):
+                    # Normal case: chat_result is the updated messages list
+                    messages = chat_result
+
             # Save session after each interaction
             if messages:
+                existing_messages = session_manager.get_messages()
                 for msg in messages:
-                    if msg not in [m for m in session_manager.get_messages()]:
+                    if msg not in existing_messages:
                         session_manager.add_message(msg)
 
             # Check if we need to reload the host
             if isinstance(chat_result, dict) and "reload_host" in chat_result:
-                messages = chat_result.get("messages", [])
-                # Save updated messages to session
-                session_manager.current_messages = messages
-                session_manager._save_current_session()
                 reload_type = chat_result["reload_host"]
 
                 # Shutdown current host
