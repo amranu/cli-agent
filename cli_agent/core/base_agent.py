@@ -550,6 +550,24 @@ class BaseMCPAgent(ABC):
             tool_info = self.available_tools[tool_key]
             tool_name = tool_info["name"]
 
+            # Show diff preview for replace_in_file before permission check
+            if tool_name == "replace_in_file" and not self.is_subagent:
+                try:
+                    from cli_agent.utils.diff_display import ColoredDiffDisplay
+
+                    file_path = arguments.get("file_path", "")
+                    old_text = arguments.get("old_text", "")
+                    new_text = arguments.get("new_text", "")
+
+                    if file_path and old_text:
+                        # Show colored diff preview
+                        ColoredDiffDisplay.show_replace_diff(
+                            file_path=file_path, old_text=old_text, new_text=new_text
+                        )
+                except Exception as e:
+                    # Don't fail tool execution if diff display fails
+                    logger.warning(f"Failed to display diff preview: {e}")
+
             # Check tool permissions (both main agent and subagents)
             if hasattr(self, "permission_manager") and self.permission_manager:
                 from cli_agent.core.tool_permissions import (
@@ -1651,10 +1669,6 @@ class BaseMCPAgent(ABC):
                                     # OR when streaming JSON (to hit buffer emission callbacks)
                                     self._text_buffer = (
                                         getattr(self, "_text_buffer", "") + chunk
-                                    )
-                                    print(
-                                        f"DEBUG: Added to buffer, now: {repr(self._text_buffer[:50])}",
-                                        file=sys.stderr,
                                     )
                                     full_response += chunk
                             else:
