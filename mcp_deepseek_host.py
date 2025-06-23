@@ -180,6 +180,12 @@ class MCPDeepseekHost(BaseMCPAgent):
         interactive: bool = True,
     ) -> Any:
         """Generate completion using DeepSeek API."""
+        # Check if we should use buffering for streaming JSON
+        use_buffering = (
+            hasattr(self, "streaming_json_callback")
+            and self.streaming_json_callback is not None
+        )
+
         # Use the stream parameter passed in (centralized logic decides streaming behavior)
 
         # Clean messages again as a safety net in case they bypassed generate_response
@@ -780,3 +786,27 @@ class MCPDeepseekHost(BaseMCPAgent):
                     raise context.tool_denial_exception
 
         return wrapper()
+
+    async def _handle_buffered_streaming_response(
+        self,
+        response,
+        original_messages: List[Dict[str, str]] = None,
+        interactive: bool = True,
+    ) -> str:
+        """Handle streaming response by collecting all chunks and emitting through buffer system."""
+        # Collect all chunks first
+        full_content = ""
+
+        for chunk in response:
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+
+                # Handle regular content
+                if delta.content:
+                    full_content += delta.content
+
+        # Now emit the complete content through the buffer callback system
+        if self.streaming_json_callback and full_content.strip():
+            self.streaming_json_callback(full_content)
+
+        return full_content

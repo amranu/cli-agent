@@ -52,6 +52,11 @@ class BaseMCPAgent(ABC):
         # Communication socket for subagent forwarding (set by parent process)
         self.comm_socket = None
 
+        # Streaming callbacks for JSON output mode
+        self.streaming_json_callback = None
+        self.streaming_json_tool_use_callback = None
+        self.streaming_json_tool_result_callback = None
+
         # Centralized subagent management system
         if not is_subagent:
             try:
@@ -436,20 +441,32 @@ class BaseMCPAgent(ABC):
             else:
                 all_tool_output.append(tool_execution_msg)
 
-            # Create coroutine for parallel execution
-            tool_coroutines.append(self._execute_mcp_tool(tool_name, arguments))
+            # Emit tool use if streaming JSON callback is set
+            import uuid
+
+            tool_use_id = f"toolu_{i}_{uuid.uuid4().hex[:16]}"
+            if (
+                hasattr(self, "streaming_json_tool_use_callback")
+                and self.streaming_json_tool_use_callback
+            ):
+                self.streaming_json_tool_use_callback(tool_name, arguments, tool_use_id)
+
+            # Create coroutine for parallel execution with tool_use_id tracking
+            tool_coroutines.append(
+                (tool_use_id, self._execute_mcp_tool(tool_name, arguments))
+            )
 
         # Execute all tools in parallel
         if tool_coroutines:
             try:
                 # Execute all tool calls concurrently
-                tool_results = await asyncio.gather(
-                    *tool_coroutines, return_exceptions=True
-                )
+                # Extract just the coroutines for asyncio.gather
+                coroutines = [coroutine for _, coroutine in tool_coroutines]
+                tool_results = await asyncio.gather(*coroutines, return_exceptions=True)
 
                 # Process results in order
-                for (i, tool_name, arguments), tool_result in zip(
-                    tool_info_list, tool_results
+                for (i, tool_name, arguments), (tool_use_id, _), tool_result in zip(
+                    tool_info_list, tool_coroutines, tool_results
                 ):
                     tool_success = True
 
@@ -482,6 +499,15 @@ class BaseMCPAgent(ABC):
                     if not tool_success:
                         result_content += "\n⚠️  Command failed - take this into account for your next action."
                     function_results.append(result_content)
+
+                    # Emit tool result if streaming JSON callback is set
+                    if (
+                        hasattr(self, "streaming_json_tool_result_callback")
+                        and self.streaming_json_tool_result_callback
+                    ):
+                        self.streaming_json_tool_result_callback(
+                            tool_use_id, str(tool_result), not tool_success
+                        )
 
                     # Use unified tool result display
                     tool_result_msg = self.formatter.display_tool_execution_result(
@@ -1530,6 +1556,13 @@ class BaseMCPAgent(ABC):
 
                                     # Display buffered pre-tool text if any
                                     if current_buffer.strip():
+                                        # Emit streaming JSON event before formatting
+                                        if (
+                                            hasattr(self, "streaming_json_callback")
+                                            and self.streaming_json_callback
+                                        ):
+                                            self.streaming_json_callback(current_buffer)
+
                                         formatted_response = (
                                             self.formatter.format_markdown(
                                                 current_buffer
@@ -1604,15 +1637,24 @@ class BaseMCPAgent(ABC):
                                         self._text_buffer = ""
 
                                 # Output behavior based on current mode
-                                if tool_execution_started:
-                                    # In tool execution mode - stream directly
+                                force_buffering = getattr(
+                                    self, "_force_buffering_for_streaming_json", False
+                                )
+
+                                if tool_execution_started and not force_buffering:
+                                    # In tool execution mode - stream directly (unless forcing buffer)
                                     display_chunk = chunk.replace("\n", "\r\n")
                                     print(display_chunk, end="", flush=True)
                                     full_response += chunk
                                 else:
                                     # In text mode (pre-tool or post-tool) - buffer for markdown formatting
+                                    # OR when streaming JSON (to hit buffer emission callbacks)
                                     self._text_buffer = (
                                         getattr(self, "_text_buffer", "") + chunk
+                                    )
+                                    print(
+                                        f"DEBUG: Added to buffer, now: {repr(self._text_buffer[:50])}",
+                                        file=sys.stderr,
                                     )
                                     full_response += chunk
                             else:
@@ -1633,6 +1675,17 @@ class BaseMCPAgent(ABC):
                             # Check if there's buffered text that needs to be displayed
                             remaining_text_buffer = getattr(self, "_text_buffer", "")
                             if remaining_text_buffer.strip():
+                                # Emit streaming JSON event before formatting
+                                if (
+                                    hasattr(self, "streaming_json_callback")
+                                    and self.streaming_json_callback
+                                ):
+                                    print(
+                                        f"DEBUG: Buffer callback with: {repr(remaining_text_buffer[:50])}",
+                                        file=sys.stderr,
+                                    )
+                                    self.streaming_json_callback(remaining_text_buffer)
+
                                 # Format and display the remaining buffered text
                                 formatted_response = self.formatter.format_markdown(
                                     remaining_text_buffer
@@ -1644,6 +1697,17 @@ class BaseMCPAgent(ABC):
                                 print()  # Final newline
                             elif full_response and not tool_execution_started:
                                 # No tools were executed and no separate buffer - format the entire response
+                                # Emit streaming JSON event before formatting the complete response
+                                if (
+                                    hasattr(self, "streaming_json_callback")
+                                    and self.streaming_json_callback
+                                ):
+                                    print(
+                                        f"DEBUG: Full response callback with: {repr(full_response[:50])}",
+                                        file=sys.stderr,
+                                    )
+                                    self.streaming_json_callback(full_response)
+
                                 print()  # New line after streaming
                                 print(
                                     f"\033[1A\033[KAssistant: ", end=""

@@ -687,6 +687,12 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
         interactive: bool = True,
     ) -> Any:
         """Generate completion using Gemini API."""
+        # Check if we should use buffering for streaming JSON
+        use_buffering = (
+            hasattr(self, "streaming_json_callback")
+            and self.streaming_json_callback is not None
+        )
+
         # Use the stream parameter passed in (centralized logic decides streaming behavior)
 
         # Convert messages to Gemini format
@@ -1333,3 +1339,39 @@ Please provide your final analysis based on these subagent results. Do not spawn
 
         # Call parent shutdown for MCP connections
         await super().shutdown()
+
+    async def _handle_buffered_streaming_response(
+        self,
+        prompt: str,
+        config: types.GenerateContentConfig,
+        original_messages: List[Dict[str, str]],
+        interactive: bool = True,
+    ) -> str:
+        """Handle streaming response by collecting all chunks and emitting through buffer system."""
+        # Collect all chunks first
+        full_content = ""
+
+        try:
+            # Make streaming API call
+            stream_response = await self._make_gemini_request_with_retry(
+                lambda: self.gemini_client.models.generate_content_stream(
+                    model=self.gemini_config.model,
+                    contents=prompt,
+                    config=config,
+                )
+            )
+
+            # Collect all chunks
+            for chunk in stream_response:
+                if hasattr(chunk, "text") and chunk.text:
+                    full_content += chunk.text
+
+        except Exception as e:
+            logger.error(f"Error in buffered streaming response: {e}")
+            full_content = f"Error: {str(e)}"
+
+        # Now emit the complete content through the buffer callback system
+        if self.streaming_json_callback and full_content.strip():
+            self.streaming_json_callback(full_content)
+
+        return full_content

@@ -794,10 +794,16 @@ async def handle_streaming_json_chat(
     try:
         if input_format == "stream-json":
             # Read JSON input from stdin
+            processed_message = False
             while True:
                 input_data = handler.read_input_json()
                 if input_data is None:
-                    break
+                    # If we've processed at least one message, don't exit immediately
+                    # Allow time for streaming response to complete
+                    if processed_message:
+                        break
+                    else:
+                        break
 
                 if input_data.get("type") == "user":
                     message_content = input_data.get("message", {}).get("content", "")
@@ -812,13 +818,22 @@ async def handle_streaming_json_chat(
                         if text_content:
                             # Process message
                             messages = [{"role": "user", "content": text_content}]
+                            processed_message = True
 
                             if output_format == "stream-json":
                                 # Stream response in JSON format
+                                print(
+                                    "DEBUG: Calling stream_json_response",
+                                    file=sys.stderr,
+                                )
                                 await stream_json_response(host, handler, messages)
+                                print(
+                                    "DEBUG: stream_json_response completed",
+                                    file=sys.stderr,
+                                )
                             else:
                                 # Regular text response
-                                response = await host.chat_completion(
+                                response = await host.generate_response(
                                     messages, stream=False
                                 )
                                 click.echo(response)
@@ -837,7 +852,7 @@ async def handle_streaming_json_chat(
                 if output_format == "stream-json":
                     await stream_json_response(host, handler, messages)
                 else:
-                    response = await host.chat_completion(messages, stream=False)
+                    response = await host.generate_response(messages, stream=False)
                     click.echo(f"Assistant: {response}")
                     messages.append({"role": "assistant", "content": response})
 
@@ -846,25 +861,66 @@ async def handle_streaming_json_chat(
 
 
 async def stream_json_response(host, handler, messages):
-    """Stream response in JSON format."""
-    # Generate response and stream it
-    response = await host.chat_completion(messages, stream=True)
+    """Stream response in JSON format using buffer emission events."""
+    import sys
 
-    if hasattr(response, "__aiter__"):
-        # Handle streaming response
-        full_response = ""
-        async for chunk in response:
-            if isinstance(chunk, str):
-                full_response += chunk
-                # Send partial text updates
-                handler.send_assistant_text(chunk)
+    # Set up streaming JSON callback to emit events when content is ready
+    def on_streaming_content(content):
+        print(f"DEBUG: Callback triggered with: {repr(content[:50])}", file=sys.stderr)
+        handler.send_assistant_text(content)
 
-        # Send final response
-        if full_response:
-            handler.send_assistant_text(full_response)
-    else:
-        # Handle non-streaming response
-        handler.send_assistant_text(str(response))
+    # Set up tool execution callbacks to emit tool use/result messages
+    def on_tool_use(tool_name, tool_input, tool_use_id):
+        print(f"DEBUG: Tool use: {tool_name} with id {tool_use_id}", file=sys.stderr)
+        handler.send_assistant_tool_use(tool_name, tool_input, tool_use_id)
+
+    def on_tool_result(tool_use_id, content, is_error=False):
+        print(
+            f"DEBUG: Tool result for {tool_use_id}: {repr(content[:50])}",
+            file=sys.stderr,
+        )
+        handler.send_tool_result(tool_use_id, content, is_error)
+
+    # Register the callbacks with the host
+    host.streaming_json_callback = on_streaming_content
+    host.streaming_json_tool_use_callback = on_tool_use
+    host.streaming_json_tool_result_callback = on_tool_result
+    print(
+        f"DEBUG: Using buffered streaming approach with tool callbacks...",
+        file=sys.stderr,
+    )
+
+    try:
+        # Generate response - buffered approach will trigger callback
+        response = await host.generate_response(messages, stream=True)
+        print(f"DEBUG: Got response type: {type(response)}", file=sys.stderr)
+
+        # For buffered streaming, response should be a string
+        if isinstance(response, str):
+            print(
+                f"DEBUG: String response received: {repr(response[:30])}",
+                file=sys.stderr,
+            )
+            # Content already emitted via callback during generation
+        elif hasattr(response, "__aiter__"):
+            print(
+                "DEBUG: Async iterator received - should not happen with buffering",
+                file=sys.stderr,
+            )
+            # Fallback: consume any remaining async iterator
+            async for chunk in response:
+                pass
+        else:
+            # Handle non-streaming response
+            print(f"DEBUG: Non-streaming response: {response}", file=sys.stderr)
+            if str(response).strip():
+                handler.send_assistant_text(str(response))
+    finally:
+        # Clean up callbacks
+        host.streaming_json_callback = None
+        host.streaming_json_tool_use_callback = None
+        host.streaming_json_tool_result_callback = None
+        print("DEBUG: Callbacks cleaned up", file=sys.stderr)
 
 
 async def handle_text_chat(
