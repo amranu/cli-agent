@@ -150,6 +150,53 @@ class StreamingJSONHandler:
         self._output_json(msg)
         return tool_id
 
+    def send_assistant_combined(
+        self,
+        text: str = None,
+        tool_calls: List[Dict[str, Any]] = None,
+        message_id: Optional[str] = None,
+    ):
+        """Send assistant message with combined text and tool calls."""
+        msg_id = message_id or f"msg_{uuid.uuid4().hex[:20]}"
+
+        content = []
+
+        # Add text content if provided
+        if text and text.strip():
+            content.append({"type": "text", "text": text})
+
+        # Add tool calls if provided
+        tool_ids = []
+        if tool_calls:
+            for tool_call in tool_calls:
+                tool_id = tool_call.get("id") or f"toolu_{uuid.uuid4().hex[:20]}"
+                tool_ids.append(tool_id)
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "id": tool_id,
+                        "name": tool_call["name"],
+                        "input": tool_call["input"],
+                    }
+                )
+
+        message = {
+            "id": msg_id,
+            "type": "message",
+            "role": "assistant",
+            "model": self._get_model(),
+            "content": content,
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": self._get_usage_stats(),
+        }
+
+        msg = AssistantMessage(
+            session_id=self.session_id, message=message, parent_tool_use_id=None
+        )
+        self._output_json(msg)
+        return tool_ids
+
     def send_tool_result(self, tool_use_id: str, content: str, is_error: bool = False):
         """Send tool execution result."""
         message = {

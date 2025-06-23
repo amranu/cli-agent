@@ -900,6 +900,122 @@ class BaseMCPAgent(ABC):
 
         return updated_messages
 
+    # Centralized Claude Code Format Support
+    # ====================================
+
+    def _send_claude_code_assistant_message(
+        self, response_content: str, tool_calls: List[Dict[str, Any]]
+    ):
+        """Send assistant message in Claude Code format with combined text and tool calls."""
+        import uuid
+
+        # Create Claude Code style content array with text + tool_use blocks
+        content_blocks = []
+
+        # Add text content if present (including empty content)
+        if response_content is not None:
+            content_blocks.append({"type": "text", "text": response_content})
+
+        # Add tool use blocks
+        for tool_call in tool_calls:
+            # Extract tool info from different formats
+            if hasattr(tool_call, "get"):
+                # Dictionary format (DeepSeek)
+                tool_name = tool_call.get("function", {}).get("name", "")
+                tool_input = tool_call.get("function", {}).get("arguments", {})
+                tool_id = tool_call.get("id", f"toolu_{uuid.uuid4().hex[:20]}")
+            else:
+                # SimpleNamespace format (DeepSeek/Gemini)
+                tool_name = (
+                    getattr(tool_call.function, "name", "")
+                    if hasattr(tool_call, "function")
+                    else getattr(tool_call, "name", "")
+                )
+                tool_input = (
+                    getattr(tool_call.function, "arguments", {})
+                    if hasattr(tool_call, "function")
+                    else getattr(tool_call, "args", {})
+                )
+                tool_id = getattr(tool_call, "id", f"toolu_{uuid.uuid4().hex[:20]}")
+
+            if isinstance(tool_input, str):
+                import json
+
+                try:
+                    tool_input = json.loads(tool_input)
+                except:
+                    pass
+
+            content_blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                }
+            )
+
+        # Send combined message in Claude Code format
+        if content_blocks:
+            message = {
+                "id": f"msg_{uuid.uuid4().hex[:20]}",
+                "type": "message",
+                "role": "assistant",
+                "model": getattr(self, "_current_model", "unknown"),
+                "content": content_blocks,
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 1,
+                    "service_tier": "standard",
+                },
+            }
+
+            # Send as assistant message
+            from streaming_json import AssistantMessage
+
+            session_id = getattr(self, "_current_session_id", str(uuid.uuid4()))
+            msg = AssistantMessage(session_id=session_id, message=message)
+            print(msg.to_json(), flush=True)
+
+    def _send_claude_code_tool_results(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        string_results: List[str],
+        tool_results: List,
+    ):
+        """Send tool results in Claude Code format."""
+        import uuid
+
+        for i, (tool_call, result) in enumerate(zip(tool_calls, string_results)):
+            # Extract tool ID from different formats
+            if hasattr(tool_call, "get"):
+                tool_id = tool_call.get("id", "")
+            else:
+                tool_id = getattr(tool_call, "id", "")
+
+            is_error = isinstance(tool_results[i], Exception)
+
+            # Send tool result as user message in Claude Code format
+            from streaming_json import UserMessage
+
+            message = {
+                "role": "user",
+                "content": [
+                    {
+                        "tool_use_id": tool_id,
+                        "type": "tool_result",
+                        "content": result,
+                        "is_error": is_error,
+                    }
+                ],
+            }
+
+            session_id = getattr(self, "_current_session_id", str(uuid.uuid4()))
+            msg = UserMessage(session_id=session_id, message=message)
+            print(msg.to_json(), flush=True)
+
     # Centralized Agent.md Integration
     # ===============================
 
@@ -1244,7 +1360,34 @@ class BaseMCPAgent(ABC):
             assistant_msg["tool_calls"] = tool_calls
         messages.append(assistant_msg)
 
-        # Execute tools in parallel
+        # For streaming JSON, send combined Claude Code format message and handle tools
+        if hasattr(self, "streaming_json_callback") and self.streaming_json_callback:
+            self._send_claude_code_assistant_message(response_content, tool_calls)
+
+            # Execute tools and send results in Claude Code format
+            if tool_calls:
+                tool_results = await asyncio.gather(
+                    *[self._execute_single_tool(tool_call) for tool_call in tool_calls],
+                    return_exceptions=True,
+                )
+
+                # Convert results to strings
+                string_results = []
+                for result in tool_results:
+                    if isinstance(result, Exception):
+                        string_results.append(f"Error: {str(result)}")
+                    else:
+                        string_results.append(str(result))
+
+                # Send tool results
+                self._send_claude_code_tool_results(
+                    tool_calls, string_results, tool_results
+                )
+
+            # Return final response
+            return self._extract_content_from_response(response)
+
+        # Execute tools in parallel (normal flow)
         tool_results = await asyncio.gather(
             *[self._execute_single_tool(tool_call) for tool_call in tool_calls],
             return_exceptions=True,
@@ -1257,6 +1400,12 @@ class BaseMCPAgent(ABC):
                 string_results.append(f"Error: {str(result)}")
             else:
                 string_results.append(str(result))
+
+        # For streaming JSON, send tool results in Claude Code format
+        if hasattr(self, "streaming_json_callback") and self.streaming_json_callback:
+            self._send_claude_code_tool_results(
+                tool_calls, string_results, tool_results
+            )
 
         # Let the model-specific implementation handle how to add tool results to conversation
         messages = self._add_tool_results_to_conversation(

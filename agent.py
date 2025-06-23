@@ -217,9 +217,12 @@ async def chat(
             click.echo(f"Started new session: {session_id[:8]}...")
 
         # Handle mixed modes or invalid combinations FIRST
-        if input_format != output_format:
+        # Allow text input with stream-json output (but not the reverse)
+        if input_format != output_format and not (
+            input_format == "text" and output_format == "stream-json"
+        ):
             click.echo(
-                "Error: Mixed input/output formats not supported. Both must be 'text' or both must be 'stream-json'."
+                "Error: Invalid format combination. Supported: text->text, stream-json->stream-json, or text->stream-json."
             )
             return
 
@@ -288,9 +291,12 @@ async def ask(
     """Ask a single question."""
     try:
         # Validate format combinations
-        if input_format != output_format:
+        # Allow text input with stream-json output (but not the reverse)
+        if input_format != output_format and not (
+            input_format == "text" and output_format == "stream-json"
+        ):
             click.echo(
-                "Error: Mixed input/output formats not supported. Both must be 'text' or both must be 'stream-json'."
+                "Error: Invalid format combination. Supported: text->text, stream-json->stream-json, or text->stream-json."
             )
             return
 
@@ -826,7 +832,9 @@ async def handle_streaming_json_chat(
                                     "DEBUG: Calling stream_json_response",
                                     file=sys.stderr,
                                 )
-                                await stream_json_response(host, handler, messages)
+                                await stream_json_response(
+                                    host, handler, messages, model_name
+                                )
                                 print(
                                     "DEBUG: stream_json_response completed",
                                     file=sys.stderr,
@@ -839,40 +847,62 @@ async def handle_streaming_json_chat(
                                 click.echo(response)
         else:
             # Regular interactive mode but with JSON output
-            input_handler = InterruptibleInput()
-            messages = []
+            # Check if input is from a pipe or terminal
+            if not sys.stdin.isatty():
+                # Non-interactive: read from pipe/stdin
+                user_input = sys.stdin.read().strip()
+                if user_input:
+                    messages = [{"role": "user", "content": user_input}]
+                    if output_format == "stream-json":
+                        await stream_json_response(host, handler, messages, model_name)
+                    else:
+                        response = await host.generate_response(messages, stream=False)
+                        click.echo(f"Assistant: {response}")
+            else:
+                # Interactive mode
+                input_handler = InterruptibleInput()
+                messages = []
 
-            while True:
-                user_input = await input_handler.get_input("You: ")
-                if not user_input or user_input.lower() in ["quit", "exit"]:
-                    break
+                while True:
+                    user_input = input_handler.get_input("You: ")
+                    if not user_input or user_input.lower() in ["quit", "exit"]:
+                        break
 
-                messages.append({"role": "user", "content": user_input})
+                    messages.append({"role": "user", "content": user_input})
 
-                if output_format == "stream-json":
-                    await stream_json_response(host, handler, messages)
-                else:
-                    response = await host.generate_response(messages, stream=False)
-                    click.echo(f"Assistant: {response}")
-                    messages.append({"role": "assistant", "content": response})
+                    if output_format == "stream-json":
+                        await stream_json_response(host, handler, messages, model_name)
+                    else:
+                        response = await host.generate_response(messages, stream=False)
+                        click.echo(f"Assistant: {response}")
+                        messages.append({"role": "assistant", "content": response})
 
     finally:
         await host.shutdown()
 
 
-async def stream_json_response(host, handler, messages):
+async def stream_json_response(host, handler, messages, model_name):
     """Stream response in JSON format using buffer emission events."""
     import sys
 
+    # Track current response state
+    current_text = ""
+    current_tool_calls = []
+
     # Set up streaming JSON callback to emit events when content is ready
     def on_streaming_content(content):
+        nonlocal current_text
         print(f"DEBUG: Callback triggered with: {repr(content[:50])}", file=sys.stderr)
-        handler.send_assistant_text(content)
+        current_text = content
+        # Don't send immediately - we'll send combined message at the end
 
     # Set up tool execution callbacks to emit tool use/result messages
     def on_tool_use(tool_name, tool_input, tool_use_id):
+        nonlocal current_tool_calls
         print(f"DEBUG: Tool use: {tool_name} with id {tool_use_id}", file=sys.stderr)
-        handler.send_assistant_tool_use(tool_name, tool_input, tool_use_id)
+        current_tool_calls.append(
+            {"id": tool_use_id, "name": tool_name, "input": tool_input}
+        )
 
     def on_tool_result(tool_use_id, content, is_error=False):
         print(
@@ -880,6 +910,11 @@ async def stream_json_response(host, handler, messages):
             file=sys.stderr,
         )
         handler.send_tool_result(tool_use_id, content, is_error)
+
+    # Set session info for proper Claude Code format
+    host._current_session_id = handler.session_id
+    host._current_model = model_name
+    host._streaming_json_mode = True  # Flag to prevent normal tool execution
 
     # Register the callbacks with the host
     host.streaming_json_callback = on_streaming_content
@@ -891,17 +926,17 @@ async def stream_json_response(host, handler, messages):
     )
 
     try:
-        # Generate response - buffered approach will trigger callback
+        # Generate response - this will handle the complete flow including tool calls
         response = await host.generate_response(messages, stream=True)
         print(f"DEBUG: Got response type: {type(response)}", file=sys.stderr)
 
-        # For buffered streaming, response should be a string
+        # The buffered response contains everything we need
         if isinstance(response, str):
             print(
                 f"DEBUG: String response received: {repr(response[:30])}",
                 file=sys.stderr,
             )
-            # Content already emitted via callback during generation
+            # Text-only responses are handled by streaming callback during generation
         elif hasattr(response, "__aiter__"):
             print(
                 "DEBUG: Async iterator received - should not happen with buffering",
@@ -910,16 +945,35 @@ async def stream_json_response(host, handler, messages):
             # Fallback: consume any remaining async iterator
             async for chunk in response:
                 pass
+        elif hasattr(response, "choices"):
+            print(
+                f"DEBUG: Response object received with tool calls - processing manually",
+                file=sys.stderr,
+            )
+            # This is a mock response object with tool calls - process it manually
+            # since we're in streaming JSON mode and bypassed the normal flow
+
+            # Extract content and tool calls
+            message = response.choices[0].message
+            response_content = getattr(message, "content", "")
+            tool_calls = getattr(message, "tool_calls", [])
+
+            if response_content or tool_calls:
+                # Send combined Claude Code format message
+                host._send_claude_code_assistant_message(response_content, tool_calls)
+
+                # Tools are executed automatically during the response generation
+                # The results are already sent via the centralized Claude Code format
         else:
-            # Handle non-streaming response
-            print(f"DEBUG: Non-streaming response: {response}", file=sys.stderr)
-            if str(response).strip():
-                handler.send_assistant_text(str(response))
+            # Handle other non-streaming responses
+            print(f"DEBUG: Other response type: {type(response)}", file=sys.stderr)
+
     finally:
         # Clean up callbacks
         host.streaming_json_callback = None
         host.streaming_json_tool_use_callback = None
         host.streaming_json_tool_result_callback = None
+        host._streaming_json_mode = False
         print("DEBUG: Callbacks cleaned up", file=sys.stderr)
 
 

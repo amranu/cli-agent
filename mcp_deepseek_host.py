@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import sys
 from typing import Any, Dict, List, Optional, Union
 
 from openai import OpenAI
@@ -205,9 +206,15 @@ class MCPDeepseekHost(BaseMCPAgent):
             )
 
             if stream:
-                return self._handle_streaming_response(
-                    response, enhanced_messages, interactive=interactive
-                )
+                if use_buffering:
+                    # Use buffering for streaming JSON mode
+                    return await self._handle_buffered_streaming_response(
+                        response, enhanced_messages, interactive=interactive
+                    )
+                else:
+                    return self._handle_streaming_response(
+                        response, enhanced_messages, interactive=interactive
+                    )
             else:
                 return await self._handle_complete_response(
                     response, enhanced_messages, interactive=interactive
@@ -796,17 +803,81 @@ class MCPDeepseekHost(BaseMCPAgent):
         """Handle streaming response by collecting all chunks and emitting through buffer system."""
         # Collect all chunks first
         full_content = ""
+        tool_calls_dict = {}  # Accumulate tool calls by index
+        last_response = None
 
         for chunk in response:
             if chunk.choices:
                 delta = chunk.choices[0].delta
+                last_response = chunk  # Keep the last chunk for tool calls
 
                 # Handle regular content
                 if delta.content:
                     full_content += delta.content
 
-        # Now emit the complete content through the buffer callback system
-        if self.streaming_json_callback and full_content.strip():
-            self.streaming_json_callback(full_content)
+                # Handle tool calls in streaming - accumulate by index
+                if hasattr(delta, "tool_calls") and delta.tool_calls:
+                    for tool_call in delta.tool_calls:
+                        index = getattr(tool_call, "index", 0)
+
+                        # Initialize tool call if not exists
+                        if index not in tool_calls_dict:
+                            tool_calls_dict[index] = {
+                                "id": None,
+                                "function": {"name": None, "arguments": ""},
+                            }
+
+                        # Accumulate tool call data
+                        if tool_call.id is not None:
+                            tool_calls_dict[index]["id"] = tool_call.id
+
+                        if hasattr(tool_call, "function") and tool_call.function:
+                            if tool_call.function.name is not None:
+                                tool_calls_dict[index]["function"][
+                                    "name"
+                                ] = tool_call.function.name
+                            if tool_call.function.arguments is not None:
+                                tool_calls_dict[index]["function"][
+                                    "arguments"
+                                ] += tool_call.function.arguments
+
+        # Convert accumulated tool calls to list
+        collected_tool_calls = []
+        for index in sorted(tool_calls_dict.keys()):
+            tc_data = tool_calls_dict[index]
+            # Create a mock tool call object
+            from types import SimpleNamespace
+
+            tool_call = SimpleNamespace()
+            tool_call.id = tc_data["id"]
+            tool_call.function = SimpleNamespace()
+            tool_call.function.name = tc_data["function"]["name"]
+            tool_call.function.arguments = tc_data["function"]["arguments"]
+            collected_tool_calls.append(tool_call)
+
+        # For streaming JSON mode, trigger the centralized base agent handler
+        if self.streaming_json_callback:
+            if collected_tool_calls:
+                # In streaming mode with proper tool_calls, use full content as is
+                # The _extract_text_before_tool_calls is for legacy format parsing
+                extracted_text = full_content
+
+                # Create a mock response object with accumulated tool calls
+                from types import SimpleNamespace
+
+                mock_response = SimpleNamespace()
+                mock_response.choices = [SimpleNamespace()]
+                mock_response.choices[0].message = SimpleNamespace()
+                mock_response.choices[0].message.content = (
+                    extracted_text  # Use extracted text
+                )
+                mock_response.choices[0].message.tool_calls = collected_tool_calls
+
+                # Let base agent handle the Claude Code format via the standard flow
+                # We'll return the response so it gets processed normally
+                return mock_response
+            else:
+                # Just text content, emit it directly
+                self.streaming_json_callback(full_content)
 
         return full_content
