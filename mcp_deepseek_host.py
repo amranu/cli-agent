@@ -688,14 +688,32 @@ class MCPDeepseekHost(BaseMCPAgent):
 
                         if continuation_message:
                             # Yield the interrupt and completion messages for streaming
-                            yield "\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
+                            if not (
+                                hasattr(self, "streaming_json_callback")
+                                and self.streaming_json_callback
+                            ):
+                                print(
+                                    "\r\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
+                                )
 
                             # The centralized method already collected results, so yield completion message
-                            yield f"\n📋 Collected subagent result(s). Restarting with results...\n"
+                            if not (
+                                hasattr(self, "streaming_json_callback")
+                                and self.streaming_json_callback
+                            ):
+                                print(
+                                    f"\r\n📋 Collected subagent result(s). Restarting with results...\n"
+                                )
 
                             # Restart with subagent results
                             new_messages = [continuation_message]
-                            yield "\n🔄 Restarting conversation with subagent results...\n"
+                            if not (
+                                hasattr(self, "streaming_json_callback")
+                                and self.streaming_json_callback
+                            ):
+                                print(
+                                    "\r\n🔄 Restarting conversation with subagent results...\n"
+                                )
 
                             new_response = await self._generate_completion(
                                 new_messages,
@@ -710,7 +728,11 @@ class MCPDeepseekHost(BaseMCPAgent):
                                 yield str(new_response)
                             return
 
-                        yield "\n✅ Tool execution complete. Continuing...\n"
+                        if not (
+                            hasattr(self, "streaming_json_callback")
+                            and self.streaming_json_callback
+                        ):
+                            print("\r\n✅ Tool execution complete. Continuing...\n")
 
                 except ToolDeniedReturnToPrompt as e:
                     # Store the exception to raise after generator completes

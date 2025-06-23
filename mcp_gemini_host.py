@@ -1193,8 +1193,20 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
 
                             if continuation_message:
                                 # Yield the interrupt and completion messages for streaming
-                                yield "\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
-                                yield "\n📋 Collected subagent result(s). Restarting with results...\n"
+                                if not (
+                                    hasattr(self, "streaming_json_callback")
+                                    and self.streaming_json_callback
+                                ):
+                                    print(
+                                        "\r\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
+                                    )
+                                if not (
+                                    hasattr(self, "streaming_json_callback")
+                                    and self.streaming_json_callback
+                                ):
+                                    print(
+                                        "\r\n📋 Collected subagent result(s). Restarting with results...\n"
+                                    )
 
                                 # Replace conversation with just the continuation context
                                 new_messages = [continuation_message]
@@ -1270,7 +1282,13 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
 
                             if subagent_results:
                                 # Add subagent results to the conversation and restart
-                                yield f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n"
+                                if not (
+                                    hasattr(self, "streaming_json_callback")
+                                    and self.streaming_json_callback
+                                ):
+                                    print(
+                                        f"\r\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n"
+                                    )
 
                                 # Create new message with subagent results
                                 results_summary = "\n".join(

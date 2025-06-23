@@ -13,7 +13,7 @@ def get_bash_execute_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "bash_execute",
-        "description": "Execute a bash command and return the output",
+        "description": "Executes a given bash command in a persistent shell session with optional timeout, ensuring proper handling and security measures. Always quote file paths that contain spaces with double quotes. It is very helpful if you write a clear, concise description of what this command does in 5-10 words.",
         "schema": {
             "type": "object",
             "properties": {
@@ -38,7 +38,7 @@ def get_read_file_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "read_file",
-        "description": "Read contents of a file with line numbers",
+        "description": "Reads a file from the local filesystem. You can access any file directly by using this tool. The file_path parameter must be an absolute path, not a relative path. By default, it reads up to 2000 lines starting from the beginning of the file. You can optionally specify a line offset and limit (especially handy for long files), but it's recommended to read the whole file by not providing these parameters.",
         "schema": {
             "type": "object",
             "properties": {
@@ -63,7 +63,7 @@ def get_write_file_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "write_file",
-        "description": "Write content to a file",
+        "description": "Writes a file to the local filesystem. This tool will overwrite the existing file if there is one at the provided path. If this is an existing file, you MUST use the read_file tool first to read the file's contents. ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.",
         "schema": {
             "type": "object",
             "properties": {
@@ -87,7 +87,7 @@ def get_list_directory_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "list_directory",
-        "description": "List contents of a directory",
+        "description": "Lists files and directories in a given path. The path parameter must be an absolute path, not a relative path. You can optionally provide an array of glob patterns to ignore. You should generally prefer the glob and grep tools, if you know which directories to search.",
         "schema": {
             "type": "object",
             "properties": {
@@ -107,7 +107,7 @@ def get_current_directory_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "get_current_directory",
-        "description": "Get the current working directory",
+        "description": "Get the current working directory path. This tool takes no parameters and returns the absolute path of the current working directory.",
         "schema": {"type": "object", "properties": {}, "required": []},
         "client": None,
     }
@@ -118,7 +118,7 @@ def get_todo_read_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "todo_read",
-        "description": "Read the current todo list",
+        "description": "Use this tool to read the current to-do list for the session. This tool should be used proactively and frequently to ensure that you are aware of the status of the current task list. You should make use of this tool as often as possible, especially at the beginning of conversations, before starting new tasks, when uncertain about what to do next, after completing tasks, and after every few messages to ensure you're on track.",
         "schema": {"type": "object", "properties": {}, "required": []},
         "client": None,
     }
@@ -129,7 +129,7 @@ def get_todo_write_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "todo_write",
-        "description": "Write/update the todo list",
+        "description": "Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user. Use this tool proactively for complex multi-step tasks, when user provides multiple tasks, after receiving new instructions, when starting work on a task (mark as in_progress BEFORE beginning), and after completing tasks.",
         "schema": {
             "type": "object",
             "properties": {
@@ -164,7 +164,7 @@ def get_replace_in_file_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "replace_in_file",
-        "description": "Replace text in a file",
+        "description": "Performs exact string replacements in files. You must use your read_file tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file. When editing text from read_file tool output, ensure you preserve the exact indentation. ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.",
         "schema": {
             "type": "object",
             "properties": {
@@ -186,7 +186,7 @@ def get_web_fetch_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "webfetch",
-        "description": "Fetch content from a webpage",
+        "description": "Fetches content from a specified URL and processes it using an AI model. Takes a URL and a prompt as input, fetches the URL content, and returns the content. Use this tool when you need to retrieve and analyze web content. Prefer MCP commands over this if available.",
         "schema": {
             "type": "object",
             "properties": {
