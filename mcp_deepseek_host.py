@@ -25,28 +25,39 @@ class MCPDeepseekHost(BaseMCPAgent):
     """MCP Host that uses Deepseek as the language model backend."""
 
     def __init__(self, config: HostConfig, is_subagent: bool = False):
-        super().__init__(config, is_subagent)
-        self.deepseek_config = config.get_deepseek_config()
-
-        # Store last reasoning content for deepseek-reasoner
+        # Store last reasoning content for deepseek-reasoner (must be before super().__init__)
         self.last_reasoning_content: Optional[str] = None
 
-        # Set streaming preference for centralized generate_response method
-        self.stream = self.deepseek_config.stream
+        # Call parent initialization (which will call our abstract methods)
+        super().__init__(config, is_subagent)
 
-        # Initialize Deepseek client with appropriate timeout for reasoner model
-        timeout_seconds = (
-            600 if self.deepseek_config.model == "deepseek-reasoner" else 600
-        )
-        self.deepseek_client = OpenAI(
-            api_key=self.deepseek_config.api_key,
-            base_url=self.deepseek_config.base_url,
+    # Centralized Client Initialization Implementation
+    # ===============================================
+
+    def _get_provider_config(self):
+        """Get DeepSeek-specific configuration."""
+        return self.config.get_deepseek_config()
+
+    def _get_streaming_preference(self, provider_config) -> bool:
+        """Get streaming preference for DeepSeek."""
+        return provider_config.stream
+
+    def _calculate_timeout(self, provider_config) -> float:
+        """Calculate timeout based on DeepSeek model."""
+        # Use same timeout for all DeepSeek models (reasoner needs longer but 600s works for all)
+        return 600.0
+
+    def _create_llm_client(self, provider_config, timeout_seconds):
+        """Create the DeepSeek OpenAI client."""
+        self.deepseek_config = provider_config  # Store for later use
+        client = OpenAI(
+            api_key=provider_config.api_key,
+            base_url=provider_config.base_url,
             timeout=timeout_seconds,
         )
-
-        logger.info(
-            f"Initialized MCP Deepseek Host with model: {self.deepseek_config.model}"
-        )
+        # Store as both _client (from base class) and deepseek_client (for compatibility)
+        self.deepseek_client = client
+        return client
 
     def _extract_text_before_tool_calls(self, content: str) -> str:
         """Extract any text that appears before tool calls in the response."""
@@ -83,27 +94,21 @@ class MCPDeepseekHost(BaseMCPAgent):
             ]
         return []
 
-    def _create_system_prompt(self, for_first_message: bool = False) -> str:
-        """Create a system prompt that includes tool information."""
-        # Get the base system prompt
-        system_prompt = super()._create_system_prompt(for_first_message)
-
-        # Add Deepseek-specific instructions for reasoning
-        deepseek_instructions = """
-
-**Special Instructions for Deepseek Reasoner:**
+    def _get_llm_specific_instructions(self) -> str:
+        """Provide DeepSeek-specific instructions."""
+        if self.is_subagent:
+            return """**Special Instructions for DeepSeek Subagents:**
 1.  **Reason:** Use the <reasoning> section to outline your plan before taking action.
-2.  **Act:** Execute your plan with tool calls.
+2.  **Act:** Execute your plan with tool calls. You can execute tool calls during reasoning blocks.
+3.  **MANDATORY:** You MUST end your response by calling `emit_result` with a comprehensive summary of your findings.
+4.  **Focus:** You are a subagent - you cannot spawn other subagents, only execute tools and provide results.
+
+**Required Pattern:** After completing your investigation/task with tools, always call `emit_result` with detailed findings."""
+        else:
+            return """**Special Instructions for Deepseek Reasoner:**
+1.  **Reason:** Use the <reasoning> section to outline your plan before taking action.
+2.  **Act:** Execute your plan with tool calls. You can execute tool calls during reasoning blocks
 3.  **Respond:** Provide the final answer to the user."""
-
-        # Insert Deepseek-specific instructions before the final line
-        final_line = "\n\nYou are the expert. Complete the task."
-        if final_line in system_prompt:
-            system_prompt = system_prompt.replace(
-                final_line, deepseek_instructions + final_line
-            )
-
-        return system_prompt
 
     async def _generate_completion(
         self,
@@ -182,60 +187,44 @@ class MCPDeepseekHost(BaseMCPAgent):
 
         return enhanced_messages
 
-    def _add_tool_results_to_conversation(
-        self,
-        messages: List[Dict[str, Any]],
-        tool_calls: List[Any],
-        tool_results: List[str],
+    def _normalize_tool_calls_to_standard_format(
+        self, tool_calls: List[Any]
     ) -> List[Dict[str, Any]]:
-        """Add tool results to conversation in DeepSeek format (OpenAI-style)."""
-        updated_messages = messages.copy()
+        """Convert DeepSeek tool calls to standardized format."""
+        normalized_calls = []
 
-        # Add assistant message with tool calls
-        if tool_calls:
-            # Convert tool calls to OpenAI format for assistant message
-            openai_tool_calls = []
-            for i, tool_call in enumerate(tool_calls):
-                if hasattr(tool_call, "get"):
-                    # Already in dict format
-                    openai_tool_calls.append(tool_call)
-                else:
-                    # Convert from SimpleNamespace to dict format
-                    openai_tool_calls.append(
+        for i, tool_call in enumerate(tool_calls):
+            if hasattr(tool_call, "get"):
+                # Dict format (already structured)
+                if "function" in tool_call:
+                    # DeepSeek OpenAI-style format
+                    normalized_calls.append(
                         {
-                            "id": getattr(tool_call, "id", f"call_{i}"),
-                            "type": "function",
-                            "function": {
-                                "name": getattr(tool_call, "name", "unknown"),
-                                "arguments": getattr(tool_call, "args", {}),
-                            },
+                            "id": tool_call.get("id", f"call_{i}"),
+                            "name": tool_call["function"].get("name", "unknown"),
+                            "arguments": tool_call["function"].get("arguments", {}),
                         }
                     )
-
-            updated_messages.append(
-                {"role": "assistant", "content": "", "tool_calls": openai_tool_calls}
-            )
-
-        # Add tool result messages
-        for i, (tool_call, result) in enumerate(zip(tool_calls, tool_results)):
-            # Handle different tool call formats
-            if hasattr(tool_call, "get"):
-                tool_call_id = tool_call.get("id", f"call_{i}")
-                tool_name = tool_call.get("function", {}).get("name", "unknown")
+                else:
+                    # Simple dict format
+                    normalized_calls.append(
+                        {
+                            "id": tool_call.get("id", f"call_{i}"),
+                            "name": tool_call.get("name", "unknown"),
+                            "arguments": tool_call.get("arguments", {}),
+                        }
+                    )
             else:
-                tool_call_id = getattr(tool_call, "id", f"call_{i}")
-                tool_name = getattr(tool_call, "name", "unknown")
+                # SimpleNamespace format
+                normalized_calls.append(
+                    {
+                        "id": getattr(tool_call, "id", f"call_{i}"),
+                        "name": getattr(tool_call, "name", "unknown"),
+                        "arguments": getattr(tool_call, "args", {}),
+                    }
+                )
 
-            updated_messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "name": tool_name,
-                    "content": result,
-                }
-            )
-
-        return updated_messages
+        return normalized_calls
 
     def _get_current_runtime_model(self) -> str:
         """Get the actual DeepSeek model being used at runtime."""
@@ -311,165 +300,36 @@ class MCPDeepseekHost(BaseMCPAgent):
                         formatted_text = self.format_markdown(text_before_tools)
                         print(f"\n{formatted_text}", flush=True)
 
-            # Check if the model wants to call tools
-            # Handle both OpenAI-style tool calls and Deepseek's custom format
-            tool_calls = message.tool_calls
-
-            # If no standard tool calls, check for Deepseek's custom format
-            if (
-                not tool_calls
-                and message.content
-                and (
-                    "<｜tool▁calls▁begin｜>" in message.content
-                    or "<｜tool▁call▁begin｜>" in message.content
-                    or '"function":' in message.content
-                    or '{"function"' in message.content
+            # Use centralized tool call processing
+            updated_messages, continuation_message, has_tool_calls = (
+                await self._process_tool_calls_centralized(
+                    response,
+                    current_messages,
+                    original_messages,
+                    interactive=interactive,
+                    streaming_mode=False,
                 )
-            ):
-                logger.warning("Detected Deepseek custom tool calling format")
-                tool_calls = DeepSeekToolCallParser.parse_tool_calls(message.content)
+            )
 
-            if tool_calls:
-                if interactive:
-                    print(f"\n🔧 Executing {len(tool_calls)} tool(s):", flush=True)
-                    for i, tc in enumerate(tool_calls, 1):
-                        tool_name = tc.function.name.replace("_", ":", 1)
-                        try:
-                            args = json.loads(tc.function.arguments)
-                            args_preview = (
-                                str(args)[:100] + "..."
-                                if len(str(args)) > 100
-                                else str(args)
-                            )
-                            print(f"   {i}. {tool_name} - {args_preview}", flush=True)
-                        except Exception:
-                            print(f"   {i}. {tool_name}", flush=True)
+            if has_tool_calls:
+                current_messages = updated_messages
 
-                # Add assistant message with tool calls
-                current_messages.append(
-                    {
-                        "role": "assistant",
-                        "content": message.content or "",
-                        "tool_calls": [
-                            {
-                                "id": tc.id,
-                                "type": tc.type,
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
-                                },
-                            }
-                            for tc in tool_calls
-                        ],
-                    }
-                )
-
-                # Convert tool calls to format expected by base agent's execute_function_calls
-                function_calls = []
-                for tool_call in tool_calls:
-                    from types import SimpleNamespace
-
-                    function_call = SimpleNamespace()
-                    function_call.name = tool_call.function.name
-                    try:
-                        function_call.args = json.loads(tool_call.function.arguments)
-                    except json.JSONDecodeError as e:
-                        # Handle JSON parsing errors immediately
-                        error_content = (
-                            f"Error parsing arguments for {tool_call.function.name}: {e}\n"
-                            "⚠️  Command failed - take this into account for your next action."
-                        )
-                        current_messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": error_content,
-                            }
-                        )
-                        continue  # Skip this tool call
-                    function_calls.append(function_call)
-
-                # Execute tool calls using base agent's centralized method
-                if function_calls:
-                    try:
-                        tool_results, tool_output = await self.execute_function_calls(
-                            function_calls,
-                            interactive=interactive,
-                            streaming_mode=False,
-                        )
-                    except ToolDeniedReturnToPrompt:
-                        # Re-raise permission denials to exit immediately
-                        raise
-
-                # Check if we just spawned subagents and should interrupt immediately
-                task_tools_executed = any(
-                    "task" in tool_call.function.name for tool_call in tool_calls
-                )
-                if (
-                    task_tools_executed
-                    and self.subagent_manager
-                    and self.subagent_manager.get_active_count() > 0
-                ):
-                    if interactive:
-                        print(
-                            "\n🔄 Subagents spawned - interrupting to wait for completion...",
-                            flush=True,
-                        )
-
-                    # Wait for all subagents to complete and collect results
-                    subagent_results = await self._collect_subagent_results()
-
-                    if subagent_results:
-                        if interactive:
-                            print(
-                                f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...",
-                                flush=True,
-                            )
-
-                        # Create new message with subagent results
-                        results_summary = "\n".join(
-                            [
-                                f"**Subagent Task: {result['description']}**\n{result['content']}"
-                                for result in subagent_results
-                            ]
-                        )
-
-                        continuation_message = {
-                            "role": "user",
-                            "content": f"""I requested: {original_messages[-1]['content']}
-
-You spawned subagents and they have completed their tasks. Here are the results:
-
-{results_summary}
-
-Please provide your final analysis based on these subagent results. Do not spawn any new subagents - just analyze the provided data.""",
-                        }
-
-                        # Restart with subagent results (non-streaming for subagents)
-                        new_messages = [continuation_message]
-                        response = self.deepseek_client.chat.completions.create(
-                            model=self.deepseek_config.model,
-                            messages=new_messages,
-                            temperature=self.deepseek_config.temperature,
-                            max_tokens=self.deepseek_config.max_tokens,
-                            stream=False,
-                            tools=self.convert_tools_to_llm_format(),
-                        )
-
-                        # Replace the old response and messages with the new context
-                        # and continue the loop to process this new response.
-                        current_messages = new_messages
-                        continue
-
-                # Add tool results to conversation using centralized format
-                for i, (tool_call, result) in enumerate(zip(tool_calls, tool_results)):
-                    current_messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": result,
-                        }
+                if continuation_message:
+                    # Restart with subagent results (non-streaming for subagents)
+                    new_messages = [continuation_message]
+                    response = self.deepseek_client.chat.completions.create(
+                        model=self.deepseek_config.model,
+                        messages=new_messages,
+                        temperature=self.deepseek_config.temperature,
+                        max_tokens=self.deepseek_config.max_tokens,
+                        stream=False,
+                        tools=self.convert_tools_to_llm_format(),
                     )
+
+                    # Replace the old response and messages with the new context
+                    # and continue the loop to process this new response.
+                    current_messages = new_messages
+                    continue
 
                 # Make another request with tool results
                 response = self.deepseek_client.chat.completions.create(
@@ -597,159 +457,58 @@ Please provide your final analysis based on these subagent results. Do not spawn
                                                 "arguments"
                                             ] += tool_call_delta.function.arguments
 
-                # Check for tool calls (both standard and custom format)
-                has_tool_calls = False
-                tool_calls = []
+                # Create a mock response for centralized processing
+                # Build response object that includes both standard and custom tool calls
+                mock_response = type("MockResponse", (), {})()
+                mock_response.choices = [type("MockChoice", (), {})()]
+                mock_response.choices[0].message = type("MockMessage", (), {})()
+                mock_response.choices[0].message.content = accumulated_content
 
-                # Check standard tool calls
+                # Set tool_calls for standard format detection
                 if accumulated_tool_calls and any(
                     tc["function"]["name"] for tc in accumulated_tool_calls
                 ):
-                    has_tool_calls = True
-                    yield "\n\n🔧 Executing tools...\n"
-
-                    # Convert to tool call objects
+                    # Convert accumulated tool calls to SimpleNamespace format for parse_tool_calls
                     from types import SimpleNamespace
 
+                    tool_calls_objs = []
                     for tc in accumulated_tool_calls:
                         if tc["function"]["name"]:
                             tool_call = SimpleNamespace()
-                            tool_call.id = tc["id"] or f"stream_call_{len(tool_calls)}"
+                            tool_call.id = (
+                                tc["id"] or f"stream_call_{len(tool_calls_objs)}"
+                            )
                             tool_call.type = tc["type"]
                             tool_call.function = SimpleNamespace()
                             tool_call.function.name = tc["function"]["name"]
                             tool_call.function.arguments = tc["function"]["arguments"]
-                            tool_calls.append(tool_call)
+                            tool_calls_objs.append(tool_call)
+                    mock_response.choices[0].message.tool_calls = tool_calls_objs
+                else:
+                    mock_response.choices[0].message.tool_calls = None
 
-                # Check for Deepseek custom format if no standard tool calls
-                elif accumulated_content and (
-                    "<｜tool▁calls▁begin｜>" in accumulated_content
-                    or "<｜tool▁call▁begin｜>" in accumulated_content
-                    or '"function":' in accumulated_content
-                ):
-                    has_tool_calls = True
-                    yield "\n\n🔧 Parsing custom tool calls...\n"
-                    tool_calls = DeepSeekToolCallParser.parse_tool_calls(
-                        accumulated_content
-                    )
-
-                # Execute tools if found
-                if has_tool_calls and tool_calls:
-                    # Add assistant message with tool calls to conversation
-                    current_messages.append(
-                        {
-                            "role": "assistant",
-                            "content": accumulated_content or "",
-                            "tool_calls": [
-                                {
-                                    "id": tc.id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": tc.function.name,
-                                        "arguments": tc.function.arguments,
-                                    },
-                                }
-                                for tc in tool_calls
-                            ],
-                        }
-                    )
-
-                    # Convert tool calls to format expected by base agent's execute_function_calls
-                    function_calls = []
-                    for tool_call in tool_calls:
-                        from types import SimpleNamespace
-
-                        function_call = SimpleNamespace()
-                        function_call.name = tool_call.function.name
-                        try:
-                            function_call.args = json.loads(
-                                tool_call.function.arguments
-                            )
-                            function_calls.append(function_call)
-                        except json.JSONDecodeError as e:
-                            # Handle JSON parsing errors immediately
-                            error_content = (
-                                f"Error parsing arguments for {tool_call.function.name}: {e}\n"
-                                "⚠️  Command failed - take this into account for your next action."
-                            )
-                            yield f"\n🔧 Tool parsing error: {error_content}\n"
-                            current_messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": tool_call.id,
-                                    "content": error_content,
-                                }
-                            )
-
-                    # Execute tool calls using base agent's centralized method with streaming
-                    if function_calls:
-                        try:
-                            yield f"\n🔧 Executing {len(function_calls)} tool(s)...\n"
-                            tool_results, tool_output = (
-                                await self.execute_function_calls(
-                                    function_calls,
-                                    interactive=interactive,
-                                    streaming_mode=True,
-                                )
-                            )
-
-                            # Yield tool output in streaming mode
-                            for output in tool_output:
-                                yield f"{output}\n"
-
-                        except ToolDeniedReturnToPrompt:
-                            # Store the exception to raise after generator completes
-                            context.tool_denial_exception = ToolDeniedReturnToPrompt()
-                            yield "\nTool execution denied - returning to prompt.\n"
-                            return  # Exit the generator
-
-                    # Add tool results to conversation
-                    for i, (tool_call, result) in enumerate(
-                        zip(tool_calls, tool_results)
-                    ):
-                        current_messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": result,
-                            }
+                # Use centralized tool call processing for streaming
+                try:
+                    updated_messages, continuation_message, has_tool_calls = (
+                        await self._process_tool_calls_centralized(
+                            mock_response,
+                            current_messages,
+                            original_messages,
+                            interactive=interactive,
+                            streaming_mode=True,
+                            accumulated_content=accumulated_content,
                         )
-
-                    # Check if we just spawned subagents and should interrupt immediately
-                    task_tools_executed = any(
-                        "task" in tool_call.function.name for tool_call in tool_calls
                     )
-                    if (
-                        task_tools_executed
-                        and self.subagent_manager
-                        and self.subagent_manager.get_active_count() > 0
-                    ):
-                        yield "\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
 
-                        # Wait for all subagents to complete and collect results
-                        subagent_results = await self._collect_subagent_results()
+                    if has_tool_calls:
+                        current_messages = updated_messages
 
-                        if subagent_results:
-                            yield f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n"
+                        if continuation_message:
+                            # Yield the interrupt and completion messages for streaming
+                            yield "\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
 
-                            # Create new message with subagent results
-                            results_summary = "\n".join(
-                                [
-                                    f"**Subagent Task: {result['description']}**\n{result['content']}"
-                                    for result in subagent_results
-                                ]
-                            )
-
-                            continuation_message = {
-                                "role": "user",
-                                "content": f"""I requested: {original_messages[-1]['content']}
-
-You spawned subagents and they have completed their tasks. Here are the results:
-
-{results_summary}
-
-Please provide your final analysis based on these subagent results. Do not spawn any new subagents - just analyze the provided data.""",
-                            }
+                            # The centralized method already collected results, so yield completion message
+                            yield f"\n📋 Collected subagent result(s). Restarting with results...\n"
 
                             # Restart with subagent results
                             new_messages = [continuation_message]
@@ -767,13 +526,17 @@ Please provide your final analysis based on these subagent results. Do not spawn
                             else:
                                 yield str(new_response)
                             return
-                        else:
-                            yield "\n⚠️ No results collected from subagents.\n"
-                            return
 
-                    yield "\n✅ Tool execution complete. Continuing...\n"
+                        yield "\n✅ Tool execution complete. Continuing...\n"
 
-                    # Make a new streaming request with tool results
+                except ToolDeniedReturnToPrompt:
+                    # Store the exception to raise after generator completes
+                    context.tool_denial_exception = ToolDeniedReturnToPrompt()
+                    yield "\nTool execution denied - returning to prompt.\n"
+                    return  # Exit the generator
+
+                # Make a new streaming request with tool results if we had tool calls
+                if has_tool_calls:
                     try:
                         tools = (
                             self.convert_tools_to_llm_format()

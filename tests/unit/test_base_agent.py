@@ -30,10 +30,25 @@ class TestBaseMCPAgent:
             ):
                 return "test response"
 
-            def _add_tool_results_to_conversation(
-                self, messages, tool_calls, tool_results
-            ):
-                return messages
+            def _normalize_tool_calls_to_standard_format(self, tool_calls):
+                return []
+
+            def _get_current_runtime_model(self):
+                return "test-model"
+
+            def _get_provider_config(self):
+                return self.config.get_deepseek_config()
+
+            def _get_streaming_preference(self, provider_config) -> bool:
+                return True
+
+            def _calculate_timeout(self, provider_config) -> float:
+                return 60.0
+
+            def _create_llm_client(self, provider_config, timeout_seconds):
+                from unittest.mock import MagicMock
+
+                return MagicMock()
 
         agent = TestAgent(sample_host_config, is_subagent=False)
 
@@ -64,10 +79,25 @@ class TestBaseMCPAgent:
             ):
                 return "test response"
 
-            def _add_tool_results_to_conversation(
-                self, messages, tool_calls, tool_results
-            ):
-                return messages
+            def _normalize_tool_calls_to_standard_format(self, tool_calls):
+                return []
+
+            def _get_current_runtime_model(self):
+                return "test-model"
+
+            def _get_provider_config(self):
+                return self.config.get_deepseek_config()
+
+            def _get_streaming_preference(self, provider_config) -> bool:
+                return True
+
+            def _calculate_timeout(self, provider_config) -> float:
+                return 60.0
+
+            def _create_llm_client(self, provider_config, timeout_seconds):
+                from unittest.mock import MagicMock
+
+                return MagicMock()
 
         agent = TestAgent(sample_host_config, is_subagent=True)
 

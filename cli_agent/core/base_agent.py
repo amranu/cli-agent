@@ -116,6 +116,9 @@ class BaseMCPAgent(ABC):
         self.formatter = ResponseFormatter(config)
         logger.debug("Initialized response formatter")
 
+        # Centralized LLM client initialization
+        self._initialize_llm_client()
+
         logger.info(
             f"Initialized Base MCP Agent with {len(self.available_tools)} built-in tools"
         )
@@ -859,6 +862,117 @@ Runtime: {runtime:.2f} seconds"""
 
         return results
 
+    def _detect_task_tool_execution(self, tool_calls) -> bool:
+        """Detect if any task tools were executed that spawn subagents."""
+        for tool_call in tool_calls:
+            # Handle different tool call formats
+            tool_name = ""
+
+            if isinstance(tool_call, dict):
+                # Dict format (Gemini function calls)
+                if "function" in tool_call:
+                    # DeepSeek-style dict format
+                    tool_name = tool_call["function"].get("name", "")
+                elif "name" in tool_call:
+                    # Simple dict format
+                    tool_name = tool_call["name"]
+                else:
+                    # Gemini function call dict format
+                    tool_name = getattr(tool_call, "name", "")
+            elif hasattr(tool_call, "function"):
+                # SimpleNamespace with function attribute (DeepSeek)
+                tool_name = tool_call.function.name
+            elif hasattr(tool_call, "name"):
+                # SimpleNamespace with direct name attribute (Gemini)
+                tool_name = tool_call.name
+            else:
+                # Fallback - try to get name from any available attribute
+                tool_name = getattr(tool_call, "name", "")
+
+            if "task" in tool_name:
+                return True
+
+        return False
+
+    def _create_subagent_continuation_message(
+        self, original_request: str, subagent_results: List[Dict]
+    ) -> Dict:
+        """Create standardized continuation message with subagent results."""
+        results_summary = "\n".join(
+            [
+                f"**Subagent Task: {result['description']}**\n{result['content']}"
+                for result in subagent_results
+            ]
+        )
+
+        return {
+            "role": "user",
+            "content": f"""I requested: {original_request}
+
+You spawned subagents and they have completed their tasks. Here are the results:
+
+{results_summary}
+
+Please provide your final analysis based on these subagent results. Do not spawn any new subagents - just analyze the provided data.""",
+        }
+
+    async def _handle_subagent_coordination(
+        self,
+        tool_calls,
+        original_messages: List[Dict],
+        interactive: bool = True,
+        streaming_mode: bool = False,
+    ) -> Optional[Dict]:
+        """
+        Centralized subagent coordination logic.
+
+        Returns None if no subagents were spawned, or a continuation message dict if subagents completed.
+        """
+        if not self.subagent_manager:
+            return None
+
+        # Check if any task tools were executed
+        task_tools_executed = self._detect_task_tool_execution(tool_calls)
+
+        if not (task_tools_executed and self.subagent_manager.get_active_count() > 0):
+            return None
+
+        # Output appropriate message for subagent spawning
+        interrupt_msg = (
+            "\n🔄 Subagents spawned - interrupting to wait for completion..."
+        )
+        if streaming_mode:
+            # For streaming mode, this should be yielded by the caller
+            pass  # Caller will handle yielding
+        elif interactive:
+            print(interrupt_msg, flush=True)
+
+        # Wait for all subagents to complete and collect results
+        subagent_results = await self._collect_subagent_results()
+
+        if subagent_results:
+            completion_msg = f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results..."
+            if streaming_mode:
+                # For streaming mode, this should be yielded by the caller
+                pass  # Caller will handle yielding
+            elif interactive:
+                print(completion_msg, flush=True)
+
+            # Create continuation message with subagent results
+            original_request = (
+                original_messages[-1]["content"]
+                if original_messages
+                else "your request"
+            )
+            continuation_message = self._create_subagent_continuation_message(
+                original_request, subagent_results
+            )
+
+            return continuation_message
+        else:
+            logger.warning("No results collected from subagents")
+            return None
+
     async def execute_function_calls(
         self,
         function_calls: List,
@@ -1234,7 +1348,22 @@ Runtime: {runtime:.2f} seconds"""
         return result, keepalive_messages
 
     def _create_system_prompt(self, for_first_message: bool = False) -> str:
-        """Create a basic system prompt that includes tool information."""
+        """Create a centralized system prompt with LLM-specific customization points."""
+        # Build the system prompt using centralized template system
+        base_prompt = self._build_base_system_prompt()
+
+        # Add LLM-specific customizations
+        llm_customizations = self._get_llm_specific_instructions()
+
+        if llm_customizations:
+            final_prompt = base_prompt + "\n\n" + llm_customizations
+        else:
+            final_prompt = base_prompt
+
+        return final_prompt
+
+    def _build_base_system_prompt(self) -> str:
+        """Build the base system prompt template - centralized and reusable."""
         tool_descriptions = []
 
         for tool_key, tool_info in self.available_tools.items():
@@ -1250,7 +1379,19 @@ Runtime: {runtime:.2f} seconds"""
         # Customize prompt based on whether this is a subagent
         if self.is_subagent:
             agent_role = "You are a focused subagent responsible for executing a specific task efficiently."
-            subagent_strategy = "**SUBAGENT FOCUS:** You are a subagent with a specific task. Complete your assigned task using the available tools and provide clear results. You cannot spawn other subagents."
+            subagent_strategy = """**CRITICAL SUBAGENT REQUIREMENTS:**
+- **Tool-First Approach:** You MUST use tools to gather information and perform actions - do NOT just describe what you would do
+- **Take Action:** When a task requires running commands, reading files, or analysis, immediately use the appropriate tools
+- **Cannot Spawn Subagents:** You are already a subagent - you cannot create other subagents (no builtin_task calls)
+- **Must Emit Summary:** You MUST end your response by calling `emit_result` with a summary of your findings and results
+- **Be Comprehensive:** Include all relevant details, data, and analysis in your emit_result summary
+- **Focus on Execution:** Don't ask questions or seek clarification - use tools to investigate and provide definitive answers
+
+**Subagent Workflow:**
+1. **Understand the task:** Analyze what you've been asked to do
+2. **Use tools:** Execute the necessary tool calls to gather information and perform actions  
+3. **Analyze results:** Process the tool outputs to understand what you've found
+4. **Emit summary:** Call `emit_result` with a comprehensive summary of your findings, conclusions, and any recommendations"""
         else:
             agent_role = "You are a top-tier autonomous software development agent. You are in control and responsible for completing the user's request."
             subagent_strategy = """**Context Management & Subagent Strategy:**
@@ -1270,8 +1411,8 @@ Runtime: {runtime:.2f} seconds"""
 ✅ **DO delegate:** File searches, large code analysis, running commands, gathering information
 ❌ **DON'T delegate:** Simple edits, single file reads <50 lines, quick tool calls"""
 
-        # Basic system prompt - subclasses can override this
-        system_prompt = f"""{agent_role}
+        # Base system prompt template
+        base_prompt = f"""{agent_role}
 
 **Mission:** Use the available tools to solve the user's request.
 
@@ -1310,66 +1451,195 @@ Runtime: {runtime:.2f} seconds"""
 
 You are the expert. Complete the task."""
 
-        return system_prompt
+        return base_prompt
 
-    def _read_agent_md(self) -> str:
-        """Read the AGENT.md file for prepending to first messages."""
+    def _get_llm_specific_instructions(self) -> str:
+        """Override in subclasses to add LLM-specific instructions.
+
+        This is a hook for LLM implementations to add:
+        - Model-specific behavior instructions
+        - API usage guidelines
+        - Tool execution requirements
+        - Context management specifics
+        """
+        return ""
+
+    # Centralized Tool Result Integration
+    # ===================================
+
+    @abstractmethod
+    def _normalize_tool_calls_to_standard_format(
+        self, tool_calls: List[Any]
+    ) -> List[Dict[str, Any]]:
+        """Convert LLM-specific tool calls to standardized format.
+
+        Each LLM implementation should convert their tool call format to:
+        {
+            "id": "call_123",
+            "name": "tool_name",
+            "arguments": {...}  # dict or JSON string
+        }
+
+        Args:
+            tool_calls: LLM-specific tool call objects
+
+        Returns:
+            List of standardized tool call dicts
+        """
+        pass
+
+    def _add_tool_results_to_conversation(
+        self,
+        messages: List[Dict[str, Any]],
+        tool_calls: List[Any],
+        tool_results: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Add tool results to conversation using standardized format.
+
+        This method normalizes tool calls and integrates results consistently.
+        """
+        if not tool_calls or not tool_results:
+            return messages.copy()
+
+        # Validate input lengths match
+        if len(tool_calls) != len(tool_results):
+            logger.warning(
+                f"Tool calls ({len(tool_calls)}) and results ({len(tool_results)}) count mismatch"
+            )
+            # Truncate to shorter length to avoid index errors
+            min_length = min(len(tool_calls), len(tool_results))
+            tool_calls = tool_calls[:min_length]
+            tool_results = tool_results[:min_length]
+
+        # Normalize tool calls to standard format
+        normalized_calls = self._normalize_tool_calls_to_standard_format(tool_calls)
+
+        # Build standardized tool result messages
+        updated_messages = messages.copy()
+
+        # Add assistant message with normalized tool calls
+        if normalized_calls:
+            # Convert to OpenAI-style format for assistant message
+            openai_tool_calls = []
+            for call in normalized_calls:
+                openai_tool_calls.append(
+                    {
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {
+                            "name": call["name"],
+                            "arguments": (
+                                call["arguments"]
+                                if isinstance(call["arguments"], str)
+                                else json.dumps(call["arguments"])
+                            ),
+                        },
+                    }
+                )
+
+            updated_messages.append(
+                {"role": "assistant", "content": "", "tool_calls": openai_tool_calls}
+            )
+
+        # Add tool result messages
+        for call, result in zip(normalized_calls, tool_results):
+            updated_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "name": call["name"],
+                    "content": result,
+                }
+            )
+
+        return updated_messages
+
+    # Centralized Agent.md Integration
+    # ===============================
+
+    def _get_agent_md_content(self) -> str:
+        """Centralized Agent.md content retrieval with robust path resolution."""
         try:
             import os
 
-            # Get the project root directory (where AGENT.md should be)
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.dirname(os.path.dirname(current_dir))
-            agent_md_path = os.path.join(project_root, "AGENT.md")
+            # Try multiple path resolution strategies for different deployment scenarios
+            current_file = os.path.abspath(__file__)
 
-            if os.path.exists(agent_md_path):
-                with open(agent_md_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                return content
-            else:
-                logger.warning(f"AGENT.md not found at {agent_md_path}")
-                return ""
+            # Strategy 1: cli_agent/core/base_agent.py -> project root (2 levels up)
+            project_root_1 = os.path.dirname(
+                os.path.dirname(os.path.dirname(current_file))
+            )
+            agent_md_path_1 = os.path.join(project_root_1, "AGENT.md")
+
+            # Strategy 2: Same directory as current file
+            current_dir = os.path.dirname(current_file)
+            agent_md_path_2 = os.path.join(current_dir, "AGENT.md")
+
+            # Strategy 3: Working directory
+            agent_md_path_3 = "AGENT.md"
+
+            # Try paths in order of preference
+            for path in [agent_md_path_1, agent_md_path_2, agent_md_path_3]:
+                if os.path.exists(path):
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read().strip()
+                        logger.debug(f"Successfully read AGENT.md from {path}")
+                        return content
+
+            logger.warning("AGENT.md not found in any expected location")
+            return ""
+
         except Exception as e:
             logger.error(f"Error reading AGENT.md: {e}")
             return ""
 
-    def _prepend_agent_md_to_first_message(
-        self, messages: List[Dict[str, str]], is_first_message: bool = False
-    ) -> List[Dict[str, str]]:
-        """Prepend AGENT.md content to the first user message if this is the first message of the session."""
+    def _enhance_first_message_with_agent_md(
+        self, messages: List[Dict[str, Any]], is_first_message: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Centralized Agent.md prepending with consistent formatting."""
         if not is_first_message or not messages:
             return messages
 
-        # Only prepend to the first user message
-        first_user_msg_index = None
+        # Find first user message
+        first_user_idx = None
         for i, msg in enumerate(messages):
             if msg.get("role") == "user":
-                first_user_msg_index = i
+                first_user_idx = i
                 break
 
-        if first_user_msg_index is not None:
-            agent_md_content = self._read_agent_md()
-            if agent_md_content:
-                # Create a copy of messages to avoid modifying the original
-                messages_copy = messages.copy()
-                original_content = messages_copy[first_user_msg_index]["content"]
+        if first_user_idx is None:
+            return messages
 
-                # Prepend AGENT.md with a clear separator
-                enhanced_content = f"""<AGENT_ARCHITECTURE_CONTEXT>
+        # Get Agent.md content
+        agent_md_content = self._get_agent_md_content()
+        if not agent_md_content:
+            return messages
+
+        # Create enhanced message copy
+        enhanced_messages = messages.copy()
+        original_content = enhanced_messages[first_user_idx]["content"]
+
+        # Apply consistent formatting
+        enhanced_content = f"""<AGENT_ARCHITECTURE_CONTEXT>
 {agent_md_content}
 </AGENT_ARCHITECTURE_CONTEXT>
 
 {original_content}"""
 
-                messages_copy[first_user_msg_index] = {
-                    **messages_copy[first_user_msg_index],
-                    "content": enhanced_content,
-                }
+        enhanced_messages[first_user_idx] = {
+            **enhanced_messages[first_user_idx],
+            "content": enhanced_content,
+        }
 
-                logger.info("Prepended AGENT.md to first user message")
-                return messages_copy
+        logger.info("Enhanced first user message with AGENT.md content")
+        return enhanced_messages
 
-        return messages
+    # Legacy method for backward compatibility
+    def _prepend_agent_md_to_first_message(
+        self, messages: List[Dict[str, Any]], is_first_message: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Legacy method - redirects to centralized implementation."""
+        return self._enhance_first_message_with_agent_md(messages, is_first_message)
 
     def _format_chunk_safely(self, chunk: str) -> str:
         """Apply basic formatting to streaming chunks without losing spaces."""
@@ -1514,6 +1784,62 @@ You are the expert. Complete the task."""
         """Create a standardized tool call object."""
         return self.tool_schema.create_tool_call_object(name, args, call_id)
 
+    # Centralized Client Initialization
+    # =================================
+
+    def _initialize_llm_client(self):
+        """Centralized LLM client initialization with common patterns."""
+        try:
+            # Get provider-specific config
+            provider_config = self._get_provider_config()
+
+            # Set streaming preference
+            self.stream = self._get_streaming_preference(provider_config)
+
+            # Calculate timeout
+            timeout_seconds = self._calculate_timeout(provider_config)
+
+            # Initialize client with error handling
+            self._client = self._create_llm_client(provider_config, timeout_seconds)
+
+            # Log successful initialization
+            self._log_successful_initialization(provider_config)
+
+        except Exception as e:
+            self._handle_client_initialization_error(e)
+
+    def _log_successful_initialization(self, provider_config):
+        """Common logging pattern for successful initialization."""
+        model_name = getattr(provider_config, "model", "unknown")
+        provider_name = self.__class__.__name__.replace("MCP", "").replace("Host", "")
+        logger.info(f"Initialized MCP {provider_name} Host with model: {model_name}")
+
+    def _handle_client_initialization_error(self, error: Exception):
+        """Common error handling for client initialization failures."""
+        provider_name = self.__class__.__name__.replace("MCP", "").replace("Host", "")
+        logger.error(f"Failed to initialize {provider_name} client: {error}")
+        raise
+
+    @abstractmethod
+    def _get_provider_config(self):
+        """Get provider-specific configuration. Must implement in subclass."""
+        pass
+
+    @abstractmethod
+    def _get_streaming_preference(self, provider_config) -> bool:
+        """Get streaming preference for this provider. Must implement in subclass."""
+        pass
+
+    @abstractmethod
+    def _calculate_timeout(self, provider_config) -> float:
+        """Calculate timeout based on provider and model. Must implement in subclass."""
+        pass
+
+    @abstractmethod
+    def _create_llm_client(self, provider_config, timeout_seconds):
+        """Create the actual LLM client. Must implement in subclass."""
+        pass
+
     @abstractmethod
     def convert_tools_to_llm_format(self) -> List[Dict]:
         """Convert tools to the specific LLM's format. Must be implemented by subclasses."""
@@ -1536,52 +1862,9 @@ You are the expert. Complete the task."""
         pass
 
     @abstractmethod
-    def _add_tool_results_to_conversation(
-        self,
-        messages: List[Dict[str, Any]],
-        tool_calls: List[Any],
-        tool_results: List[str],
-    ) -> List[Dict[str, Any]]:
-        """Add tool results to conversation in model-specific format. Must be implemented by subclasses."""
-        pass
-
-    @abstractmethod
     def _get_current_runtime_model(self) -> str:
         """Get the actual model being used at runtime. Must be implemented by subclasses."""
         pass
-
-    def _prepend_agent_md_to_first_message(
-        self, messages: List[Dict[str, Any]], is_first_message: bool
-    ) -> List[Dict[str, Any]]:
-        """Prepend AGENT.md content to first message."""
-        if not is_first_message or not messages:
-            return messages
-
-        # Read AGENT.md file and prepend to first user message
-        import os
-
-        agent_md_path = "AGENT.md"
-        agent_content = ""
-
-        if os.path.exists(agent_md_path):
-            try:
-                with open(agent_md_path, "r", encoding="utf-8") as f:
-                    agent_content = f.read().strip()
-            except Exception as e:
-                logger.warning(f"Could not read AGENT.md: {e}")
-
-        enhanced_messages = messages.copy()
-        if (
-            agent_content
-            and enhanced_messages
-            and enhanced_messages[0].get("role") == "user"
-        ):
-            original_content = enhanced_messages[0]["content"]
-            enhanced_messages[0][
-                "content"
-            ] = f"{agent_content}\n\n---\n\n{original_content}"
-
-        return enhanced_messages
 
     async def handle_tool_execution(
         self,
@@ -1976,9 +2259,9 @@ You are the expert. Complete the task."""
                 # Add user message
                 messages.append({"role": "user", "content": user_input})
 
-                # Check if this is the first message and prepend AGENT.md if so
+                # Check if this is the first message and enhance with AGENT.md if so
                 is_first_message = len(messages) == 1
-                enhanced_messages = self._prepend_agent_md_to_first_message(
+                enhanced_messages = self._enhance_first_message_with_agent_md(
                     messages, is_first_message
                 )
 
@@ -2239,3 +2522,308 @@ You are the expert. Complete the task."""
                 break
             except Exception as e:
                 print(f"\nError: {e}")
+
+    # Centralized Tool Call Processing Methods
+    # ========================================
+
+    def _extract_and_normalize_tool_calls(
+        self, response: Any, accumulated_content: str = ""
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract tool calls from LLM response and normalize to common format.
+        Delegates to LLM-specific parsing methods via parse_tool_calls().
+
+        Returns list of normalized tool call dicts with keys:
+        - id: tool call identifier
+        - function: dict with 'name' and 'arguments' keys
+        """
+        # Use the existing parse_tool_calls method (implemented by subclasses)
+        # This maintains compatibility with existing implementations
+        tool_calls = self.parse_tool_calls(response)
+
+        # Normalize to consistent format if needed
+        normalized_calls = []
+        for i, call in enumerate(tool_calls):
+            if isinstance(call, dict):
+                # Already in dict format (DeepSeek style)
+                if "function" in call:
+                    normalized_calls.append(call)
+                elif "name" in call and "args" in call:
+                    # Convert from simple format to standard format
+                    normalized_calls.append(
+                        {
+                            "id": f"call_{i}_{int(time.time())}",
+                            "function": {
+                                "name": call["name"],
+                                "arguments": call.get("args", {}),
+                            },
+                        }
+                    )
+            elif hasattr(call, "function"):
+                # SimpleNamespace format (already standardized)
+                normalized_calls.append(
+                    {
+                        "id": getattr(call, "id", f"call_{i}_{int(time.time())}"),
+                        "function": {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments,
+                        },
+                    }
+                )
+            elif hasattr(call, "name"):
+                # Simple object format
+                normalized_calls.append(
+                    {
+                        "id": getattr(call, "id", f"call_{i}_{int(time.time())}"),
+                        "function": {
+                            "name": call.name,
+                            "arguments": getattr(call, "args", {}),
+                        },
+                    }
+                )
+
+        return normalized_calls
+
+    def _validate_and_convert_tool_calls(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        streaming_mode: bool = False,
+        error_handler=None,
+    ) -> tuple[List[Any], List[Dict[str, Any]]]:
+        """
+        Validate tool calls and convert to function call format.
+
+        Args:
+            tool_calls: List of normalized tool call dicts
+            streaming_mode: Whether in streaming mode (affects error handling)
+            error_handler: Optional callable for handling errors (streaming mode)
+
+        Returns:
+            - List of valid function calls ready for execution (SimpleNamespace objects)
+            - List of error messages for invalid calls
+        """
+        from types import SimpleNamespace
+
+        function_calls = []
+        error_messages = []
+
+        for tool_call in tool_calls:
+            try:
+                function_name = tool_call["function"]["name"]
+                arguments = tool_call["function"]["arguments"]
+                call_id = tool_call.get("id", f"call_{len(function_calls)}")
+
+                # Parse arguments if they're a string
+                if isinstance(arguments, str):
+                    try:
+                        parsed_args = json.loads(arguments)
+                    except json.JSONDecodeError as e:
+                        # Handle JSON parsing errors
+                        error_content = (
+                            f"Error parsing arguments for {function_name}: {e}\\n"
+                            "⚠️  Command failed - take this into account for your next action."
+                        )
+                        error_msg = {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "content": error_content,
+                        }
+                        error_messages.append(error_msg)
+
+                        # Handle streaming mode error display
+                        if streaming_mode and error_handler:
+                            error_handler(
+                                f"\\n🔧 Tool parsing error: {error_content}\\n"
+                            )
+
+                        continue  # Skip this tool call
+                else:
+                    parsed_args = arguments
+
+                # Create function call object
+                function_call = SimpleNamespace()
+                function_call.name = function_name
+                function_call.args = parsed_args
+                function_calls.append(function_call)
+
+            except (KeyError, TypeError) as e:
+                # Handle malformed tool call structure
+                error_content = f"Malformed tool call structure: {e}"
+                error_msg = {
+                    "role": "tool",
+                    "tool_call_id": tool_call.get(
+                        "id", f"call_error_{len(error_messages)}"
+                    ),
+                    "content": error_content,
+                }
+                error_messages.append(error_msg)
+
+                if streaming_mode and error_handler:
+                    error_handler(f"\\n🔧 Tool structure error: {error_content}\\n")
+
+        return function_calls, error_messages
+
+    def _build_tool_result_messages(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        tool_results: List[str],
+        error_messages: List[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Build standardized tool result messages for conversation."""
+        messages = []
+
+        # Add error messages first
+        if error_messages:
+            messages.extend(error_messages)
+
+        # Add successful tool result messages
+        for i, (tool_call, result) in enumerate(zip(tool_calls, tool_results)):
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.get("id", f"call_{i}"),
+                    "content": result,
+                }
+            )
+
+        return messages
+
+    def _display_tool_execution_info(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        interactive: bool,
+        streaming_mode: bool,
+    ) -> None:
+        """Display tool execution information to user."""
+        if not interactive or not tool_calls:
+            return
+
+        if streaming_mode:
+            print(f"\\n🔧 Executing {len(tool_calls)} tool(s)...", flush=True)
+        else:
+            print(f"\\n🔧 Executing {len(tool_calls)} tool(s):", flush=True)
+            for i, tc in enumerate(tool_calls, 1):
+                tool_name = tc["function"]["name"].replace("_", ":", 1)
+                try:
+                    args = tc["function"]["arguments"]
+                    if isinstance(args, str):
+                        args = json.loads(args)
+                    args_preview = (
+                        str(args)[:100] + "..." if len(str(args)) > 100 else str(args)
+                    )
+                    print(f"   {i}. {tool_name} - {args_preview}", flush=True)
+                except Exception:
+                    print(f"   {i}. {tool_name}", flush=True)
+
+    async def _process_tool_calls_centralized(
+        self,
+        response: Any,
+        current_messages: List[Dict[str, Any]],
+        original_messages: List[Dict[str, Any]],
+        interactive: bool = True,
+        streaming_mode: bool = False,
+        accumulated_content: str = "",
+    ) -> tuple[List[Dict[str, Any]], Optional[Dict], bool]:
+        """
+        Centralized tool call processing coordinator.
+
+        Args:
+            response: LLM response object
+            current_messages: Current conversation messages
+            original_messages: Original messages before tool execution
+            interactive: Whether in interactive mode
+            streaming_mode: Whether in streaming mode
+            accumulated_content: Accumulated response content (for streaming)
+
+        Returns:
+            - Updated messages list
+            - Continuation message for subagent coordination (if any)
+            - Whether tool calls were found and processed
+        """
+        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+
+        # Extract and normalize tool calls
+        tool_calls = self._extract_and_normalize_tool_calls(
+            response, accumulated_content
+        )
+
+        if not tool_calls:
+            return current_messages, None, False
+
+        # Display tool execution info
+        self._display_tool_execution_info(tool_calls, interactive, streaming_mode)
+
+        # Validate and convert tool calls
+        streaming_error_handler = None
+        if streaming_mode:
+            # Create error handler for streaming mode
+            def error_handler(error_text):
+                print(error_text, flush=True)
+
+            streaming_error_handler = error_handler
+
+        function_calls, error_messages = self._validate_and_convert_tool_calls(
+            tool_calls, streaming_mode, streaming_error_handler
+        )
+
+        # Add assistant message with tool calls to conversation
+        response_content = self._extract_content_from_response(response)
+        if accumulated_content:
+            response_content = accumulated_content
+
+        current_messages.append(
+            {
+                "role": "assistant",
+                "content": response_content or "",
+                "tool_calls": tool_calls,
+            }
+        )
+
+        # Add error messages to conversation
+        current_messages.extend(error_messages)
+
+        # Execute valid function calls if any
+        tool_results = []
+        tool_output = []
+
+        if function_calls:
+            try:
+                tool_results, tool_output = await self.execute_function_calls(
+                    function_calls,
+                    interactive=interactive,
+                    streaming_mode=streaming_mode,
+                )
+
+                # Display tool output in streaming mode
+                if streaming_mode and interactive:
+                    for output in tool_output:
+                        print(f"{output}\\n", flush=True)
+
+            except ToolDeniedReturnToPrompt:
+                # Re-raise permission denials to exit immediately
+                raise
+
+        # Handle subagent coordination using existing centralized logic
+        continuation_message = await self._handle_subagent_coordination(
+            tool_calls,
+            original_messages,
+            interactive=interactive,
+            streaming_mode=streaming_mode,
+        )
+
+        if continuation_message:
+            return current_messages, continuation_message, True
+
+        # Add tool results to conversation
+        if tool_results:
+            tool_result_messages = self._build_tool_result_messages(
+                [
+                    tc
+                    for tc in tool_calls
+                    if tc["function"]["name"] in [fc.name for fc in function_calls]
+                ],
+                tool_results,
+            )
+            current_messages.extend(tool_result_messages)
+
+        return current_messages, None, True

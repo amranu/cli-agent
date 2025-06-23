@@ -35,15 +35,30 @@ class MCPGeminiHost(BaseMCPAgent):
     """MCP Host that uses Google Gemini as the language model backend."""
 
     def __init__(self, config: HostConfig, is_subagent: bool = False):
+        # Call parent initialization (which will call our abstract methods)
         super().__init__(config, is_subagent)
-        self.gemini_config = config.get_gemini_config()
 
-        # Initialize Gemini client with timeout configuration
+    # Centralized Client Initialization Implementation
+    # ===============================================
+
+    def _get_provider_config(self):
+        """Get Gemini-specific configuration."""
+        return self.config.get_gemini_config()
+
+    def _get_streaming_preference(self, provider_config) -> bool:
+        """Get streaming preference for Gemini."""
+        return True  # Gemini always uses streaming
+
+    def _calculate_timeout(self, provider_config) -> float:
+        """Calculate timeout based on Gemini model."""
+        return 120.0  # 2 minutes for Gemini requests
+
+    def _create_llm_client(self, provider_config, timeout_seconds):
+        """Create the Gemini client with HTTP client configuration."""
+        self.gemini_config = provider_config  # Store for later use
+
         try:
             import httpx
-
-            # Configure timeout for Gemini requests (longer for tool-heavy conversations)
-            timeout_seconds = 120.0  # 2 minutes for Gemini requests
 
             # Create HTTP client with custom timeout
             http_client = httpx.AsyncClient(
@@ -51,8 +66,8 @@ class MCPGeminiHost(BaseMCPAgent):
                 limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
             )
 
-            self.gemini_client = genai.Client(
-                api_key=self.gemini_config.api_key, http_client=http_client
+            client = genai.Client(
+                api_key=provider_config.api_key, http_client=http_client
             )
             self.http_client = http_client  # Store reference for cleanup
             logger.debug(f"Gemini client initialized with {timeout_seconds}s timeout")
@@ -64,7 +79,7 @@ class MCPGeminiHost(BaseMCPAgent):
             logger.debug(f"HTTP client creation traceback: {traceback.format_exc()}")
             # Fallback to default client
             try:
-                self.gemini_client = genai.Client(api_key=self.gemini_config.api_key)
+                client = genai.Client(api_key=provider_config.api_key)
                 self.http_client = None
             except Exception as fallback_error:
                 logger.error(
@@ -72,12 +87,9 @@ class MCPGeminiHost(BaseMCPAgent):
                 )
                 raise
 
-        # Set streaming preference for centralized generate_response method
-        self.stream = True  # Gemini always uses streaming
-
-        logger.info(
-            f"Initialized MCP Gemini Host with model: {self.gemini_config.model}"
-        )
+        # Store as both _client (from base class) and gemini_client (for compatibility)
+        self.gemini_client = client
+        return client
 
     def convert_tools_to_llm_format(self) -> List[types.Tool]:
         """Convert tools to Gemini format using shared utilities."""
@@ -134,101 +146,26 @@ class MCPGeminiHost(BaseMCPAgent):
 
         return converted_calls
 
-    def _create_system_prompt(self) -> str:
-        """Create Gemini-specific system prompt that emphasizes tool usage."""
-        # Use the non-abstract method with default parameter
-        # Create base prompt directly without calling super()
-        tool_descriptions = []
-
-        for tool_key, tool_info in self.available_tools.items():
-            # Use the converted name format (with underscores)
-            converted_tool_name = tool_key.replace(":", "_")
-            description = tool_info["description"]
-            tool_descriptions.append(f"- **{converted_tool_name}**: {description}")
-
-        tools_text = (
-            "\n".join(tool_descriptions) if tool_descriptions else "No tools available"
-        )
-
-        # Customize base prompt based on whether this is a subagent
-        if self.is_subagent:
-            agent_role = "You are a focused subagent responsible for executing a specific task efficiently."
-            subagent_strategy = "**SUBAGENT FOCUS:** You are a subagent with a specific task. Complete your assigned task using the available tools and provide clear results. You cannot spawn other subagents."
-        else:
-            agent_role = "You are a top-tier autonomous software development agent. You are in control and responsible for completing the user's request."
-            subagent_strategy = """**Context Management & Subagent Strategy:**
-- **Preserve your context:** Your context window is precious - don't waste it on tasks that can be delegated.
-- **Delegate context-heavy tasks:** Use `builtin_task` to spawn subagents for tasks that would consume significant context:
-  - Large file analysis or searches across multiple files
-  - Complex investigations requiring reading many files
-  - Running multiple commands or gathering system information
-  - Any task that involves reading >200 lines of code
-- **Parallel execution:** For complex investigations requiring multiple independent tasks, spawn multiple subagents simultaneously by making multiple `builtin_task` calls in the same response.
-- **Stay focused:** Keep your main context for planning, coordination, and final synthesis of results.
-- **Automatic coordination:** After spawning subagents, the main agent automatically pauses, waits for all subagents to complete, then restarts with their combined results.
-- **Do not poll status:** Avoid calling `builtin_task_status` repeatedly - the system handles coordination automatically.
-- **Single response spawning:** To spawn multiple subagents, include all `builtin_task` calls in one response, not across multiple responses.
-
-**When to Use Subagents:**
-✅ **DO delegate:** File searches, large code analysis, running commands, gathering information
-❌ **DON'T delegate:** Simple edits, single file reads <50 lines, quick tool calls"""
-
-        # Create base prompt
-        base_prompt = f"""{agent_role}
-
-**Mission:** Use the available tools to solve the user's request.
-
-**Guiding Principles:**
-- **Ponder, then proceed:** Briefly outline your plan before you act. State your assumptions.
-- **Bias for action:** You are empowered to take initiative. Do not ask for permission, just do the work.
-- **Problem-solve:** If a tool fails, analyze the error and try a different approach.
-- **Break large changes into smaller chunks:** For large code changes, divide the work into smaller, manageable tasks to ensure clarity and reduce errors.
-
-**File Reading Strategy:**
-- **Be surgical:** Do not read entire files at once. It is a waste of your context window.
-- **Locate, then read:** Use tools like `grep` or `find` to locate the specific line numbers or functions you need to inspect.
-- **Read in chunks:** Read files in smaller, targeted chunks of 50-100 lines using the `offset` and `limit` parameters in the `read_file` tool.
-- **Full reads as a last resort:** Only read a full file if you have no other way to find what you are looking for.
-
-**File Editing Workflow:**
-1.  **Read first:** Always read a file before you try to edit it, following the file reading strategy above.
-2.  **Greedy Grepping:** Always `grep` or look for a small section around where you want to do an edit. This is faster and more reliable than reading the whole file.
-3.  **Use `replace_in_file`:** For all file changes, use `builtin_replace_in_file` to replace text in files.
-4.  **Chunk changes:** Break large edits into smaller, incremental changes to maintain control and clarity.
-
-**Todo List Workflow:**
-- **Use the Todo list:** Use `builtin_todo_read` and `builtin_todo_write` to manage your tasks.
-- **Start with a plan:** At the beginning of your session, create a todo list to outline your steps.
-- **Update as you go:** As you complete tasks, update the todo list to reflect your progress.
-
-{subagent_strategy}
-
-**Workflow:**
-1.  **Reason:** Outline your plan.
-2.  **Act:** Use one or more tool calls to execute your plan. Use parallel tool calls when it makes sense.
-3.  **Respond:** When you have completed the request, provide the final answer to the user.
-
-**Available Tools:**
-{tools_text}
-
-You are the expert. Complete the task."""
-
+    def _get_llm_specific_instructions(self) -> str:
+        """Provide Gemini-specific instructions that emphasize tool usage and action."""
         # Add Gemini-specific instructions based on agent type
         if self.is_subagent:
-            gemini_addendum = """
-
-**CRITICAL FOR GEMINI SUBAGENTS: FOCUS & EXECUTION**
+            return """**CRITICAL FOR GEMINI SUBAGENTS: FOCUS & EXECUTION**
 - You are a SUBAGENT - execute your specific task efficiently and provide clear results
 - When a task requires action (running commands, reading files, etc.), you MUST use the appropriate tools
 - Do NOT just describe what you would do - actually DO IT using the tools
 - Take action FIRST, then provide analysis based on the actual results
 - You CANNOT spawn other subagents - focus on your assigned task only
+- **MANDATORY:** You MUST end your response with `emit_result` containing a comprehensive summary of your findings
 
-Example: If asked to "run uname -a", do NOT respond with "I will run uname -a command" - instead immediately use builtin_bash_execute with the command and show the actual output."""
+**Required Completion Pattern:**
+1. Use tools to gather information and perform actions
+2. Analyze the results from your tool executions
+3. Call `emit_result` with a detailed summary of your findings, conclusions, and recommendations
+
+Example: If asked to "run uname -a", do NOT respond with "I will run uname -a command" - instead immediately use bash_execute with the command, then call emit_result with the system information summary."""
         else:
-            gemini_addendum = """
-
-**CRITICAL FOR GEMINI: TOOL USAGE REQUIREMENTS**
+            return """**CRITICAL FOR GEMINI: TOOL USAGE REQUIREMENTS**
 - When a task requires action (running commands, reading files, etc.), you MUST use the appropriate tools
 - Do NOT just describe what you would do - actually DO IT using the tools
 - If you need to run a command like `uname -a`, use builtin_bash_execute immediately
@@ -254,8 +191,6 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
 ✅ Good: Spawn subagent to "Gather complete system information: OS, memory, disk, processes"
 
 Example: If asked to "run uname -a", do NOT respond with "I will run uname -a command" - instead immediately use builtin_bash_execute with the command and show the actual output."""
-
-        return base_prompt + gemini_addendum
 
     async def _handle_non_streaming_response(
         self, response, original_messages: List[Dict[str, Any]], **kwargs
@@ -339,61 +274,6 @@ Based on these tool results, please provide your final response. Do not re-execu
 
         # If we hit max rounds, return what we have
         return text_response
-
-    def _prepend_agent_md_to_first_message(
-        self, messages: List[Dict[str, Any]], is_first_message: bool
-    ) -> List[Dict[str, Any]]:
-        """Prepend AGENT.md content to first message. Gemini uses the base implementation."""
-        # Implement directly to avoid issues with abstract vs concrete methods in base class
-        if not is_first_message or not messages:
-            return messages
-
-        # Only prepend to the first user message
-        first_user_msg_index = None
-        for i, msg in enumerate(messages):
-            if msg.get("role") == "user":
-                first_user_msg_index = i
-                break
-
-        if first_user_msg_index is not None:
-            # Try to read AGENT.md - implement similar to base class
-            agent_md_content = ""
-            try:
-                import os
-
-                # Get the project root directory (where AGENT.md should be)
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                agent_md_path = os.path.join(current_dir, "AGENT.md")
-
-                if os.path.exists(agent_md_path):
-                    with open(agent_md_path, "r", encoding="utf-8") as f:
-                        agent_md_content = f.read()
-
-            except Exception as e:
-                logger.error(f"Error reading AGENT.md: {e}")
-                agent_md_content = ""
-
-            if agent_md_content:
-                # Create a copy of messages to avoid modifying the original
-                messages_copy = messages.copy()
-                original_content = messages_copy[first_user_msg_index]["content"]
-
-                # Prepend AGENT.md with a clear separator
-                enhanced_content = f"""<AGENT_ARCHITECTURE_CONTEXT>
-{agent_md_content}
-</AGENT_ARCHITECTURE_CONTEXT>
-
-{original_content}"""
-
-                messages_copy[first_user_msg_index] = {
-                    **messages_copy[first_user_msg_index],
-                    "content": enhanced_content,
-                }
-
-                logger.info("Prepended AGENT.md to first user message")
-                return messages_copy
-
-        return messages
 
     async def _make_gemini_request_with_retry(
         self, request_func, max_retries: int = 3, base_delay: float = 1.0
@@ -727,37 +607,53 @@ Based on these tool results, please provide your final response. Do not re-execu
 
         return "\n\n".join(gemini_prompt_parts)
 
-    def _add_tool_results_to_conversation(
-        self,
-        messages: List[Dict[str, Any]],
-        tool_calls: List[Any],
-        tool_results: List[str],
+    def _normalize_tool_calls_to_standard_format(
+        self, tool_calls: List[Any]
     ) -> List[Dict[str, Any]]:
-        """Add tool results to conversation in Gemini format (text-based)."""
-        updated_messages = messages.copy()
+        """Convert Gemini tool calls to standardized format."""
+        normalized_calls = []
 
-        # Add tool results as a single user message that provides the results
-        tool_results_text = []
-        for i, (tool_call, result) in enumerate(zip(tool_calls, tool_results)):
-            tool_name = (
-                getattr(tool_call, "name", "unknown")
-                if hasattr(tool_call, "name")
-                else tool_call.get("function", {}).get("name", "unknown")
-            )
-            tool_results_text.append(
-                f"Tool '{tool_name}' executed successfully. Result:\n{result}"
-            )
+        for i, tool_call in enumerate(tool_calls):
+            if hasattr(tool_call, "name"):
+                # Gemini function call object
+                normalized_calls.append(
+                    {
+                        "id": getattr(tool_call, "id", f"call_{i}"),
+                        "name": tool_call.name,
+                        "arguments": getattr(tool_call, "args", {}),
+                    }
+                )
+            elif isinstance(tool_call, dict):
+                # Dict format
+                if "function" in tool_call:
+                    # Structured format
+                    normalized_calls.append(
+                        {
+                            "id": tool_call.get("id", f"call_{i}"),
+                            "name": tool_call["function"].get("name", "unknown"),
+                            "arguments": tool_call["function"].get("arguments", {}),
+                        }
+                    )
+                else:
+                    # Simple dict format
+                    normalized_calls.append(
+                        {
+                            "id": tool_call.get("id", f"call_{i}"),
+                            "name": tool_call.get("name", "unknown"),
+                            "arguments": tool_call.get("arguments", {}),
+                        }
+                    )
+            else:
+                # Fallback for other formats
+                normalized_calls.append(
+                    {
+                        "id": f"call_{i}",
+                        "name": str(tool_call),
+                        "arguments": {},
+                    }
+                )
 
-        if tool_results_text:
-            tool_summary = "\n\n".join(tool_results_text)
-            updated_messages.append(
-                {
-                    "role": "user",
-                    "content": f"The requested tools have been executed. Here are the results:\n\n{tool_summary}\n\nNow please provide your response based on these tool execution results.",
-                }
-            )
-
-        return updated_messages
+        return normalized_calls
 
     def _get_current_runtime_model(self) -> str:
         """Get the actual Gemini model being used at runtime."""
@@ -840,7 +736,6 @@ Based on these tool results, please provide your final response. Do not re-execu
             logger.error(f"Error in Gemini completion: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise
-
 
     async def _handle_complete_response(
         self,
@@ -931,9 +826,9 @@ Based on these tool results, please provide your final response. Do not re-execu
                     try:
                         function_results, tool_output = (
                             await self.execute_function_calls(
-                                function_calls, 
+                                function_calls,
                                 interactive=not self.is_subagent,
-                                streaming_mode=False
+                                streaming_mode=False,
                             )
                         )
                     except ToolDeniedReturnToPrompt as e:
@@ -1155,19 +1050,23 @@ Based on these tool results, please provide your final response. Do not re-execu
                             yield f"\n⚠️ Gemini stream started but failed after {chunk_count} chunks. Error: {stream_error}\n"
                             return
 
-                    # Parse additional function calls from text using shared method BEFORE checking for failure
-                    if accumulated_content:
-                        python_calls = self._parse_python_style_function_calls(
-                            accumulated_content
-                        )
-                        if python_calls:
-                            function_calls.extend(python_calls)
+                    # Create a mock response for centralized tool processing
+                    mock_response = type("MockResponse", (), {})()
+                    mock_response.candidates = [type("MockCandidate", (), {})()]
+                    mock_response.candidates[0].content = type("MockContent", (), {})()
+                    mock_response.candidates[0].content.parts = []
 
-                        xml_calls = self._parse_xml_style_tool_calls(
-                            accumulated_content
-                        )
-                        if xml_calls:
-                            function_calls.extend(xml_calls)
+                    # Add function calls as parts
+                    for func_call in function_calls:
+                        part = type("MockPart", (), {})()
+                        part.function_call = func_call
+                        mock_response.candidates[0].content.parts.append(part)
+
+                    # Add text content if available
+                    if accumulated_content:
+                        text_part = type("MockPart", (), {})()
+                        text_part.text = accumulated_content
+                        mock_response.candidates[0].content.parts.append(text_part)
 
                     # Check if we got any meaningful response (text content OR function calls)
                     has_meaningful_response = (
@@ -1201,144 +1100,108 @@ Based on these tool results, please provide your final response. Do not re-execu
                     # Reset failure counter on successful response
                     consecutive_failures = 0
 
-                    # Check if we have function calls to execute
-                    if function_calls:
-                        # Check if there's any buffered text that needs to be displayed before tool execution
-                        text_buffer = getattr(self, "_text_buffer", "")
-                        if text_buffer.strip():
-                            # Format and display the buffered text with Assistant prefix
-                            formatted_response = self.format_markdown(text_buffer)
-                            # Replace newlines with \r\n for proper terminal handling
-                            formatted_response = formatted_response.replace(
-                                "\n", "\r\n"
+                    # Use centralized tool call processing for streaming
+                    current_messages = (
+                        []
+                    )  # Create empty messages list for centralized processing
+                    try:
+                        updated_messages, continuation_message, has_tool_calls = (
+                            await self._process_tool_calls_centralized(
+                                mock_response,
+                                current_messages,
+                                original_messages,
+                                interactive=not self.is_subagent,
+                                streaming_mode=True,
+                                accumulated_content=accumulated_content,
                             )
-                            print(f"\r\x1b[K\r\nAssistant: {formatted_response}")
-                            # Clear the buffer
-                            self._text_buffer = ""
-
-                        # Show tool execution indicator to user via print (not yielded to avoid LLM contamination)
-                        print(
-                            f"\r\n{self.display_tool_execution_start(len(function_calls), self.is_subagent, interactive=not self.is_subagent)}",
-                            flush=True,
                         )
 
-                        # Execute function calls using base agent's centralized method
-                        try:
-                            function_results, tool_output = (
-                                await self.execute_function_calls(
-                                    function_calls, 
-                                    interactive=not self.is_subagent,
-                                    streaming_mode=True
+                        if has_tool_calls:
+                            # Check if there's any buffered text that needs to be displayed before tool execution
+                            text_buffer = getattr(self, "_text_buffer", "")
+                            if text_buffer.strip():
+                                # Format and display the buffered text with Assistant prefix
+                                formatted_response = self.format_markdown(text_buffer)
+                                # Replace newlines with \r\n for proper terminal handling
+                                formatted_response = formatted_response.replace(
+                                    "\n", "\r\n"
                                 )
-                            )
-                        except ToolDeniedReturnToPrompt as e:
-                            # Exit generator immediately - cannot continue
-                            yield f"\n🚫 Tool execution denied - returning to prompt.\n"
-                            raise e  # Raise the exception after yielding the message
+                                print(f"\r\x1b[K\r\nAssistant: {formatted_response}")
+                                # Clear the buffer
+                                self._text_buffer = ""
 
-                        # Check if we just spawned subagents and should interrupt immediately
-                        if (
-                            self.subagent_manager
-                            and self.subagent_manager.get_active_count() > 0
-                        ):
-                            # Check if any of the function calls were "task" tools (subagent spawning)
-                            task_tools_executed = any(
-                                "task" in fc.name for fc in function_calls
-                            )
-                            if task_tools_executed:
-                                # Interrupt immediately after spawning subagents
-                                yield f"\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
+                            if continuation_message:
+                                # Yield the interrupt and completion messages for streaming
+                                yield "\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
+                                yield "\n📋 Collected subagent result(s). Restarting with results...\n"
 
-                                # Wait for all subagents to complete and collect results
-                                subagent_results = (
-                                    await self._collect_subagent_results()
+                                # Replace conversation with just the continuation context
+                                new_messages = [continuation_message]
+
+                                # Restart the conversation with subagent results
+                                yield "\n🔄 Restarting conversation with subagent results...\n"
+                                new_response = await self._generate_completion(
+                                    new_messages,
+                                    tools=self.convert_tools_to_llm_format(),
+                                    stream=True,
                                 )
 
-                                if subagent_results:
-                                    # Add subagent results to the conversation and restart
-                                    yield f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n"
-
-                                    # Create new message with subagent results
-                                    results_summary = "\n".join(
-                                        [
-                                            f"**Subagent Task: {result['description']}**\n{result['content']}"
-                                            for result in subagent_results
-                                        ]
-                                    )
-
-                                    # Create a new conversation context that includes the original request and subagent results
-                                    # but frames it as analysis rather than a new spawning request
-                                    continuation_message = {
-                                        "role": "user",
-                                        "content": f"""I requested: {original_messages[-1]['content']}
-
-You spawned subagents and they have completed their tasks. Here are the results:
-
-{results_summary}
-
-Please provide your final analysis based on these subagent results. Do not spawn any new subagents - just analyze the provided data.""",
-                                    }
-
-                                    # Replace conversation with just the continuation context
-                                    new_messages = [continuation_message]
-
-                                    # Restart the conversation with subagent results
-                                    yield f"\n🔄 Restarting conversation with subagent results...\n"
-                                    new_response = await self._generate_completion(
-                                        new_messages,
-                                        tools=self.convert_tools_to_llm_format(),
-                                        stream=True,
-                                    )
-
-                                    # Yield the new response (check if it's a generator or string)
-                                    if hasattr(new_response, "__aiter__"):
-                                        async for new_chunk in new_response:
-                                            yield new_chunk
-                                    else:
-                                        # If it's a string, yield it directly
-                                        yield str(new_response)
-
-                                    # Exit since we've restarted
-                                    return
+                                # Yield the new response (check if it's a generator or string)
+                                if hasattr(new_response, "__aiter__"):
+                                    async for new_chunk in new_response:
+                                        yield new_chunk
                                 else:
-                                    yield f"\n⚠️ No results collected from subagents.\n"
-                                    return
+                                    # If it's a string, yield it directly
+                                    yield str(new_response)
 
-                        # Don't yield tool execution details to avoid LLM hallucinations
-                        # The tool results will be included in the next iteration's prompt context
+                                # Exit since we've restarted
+                                return
 
-                        # Indicate we're getting the follow-up response (via print to avoid LLM contamination)
-                        print(
-                            f"\n\r\n\r{self.display_tool_processing(self.is_subagent, interactive=not self.is_subagent)}\n\r",
-                            flush=True,
-                        )
+                            # Don't yield tool execution details to avoid LLM hallucinations
+                            # The tool results will be included in the next iteration's prompt context
 
-                        # Create follow-up prompt for next iteration
-                        tool_results_text = "\n".join(function_results)
+                            # Indicate we're getting the follow-up response (via print to avoid LLM contamination)
+                            print(
+                                f"\n\r\n\r{self.display_tool_processing(self.is_subagent, interactive=not self.is_subagent)}\n\r",
+                                flush=True,
+                            )
 
-                        # Instead of appending to the growing prompt, create a clean context
-                        # with just the original request and tool results to avoid confusion
-                        original_request = (
-                            original_messages[-1]["content"]
-                            if original_messages
-                            else "Continue processing"
-                        )
+                            # Extract tool results from updated messages for prompt creation
+                            tool_results_text = ""
+                            for msg in updated_messages:
+                                if msg.get("role") == "tool":
+                                    tool_results_text += f"{msg.get('content', '')}\n"
 
-                        # Create a focused prompt that prevents re-execution
-                        current_prompt = f"""Original request: {original_request}
+                            # Instead of appending to the growing prompt, create a clean context
+                            # with just the original request and tool results to avoid confusion
+                            original_request = (
+                                original_messages[-1]["content"]
+                                if original_messages
+                                else "Continue processing"
+                            )
+
+                            # Create a focused prompt that prevents re-execution
+                            current_prompt = f"""Original request: {original_request}
 
 Tool execution has been completed successfully. Results:
 {tool_results_text}
 
 Based on these tool results, please provide your final response. Do not re-execute any tools unless specifically needed for a different purpose."""
 
-                        logger.debug(
-                            f"Updated prompt length after tool execution: {len(current_prompt)}"
-                        )
-                        logger.debug(f"Tool results length: {len(tool_results_text)}")
+                            logger.debug(
+                                f"Updated prompt length after tool execution: {len(current_prompt)}"
+                            )
+                            logger.debug(
+                                f"Tool results length: {len(tool_results_text)}"
+                            )
 
-                        # Continue the loop - let Gemini decide if more tools are needed
-                        continue
+                            # Continue the loop - let Gemini decide if more tools are needed
+                            continue
+
+                    except ToolDeniedReturnToPrompt as e:
+                        # Exit generator immediately - cannot continue
+                        yield f"\n🚫 Tool execution denied - returning to prompt.\n"
+                        raise e  # Raise the exception after yielding the message
                     else:
                         # No function calls - this is the final response
                         # Yield any accumulated content before exiting

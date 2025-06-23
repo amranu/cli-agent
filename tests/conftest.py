@@ -86,12 +86,28 @@ def mock_base_agent(sample_host_config, mock_tools):
         ) -> Any:
             return "Mock response"
 
-        def _add_tool_results_to_conversation(self, messages, tool_calls, tool_results):
-            return messages
+        def _normalize_tool_calls_to_standard_format(self, tool_calls):
+            return []
 
         def _get_current_runtime_model(self) -> str:
             """Return mock model name for testing."""
             return "mock-model"
+
+        def _get_provider_config(self):
+            """Mock provider config for testing."""
+            return self.config.get_deepseek_config()  # Use any config for testing
+
+        def _get_streaming_preference(self, provider_config) -> bool:
+            """Mock streaming preference for testing."""
+            return True
+
+        def _calculate_timeout(self, provider_config) -> float:
+            """Mock timeout calculation for testing."""
+            return 60.0
+
+        def _create_llm_client(self, provider_config, timeout_seconds):
+            """Mock client creation for testing."""
+            return MagicMock()  # Return a mock client
 
     agent = MockAgent(sample_host_config, is_subagent=False)
     agent.available_tools = mock_tools
