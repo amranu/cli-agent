@@ -18,6 +18,7 @@ from mcp.client.stdio import stdio_client
 
 from cli_agent.core.base_agent import BaseMCPAgent
 from cli_agent.core.input_handler import InterruptibleInput
+from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 from cli_agent.utils.tool_conversion import GeminiToolConverter
 from cli_agent.utils.tool_parsing import GeminiToolCallParser
 from config import GeminiConfig, HostConfig, create_sample_env, load_config
@@ -260,7 +261,6 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
         self, response, original_messages: List[Dict[str, Any]], **kwargs
     ) -> str:
         """Handle non-streaming response from Gemini, processing tool calls if needed."""
-        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 
         current_messages = original_messages.copy()
         max_rounds = 10  # Prevent infinite loops
@@ -827,7 +827,6 @@ Based on these tool results, please provide your final response. Do not re-execu
                 )
         except Exception as e:
             # Re-raise tool permission denials so they can be handled at the chat level
-            from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 
             if isinstance(e, ToolDeniedReturnToPrompt):
                 raise  # Re-raise the exception to bubble up to interactive chat
@@ -842,7 +841,6 @@ Based on these tool results, please provide your final response. Do not re-execu
         self, function_calls: List, streaming_mode=False
     ) -> tuple:
         """Execute a list of function calls and return results and output."""
-        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 
         function_results = []
         all_tool_output = (
@@ -980,7 +978,6 @@ Based on these tool results, please provide your final response. Do not re-execu
         original_messages: List[Dict[str, str]],
     ) -> str:
         """Handle complete response from Gemini with iterative tool calling."""
-        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 
         current_prompt = prompt
         all_accumulated_output = []
@@ -1132,8 +1129,6 @@ Based on these tool results, please provide your final response. Do not re-execu
     ):
         """Handle streaming response from Gemini with iterative tool calling."""
         import asyncio
-
-        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 
         async def async_stream_generator():
             current_prompt = prompt
@@ -1538,7 +1533,6 @@ Please provide your final analysis based on these subagent results. Do not spawn
                 return
             except Exception as e:
                 # Re-raise tool permission denials so they can be handled at the chat level
-                from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 
                 if isinstance(e, ToolDeniedReturnToPrompt):
                     raise  # Re-raise the exception to bubble up to interactive chat
