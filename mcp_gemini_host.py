@@ -225,7 +225,7 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
         """Handle non-streaming response from Gemini, processing tool calls if needed."""
 
         # Use original messages list if modify_messages_in_place is enabled for session persistence
-        if getattr(self, '_modify_messages_in_place', False):
+        if getattr(self, "_modify_messages_in_place", False):
             current_messages = original_messages
         else:
             current_messages = original_messages.copy()
@@ -265,22 +265,30 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                         function_results.append(f"Error executing {fc.name}: {str(e)}")
 
                 # Add assistant message with tool calls to maintain conversation context
-                current_messages.append({
-                    "role": "assistant", 
-                    "content": text_response or "",
-                    "tool_calls": [{"name": fc.name, "args": fc.args} for fc in function_calls]
-                })
-                
+                current_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": text_response or "",
+                        "tool_calls": [
+                            {"name": fc.name, "args": fc.args} for fc in function_calls
+                        ],
+                    }
+                )
+
                 # Add tool result messages to maintain proper conversation history
                 for i, result in enumerate(function_results):
-                    current_messages.append({
-                        "role": "tool",
-                        "content": str(result),
-                        "tool_call_id": f"call_{i}"
-                    })
+                    current_messages.append(
+                        {
+                            "role": "tool",
+                            "content": str(result),
+                            "tool_call_id": f"call_{i}",
+                        }
+                    )
 
                 # Convert the maintained conversation history back to Gemini format
-                gemini_prompt = self._convert_messages_to_gemini_format(current_messages)
+                gemini_prompt = self._convert_messages_to_gemini_format(
+                    current_messages
+                )
                 config = types.GenerateContentConfig(
                     tools=(
                         self.convert_tools_to_llm_format()
@@ -850,23 +858,32 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                     # Note: We don't add tool execution status messages to accumulated output
                     # as they are only for user feedback and cause LLM hallucinations
 
-                    # Add assistant message with tool calls to maintain conversation context  
-                    original_messages.append({
-                        "role": "assistant",
-                        "content": text_response or "", 
-                        "tool_calls": [{"name": fc.name, "args": fc.args} for fc in function_calls]
-                    })
-                    
+                    # Add assistant message with tool calls to maintain conversation context
+                    original_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": text_response or "",
+                            "tool_calls": [
+                                {"name": fc.name, "args": fc.args}
+                                for fc in function_calls
+                            ],
+                        }
+                    )
+
                     # Add tool result messages to maintain proper conversation history
                     for i, result in enumerate(function_results):
-                        original_messages.append({
-                            "role": "tool",
-                            "content": str(result),
-                            "tool_call_id": f"call_{i}"
-                        })
+                        original_messages.append(
+                            {
+                                "role": "tool",
+                                "content": str(result),
+                                "tool_call_id": f"call_{i}",
+                            }
+                        )
 
                     # Convert the maintained conversation history back to Gemini format
-                    current_prompt = self._convert_messages_to_gemini_format(original_messages)
+                    current_prompt = self._convert_messages_to_gemini_format(
+                        original_messages
+                    )
 
                     # Continue the loop - let Gemini decide if more tools are needed
                     continue
@@ -1053,14 +1070,18 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                             f"JSON decode error in stream after {chunk_count} chunks: {json_error}"
                         )
                         logger.error(f"JSON error details: {traceback.format_exc()}")
-                        
+
                         if has_any_content:
-                            logger.warning("Stream had content before JSON error, continuing with what we have")
+                            logger.warning(
+                                "Stream had content before JSON error, continuing with what we have"
+                            )
                         else:
-                            logger.error("JSON error occurred before any content was received")
+                            logger.error(
+                                "JSON error occurred before any content was received"
+                            )
                             yield f"\n⚠️ Gemini API returned malformed JSON. This may be a temporary API issue. Error: {json_error}\n"
                             return
-                            
+
                     except Exception as stream_error:
                         import traceback
 
@@ -1132,7 +1153,7 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
 
                     # Use centralized tool call processing for streaming
                     # Use original messages list if modify_messages_in_place is enabled for session persistence
-                    if getattr(self, '_modify_messages_in_place', False):
+                    if getattr(self, "_modify_messages_in_place", False):
                         current_messages = original_messages
                     else:
                         current_messages = (
@@ -1202,7 +1223,9 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
 
                             # Use the updated messages from centralized processing to maintain context
                             # Convert the conversation history (which now includes tool calls and results) back to Gemini format
-                            current_prompt = self._convert_messages_to_gemini_format(updated_messages)
+                            current_prompt = self._convert_messages_to_gemini_format(
+                                updated_messages
+                            )
 
                             logger.debug(
                                 f"Updated prompt length after tool execution: {len(current_prompt)}"
@@ -1216,7 +1239,7 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
 
                     except ToolDeniedReturnToPrompt as e:
                         # Exit generator immediately - cannot continue
-                        #yield f"\n🚫 Tool execution denied - returning to prompt.\n"
+                        # yield f"\n🚫 Tool execution denied - returning to prompt.\n"
                         raise e  # Raise the exception after yielding the message
                     else:
                         # No function calls - this is the final response

@@ -794,7 +794,7 @@ class BaseMCPAgent(ABC):
         """
         if not tool_calls or not tool_results:
             # Check if we should modify in place for session persistence
-            if getattr(self, '_modify_messages_in_place', False):
+            if getattr(self, "_modify_messages_in_place", False):
                 return messages  # Return original list, don't copy
             else:
                 return messages.copy()
@@ -814,7 +814,7 @@ class BaseMCPAgent(ABC):
 
         # Build standardized tool result messages
         # Check if we should modify in place for session persistence
-        if getattr(self, '_modify_messages_in_place', False):
+        if getattr(self, "_modify_messages_in_place", False):
             updated_messages = messages  # Use original list for in-place modification
         else:
             updated_messages = messages.copy()  # Create copy for backward compatibility
@@ -1401,14 +1401,14 @@ class BaseMCPAgent(ABC):
                 # Check if this is the first message and enhance with AGENT.md if so
                 is_first_message = len(messages) == 1
                 if is_first_message:
-                    enhanced_messages = (
-                        self.system_prompt_builder.enhance_first_message_with_agent_md(
-                            messages.copy()  # Use a copy so original messages list can be modified in-place
-                        )
+                    enhanced_messages = self.system_prompt_builder.enhance_first_message_with_agent_md(
+                        messages.copy()  # Use a copy so original messages list can be modified in-place
                     )
                     # For first message, we need to use the enhanced version for LLM but ensure
                     # tool execution results are added to the original messages list
-                    working_messages = messages  # The list that will receive tool execution results
+                    working_messages = (
+                        messages  # The list that will receive tool execution results
+                    )
                 else:
                     enhanced_messages = messages
                     working_messages = messages
@@ -1424,7 +1424,9 @@ class BaseMCPAgent(ABC):
                 # Create response task - enable in-place message modification for session persistence
                 tools_list = self.convert_tools_to_llm_format()
                 current_task = asyncio.create_task(
-                    self.generate_response(working_messages, tools_list, modify_messages_in_place=True)
+                    self.generate_response(
+                        working_messages, tools_list, modify_messages_in_place=True
+                    )
                 )
 
                 # Wait for response with simple interruption handling
@@ -1676,7 +1678,7 @@ class BaseMCPAgent(ABC):
                 break
             except Exception as e:
                 print(f"\nError: {e}")
-        
+
         # Return the updated messages list for session saving
         return messages
 

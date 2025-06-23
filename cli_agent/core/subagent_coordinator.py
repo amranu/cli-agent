@@ -236,7 +236,7 @@ class SubagentCoordinator:
         results_text = "\n\n".join(results_summary)
 
         return {
-            "role": "user", 
+            "role": "user",
             "content": f"""I requested: {original_request}
 
 Subagent results:

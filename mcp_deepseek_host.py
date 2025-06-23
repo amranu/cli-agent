@@ -168,7 +168,9 @@ class MCPDeepseekHost(BaseMCPAgent):
         cleaned_messages = self._clean_messages_for_deepseek(messages)
 
         # Call parent's generate_response with cleaned messages and all parameters
-        return await super().generate_response(cleaned_messages, tools, stream, modify_messages_in_place)
+        return await super().generate_response(
+            cleaned_messages, tools, stream, modify_messages_in_place
+        )
 
     async def _generate_completion(
         self,
@@ -382,7 +384,7 @@ class MCPDeepseekHost(BaseMCPAgent):
         from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 
         # Use original messages list if modify_messages_in_place is enabled for session persistence
-        if getattr(self, '_modify_messages_in_place', False):
+        if getattr(self, "_modify_messages_in_place", False):
             current_messages = original_messages
         else:
             current_messages = original_messages.copy()
@@ -542,7 +544,7 @@ class MCPDeepseekHost(BaseMCPAgent):
 
         async def async_stream_generator():
             # Use original messages list if modify_messages_in_place is enabled for session persistence
-            if getattr(self, '_modify_messages_in_place', False):
+            if getattr(self, "_modify_messages_in_place", False):
                 current_messages = original_messages if original_messages else []
             else:
                 current_messages = original_messages.copy() if original_messages else []
@@ -700,7 +702,7 @@ class MCPDeepseekHost(BaseMCPAgent):
                 except ToolDeniedReturnToPrompt:
                     # Store the exception to raise after generator completes
                     context.tool_denial_exception = ToolDeniedReturnToPrompt()
-                    #yield "\nTool execution denied - returning to prompt.\n"
+                    # yield "\nTool execution denied - returning to prompt.\n"
                     return  # Exit the generator
 
                 # Make a new streaming request with tool results if we had tool calls
