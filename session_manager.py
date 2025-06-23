@@ -131,7 +131,8 @@ class SessionManager:
                 sessions.append(summary)
 
         # Sort by last updated, most recent first
-        sessions.sort(key=lambda x: x.get("last_updated", ""), reverse=True)
+        # Handle None values by ensuring we always have a sortable string
+        sessions.sort(key=lambda x: (x.get("last_updated") or x.get("created_at") or "0"), reverse=True)
 
         return sessions[:limit]
 

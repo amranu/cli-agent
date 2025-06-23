@@ -800,7 +800,11 @@ class BaseMCPAgent(ABC):
         This method normalizes tool calls and integrates results consistently.
         """
         if not tool_calls or not tool_results:
-            return messages.copy()
+            # Check if we should modify in place for session persistence
+            if getattr(self, '_modify_messages_in_place', False):
+                return messages  # Return original list, don't copy
+            else:
+                return messages.copy()
 
         # Validate input lengths match
         if len(tool_calls) != len(tool_results):
@@ -816,7 +820,11 @@ class BaseMCPAgent(ABC):
         normalized_calls = self._normalize_tool_calls_to_standard_format(tool_calls)
 
         # Build standardized tool result messages
-        updated_messages = messages.copy()
+        # Check if we should modify in place for session persistence
+        if getattr(self, '_modify_messages_in_place', False):
+            updated_messages = messages  # Use original list for in-place modification
+        else:
+            updated_messages = messages.copy()  # Create copy for backward compatibility
 
         # Add assistant message with normalized tool calls
         if normalized_calls:
@@ -874,6 +882,7 @@ class BaseMCPAgent(ABC):
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict]] = None,
         stream: Optional[bool] = None,
+        modify_messages_in_place: bool = False,
     ) -> Union[str, Any]:
         """Generate a response using the specific LLM. Centralized implementation with subagent yielding."""
         # For subagents, use interactive=False to avoid terminal formatting issues
@@ -887,6 +896,9 @@ class BaseMCPAgent(ABC):
         else:
             # Fall back to instance attribute or default
             use_stream = getattr(self, "stream", True) and not self.is_subagent
+
+        # Store the modify_messages_in_place flag for use by implementations
+        self._modify_messages_in_place = modify_messages_in_place
 
         # Call the concrete implementation's _generate_completion method
         tools_list = (
@@ -1401,11 +1413,15 @@ class BaseMCPAgent(ABC):
                 if is_first_message:
                     enhanced_messages = (
                         self.system_prompt_builder.enhance_first_message_with_agent_md(
-                            messages
+                            messages.copy()  # Use a copy so original messages list can be modified in-place
                         )
                     )
+                    # For first message, we need to use the enhanced version for LLM but ensure
+                    # tool execution results are added to the original messages list
+                    working_messages = messages  # The list that will receive tool execution results
                 else:
                     enhanced_messages = messages
+                    working_messages = messages
 
                 # Reset tool execution state for new message
                 self._tool_execution_started = False
@@ -1415,10 +1431,10 @@ class BaseMCPAgent(ABC):
                 # Show thinking message
                 print("\nThinking...")
 
-                # Create response task
+                # Create response task - enable in-place message modification for session persistence
                 tools_list = self.convert_tools_to_llm_format()
                 current_task = asyncio.create_task(
-                    self.generate_response(enhanced_messages, tools_list)
+                    self.generate_response(working_messages, tools_list, modify_messages_in_place=True)
                 )
 
                 # Wait for response with simple interruption handling
