@@ -75,8 +75,8 @@ def switch_chat(ctx):
     config = load_config()
     config.deepseek_model = "deepseek-chat"
     click.echo(f"Model switched to: {config.deepseek_model}")
-    # Save the updated config
-    config.save()
+    # Save to persistent config instead of .env
+    config.save_persistent_config()
 
 
 @cli.command("switch-reason")
@@ -86,8 +86,8 @@ def switch_reason(ctx):
     config = load_config()
     config.deepseek_model = "deepseek-reasoner"
     click.echo(f"Model switched to: {config.deepseek_model}")
-    # Save the updated config
-    config.save()
+    # Save to persistent config instead of .env
+    config.save_persistent_config()
 
 
 @cli.command("switch-gemini")
@@ -99,8 +99,8 @@ def switch_gemini(ctx):
     config.deepseek_model = "gemini"  # Use this as a marker
     config.gemini_model = "gemini-2.5-flash"
     click.echo(f"Backend switched to: Gemini Flash 2.5 ({config.gemini_model})")
-    # Save the updated config
-    config.save()
+    # Save to persistent config instead of .env
+    config.save_persistent_config()
 
 
 @cli.command("switch-gemini-pro")
@@ -112,8 +112,8 @@ def switch_gemini_pro(ctx):
     config.deepseek_model = "gemini"  # Use this as a marker
     config.gemini_model = "gemini-2.5-pro"
     click.echo(f"Backend switched to: Gemini Pro 2.5 ({config.gemini_model})")
-    # Save the updated config
-    config.save()
+    # Save to persistent config instead of .env
+    config.save_persistent_config()
 
 
 @cli.command()

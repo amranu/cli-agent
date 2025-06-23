@@ -1,6 +1,7 @@
 """Configuration management for MCP Deepseek Host."""
 
 import os
+import time
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -295,11 +296,61 @@ class HostConfig(BaseSettings):
             print(f"Error: Could not write to .env file: {e}")
             raise
 
+    def save_persistent_config(self):
+        """Save persistent configuration to ~/.config/agent/config.py."""
+        import json
+        from pathlib import Path
+
+        # Store persistent config in ~/.config/agent/
+        config_dir = Path.home() / ".config" / "agent"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = config_dir / "config.json"
+
+        # Only save model configuration that should persist
+        persistent_config = {
+            "deepseek_model": self.deepseek_model,
+            "gemini_model": self.gemini_model,
+            "last_updated": time.time(),
+        }
+
+        try:
+            with open(config_file, "w") as f:
+                json.dump(persistent_config, f, indent=2)
+            print(f"Configuration saved to {config_file}")
+        except Exception as e:
+            print(f"Warning: Could not save persistent configuration: {e}")
+
+    def load_persistent_config(self):
+        """Load persistent configuration from ~/.config/agent/config.py."""
+        import json
+        from pathlib import Path
+
+        config_dir = Path.home() / ".config" / "agent"
+        config_file = config_dir / "config.json"
+
+        if not config_file.exists():
+            return  # No persistent config exists
+
+        try:
+            with open(config_file, "r") as f:
+                persistent_config = json.load(f)
+
+            # Apply persistent configuration, overriding defaults
+            if "deepseek_model" in persistent_config:
+                self.deepseek_model = persistent_config["deepseek_model"]
+            if "gemini_model" in persistent_config:
+                self.gemini_model = persistent_config["gemini_model"]
+
+            print(f"Loaded persistent configuration from {config_file}")
+        except Exception as e:
+            print(f"Warning: Could not load persistent configuration: {e}")
+
 
 def load_config() -> HostConfig:
-    """Load configuration from environment variables and .env file."""
+    """Load configuration from environment variables, .env file, and persistent config."""
     config = HostConfig()
     config.load_mcp_servers()  # Auto-load persistent MCP servers
+    config.load_persistent_config()  # Auto-load persistent configuration
     return config
 
 
