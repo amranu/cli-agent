@@ -255,13 +255,33 @@ class SubagentManager:
 
     async def terminate_all(self):
         """Terminate all running subagents."""
-        for subagent in self.subagents.values():
+        if not self.subagents:
+            return
+
+        logger.info(f"Terminating {len(self.subagents)} subagents")
+        for task_id, subagent in self.subagents.items():
+            logger.info(f"Terminating subagent {task_id}")
             await subagent.terminate()
         self.subagents.clear()
+        logger.info("All subagents terminated")
+
+    async def terminate_subagent(self, task_id: str) -> bool:
+        """Terminate a specific subagent by task_id."""
+        if task_id not in self.subagents:
+            return False
+
+        logger.info(f"Terminating subagent {task_id}")
+        await self.subagents[task_id].terminate()
+        del self.subagents[task_id]
+        return True
 
     def get_active_count(self) -> int:
         """Get number of active subagents."""
         return len([s for s in self.subagents.values() if not s.completed])
+
+    def get_active_task_ids(self) -> List[str]:
+        """Get list of active subagent task IDs."""
+        return [task_id for task_id, s in self.subagents.items() if not s.completed]
 
 
 # Helper functions for subagent communication

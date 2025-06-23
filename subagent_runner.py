@@ -213,17 +213,17 @@ async def run_subagent_task(task_file_path: str):
         )
 
         # Execute the task with custom tool execution monitoring
-        # Add explicit tool usage instructions for Gemini
+        # Add explicit tool usage instructions for subagents
         enhanced_prompt = f"""{prompt}
 
 CRITICAL INSTRUCTIONS:
 - You are a subagent focused on executing tasks.
-- You MUST ONLY USE THE PROVIDED TOOLS.
-- Do not output any text, reasoning, or explanations.
+- You MUST use the available tools to complete your task.
+- You can provide reasoning and explanations as you work.
 - When the task is complete, you MUST use the 'emit_result' tool to provide a summary of your results.
 - The emit_result tool takes two parameters: 'result' (required - the main findings/output) and 'summary' (optional - brief description of what was accomplished).
 - Always call emit_result as your final action to terminate the subagent and return results to the main agent.
-- Your response should be only tool calls, no other text.
+- The subagent will continue running until you call emit_result.
 """
 
         messages = [{"role": "user", "content": enhanced_prompt}]
@@ -256,19 +256,74 @@ CRITICAL INSTRUCTIONS:
 
         host._execute_mcp_tool = emit_tool_execution
 
+        # Run the subagent in a conversation loop until it calls emit_result
+        conversation_round = 0
+        max_rounds = 20  # Prevent infinite loops
+
         try:
-            response = await host.generate_response(messages)
+            while conversation_round < max_rounds:
+                conversation_round += 1
+                emit_output_with_id(f"💭 Conversation round {conversation_round}")
+
+                response = await host.generate_response(messages)
+
+                # Handle the response
+                if isinstance(response, str):
+                    response_content = response
+                else:
+                    response_content = str(response)
+
+                # Add assistant response to conversation
+                messages.append({"role": "assistant", "content": response_content})
+
+                # Emit the assistant's response
+                if response_content.strip():
+                    emit_output_with_id(f"🤖 Response: {response_content}")
+
+                # The emit_result tool will call sys.exit(0) when called, so if we reach here,
+                # the subagent hasn't finished yet. We continue the conversation by asking
+                # it to continue or complete the task.
+
+                # Add a follow-up message to encourage completion if we've had multiple rounds
+                # and the last response didn't contain tool calls
+                if (
+                    conversation_round > 2
+                    and "🔧 Executing tool:" not in response_content
+                ):
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": "Please continue working on the task. Use the available tools if needed. When you have completed the task, use the emit_result tool to provide your final results and terminate.",
+                        }
+                    )
+
+        except SystemExit:
+            # This is expected when emit_result calls sys.exit(0)
+            # The subagent has completed successfully
+            pass
+        except Exception as e:
+            emit_error_with_id(f"Task execution error: {str(e)}", str(e))
+            raise
         finally:
             # Restore original method
             host._execute_mcp_tool = original_execute_mcp_tool
 
-        # Emit the result
-        if isinstance(response, str):
-            emit_result_with_id(response)
+        # If we reach here without SystemExit, the subagent didn't call emit_result
+        if conversation_round >= max_rounds:
+            emit_error_with_id(
+                f"Task did not complete after {max_rounds} rounds. Subagent should call emit_result to terminate.",
+                "Max rounds exceeded",
+            )
+            emit_status_with_id(
+                "failed",
+                f"Task exceeded maximum {max_rounds} conversation rounds without calling emit_result",
+            )
         else:
-            emit_result_with_id(str(response))
-
-        emit_status_with_id("completed", f"Task {task_id} completed successfully")
+            # This shouldn't happen if emit_result was called (it should cause SystemExit)
+            emit_error_with_id(
+                "Task completed without calling emit_result", "Missing emit_result call"
+            )
+            emit_status_with_id("failed", "Task completed without calling emit_result")
 
     except Exception as e:
         emit_error_with_id(f"Task failed: {str(e)}", str(e))
