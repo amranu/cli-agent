@@ -1641,6 +1641,46 @@ You are the expert. Complete the task."""
         """Legacy method - redirects to centralized implementation."""
         return self._enhance_first_message_with_agent_md(messages, is_first_message)
 
+    # Centralized Text Processing Utilities
+    # ====================================
+
+    def _extract_text_before_tool_calls(self, content: str) -> str:
+        """Extract any text that appears before tool calls in the response.
+
+        This method handles multiple tool call formats used by different LLMs:
+        - DeepSeek tool call markers
+        - Gemini XML-style tool calls
+        - Python-style function calls
+        - Inline tool format
+        """
+        import re
+
+        # Combined patterns for all supported tool call formats
+        patterns = [
+            # DeepSeek tool call markers
+            r"^(.*?)(?=<｜tool▁calls▁begin｜>|<｜tool▁call▁begin｜>)",
+            r"^(.*?)(?=```json\s*\{\s*\"function\")",
+            r"^(.*?)(?=```python\s*<｜tool▁calls▁begin｜>)",
+            # Gemini XML-style tool calls
+            r"^(.*?)(?=<execute_tool>)",
+            # Python-style function calls
+            r"^(.*?)(?=\w+\s*\()",
+            # Inline tool calls
+            r"^(.*?)(?=Tool:\s*\w+:\w+)",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                text_before = match.group(1).strip()
+                if text_before:  # Only return if there's actual content
+                    # Remove code block markers if present
+                    text_before = re.sub(r"^```\w*\s*", "", text_before)
+                    text_before = re.sub(r"\s*```$", "", text_before)
+                    return text_before
+
+        return ""
+
     def _format_chunk_safely(self, chunk: str) -> str:
         """Apply basic formatting to streaming chunks without losing spaces."""
         return self.formatter.format_chunk_safely(chunk)

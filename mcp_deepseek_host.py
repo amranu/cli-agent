@@ -59,25 +59,6 @@ class MCPDeepseekHost(BaseMCPAgent):
         self.deepseek_client = client
         return client
 
-    def _extract_text_before_tool_calls(self, content: str) -> str:
-        """Extract any text that appears before tool calls in the response."""
-
-        # Pattern to find text before tool call markers
-        before_tool_pattern = (
-            r"^(.*?)(?=<｜tool▁calls▁begin｜>|<｜tool▁call▁begin｜>"
-            r'|```json\s*\{\s*"function"|```python\s*<｜tool▁calls▁begin｜>)'
-        )
-        match = re.search(before_tool_pattern, content, re.DOTALL)
-
-        if match:
-            text_before = match.group(1).strip()
-            # Remove code block markers if present
-            text_before = re.sub(r"^```\w*\s*", "", text_before)
-            text_before = re.sub(r"\s*```$", "", text_before)
-            return text_before
-
-        return ""
-
     def convert_tools_to_llm_format(self) -> List[Dict]:
         """Convert tools to Deepseek format using shared utilities."""
         converter = OpenAIStyleToolConverter()

@@ -566,26 +566,6 @@ Based on these tool results, please provide your final response. Do not re-execu
 
         return function_calls
 
-    def _extract_text_before_tool_calls(self, content: str) -> str:
-        """Extract any text that appears before tool calls in the response."""
-        import re
-
-        # Pattern to find text before various tool call formats
-        patterns = [
-            r"^(.*?)(?=<execute_tool>)",  # XML-style tool calls
-            r"^(.*?)(?=\w+\s*\()",  # Python-style function calls
-            r"^(.*?)(?=Tool:\s*\w+:\w+)",  # Inline tool calls
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, content, re.DOTALL)
-            if match:
-                text_before = match.group(1).strip()
-                if text_before:  # Only return if there's actual content
-                    return text_before
-
-        return ""
-
     def _convert_messages_to_gemini_format(self, messages: List[Dict[str, str]]) -> str:
         """Convert OpenAI-style messages to Gemini format."""
         # Gemini expects a single string prompt, so we combine all messages
