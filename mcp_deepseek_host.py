@@ -476,8 +476,21 @@ class MCPDeepseekHost(BaseMCPAgent):
                 current_messages = updated_messages
 
                 if continuation_message:
+                    # Handle subagent coordination result
+                    if (
+                        isinstance(continuation_message, dict)
+                        and "continuation_message" in continuation_message
+                    ):
+                        # New structured format from centralized coordinator - messages already handled by base agent
+                        actual_continuation = continuation_message[
+                            "continuation_message"
+                        ]
+                    else:
+                        # Legacy format - just the continuation message
+                        actual_continuation = continuation_message
+
                     # Restart with subagent results (non-streaming for subagents)
-                    new_messages = [continuation_message]
+                    new_messages = [actual_continuation]
                     # Clean messages before API call to prevent JSON deserialization errors
                     cleaned_new_messages = self._clean_messages_for_deepseek(
                         new_messages
@@ -687,35 +700,40 @@ class MCPDeepseekHost(BaseMCPAgent):
                         current_messages = updated_messages
 
                         if continuation_message:
-                            # Yield the interrupt and completion messages for streaming
-                            if not (
-                                hasattr(self, "streaming_json_callback")
-                                and self.streaming_json_callback
+                            # Handle subagent coordination result
+                            if (
+                                isinstance(continuation_message, dict)
+                                and "continuation_message" in continuation_message
                             ):
-                                print(
-                                    "\r\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
-                                )
+                                # New structured format from centralized coordinator
+                                if continuation_message.get(
+                                    "_should_yield_messages"
+                                ) and not (
+                                    hasattr(self, "streaming_json_callback")
+                                    and self.streaming_json_callback
+                                ):
+                                    # Yield status messages for streaming mode
+                                    print(
+                                        continuation_message["interrupt_msg"],
+                                        flush=True,
+                                    )
+                                    print(
+                                        continuation_message["completion_msg"],
+                                        flush=True,
+                                    )
+                                    print(
+                                        continuation_message["restart_msg"], flush=True
+                                    )
 
-                            # The centralized method already collected results, so yield completion message
-                            if not (
-                                hasattr(self, "streaming_json_callback")
-                                and self.streaming_json_callback
-                            ):
-                                print(
-                                    f"\r\n📋 Collected subagent result(s). Restarting with results...\n"
-                                )
+                                actual_continuation = continuation_message[
+                                    "continuation_message"
+                                ]
+                            else:
+                                # Legacy format - just the continuation message
+                                actual_continuation = continuation_message
 
                             # Preserve user context but replace assistant response with continuation
-                            new_messages = current_messages[:-1] + [
-                                continuation_message
-                            ]
-                            if not (
-                                hasattr(self, "streaming_json_callback")
-                                and self.streaming_json_callback
-                            ):
-                                print(
-                                    "\r\n🔄 Restarting conversation with subagent results...\n"
-                                )
+                            new_messages = current_messages[:-1] + [actual_continuation]
 
                             new_response = await self._generate_completion(
                                 new_messages,

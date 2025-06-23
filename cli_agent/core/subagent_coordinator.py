@@ -246,11 +246,11 @@ class SubagentCoordinator:
 
         return {
             "role": "user",
-            "content": f"""I requested: {original_request}
+            "content": f"""Subagent results:
 
-Subagent results:
+{results_text}
 
-{results_text}""",
+Please continue with your task.""",
         }
 
     async def handle_subagent_coordination(
@@ -263,7 +263,8 @@ Subagent results:
         """
         Centralized subagent coordination logic.
 
-        Returns None if no subagents were spawned, or a continuation message dict if subagents completed.
+        Returns None if no subagents were spawned, or a structured result dict if subagents completed.
+        The result dict contains: continuation_message, interrupt_msg, completion_msg, restart_msg
         """
         if not self.agent.subagent_manager:
             return None
@@ -276,24 +277,15 @@ Subagent results:
         ):
             return None
 
-        # Display interrupt message
-        interrupt_msg = "\n🔄 Subagents spawned - interrupting main stream to wait for completion..."
-        if streaming_mode:
-            # For streaming mode, this should be yielded by the caller
-            pass  # Caller will handle yielding
-        elif interactive:
-            print(interrupt_msg, flush=True)
+        # Prepare status messages for centralized handling
+        interrupt_msg = "\r\n🔄 Subagents spawned - interrupting main stream to wait for completion...\r\n"
 
         # Wait for all subagents to complete and collect results
         subagent_results = await self.collect_subagent_results()
 
         if subagent_results:
-            completion_msg = f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results..."
-            if streaming_mode:
-                # For streaming mode, this should be yielded by the caller
-                pass  # Caller will handle yielding
-            elif interactive:
-                print(completion_msg, flush=True)
+            completion_msg = f"\r\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\r\n"
+            restart_msg = "\r\n🔄 Restarting conversation with subagent results...\r\n"
 
             # Create continuation message with subagent results
             original_request = (
@@ -305,7 +297,13 @@ Subagent results:
                 original_request, subagent_results
             )
 
-            return continuation_message
+            return {
+                "continuation_message": continuation_message,
+                "interrupt_msg": interrupt_msg,
+                "completion_msg": completion_msg,
+                "restart_msg": restart_msg,
+                "subagent_count": len(subagent_results),
+            }
         else:
             logger.warning("No results collected from subagents")
             return None

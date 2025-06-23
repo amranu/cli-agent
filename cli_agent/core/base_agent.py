@@ -2223,17 +2223,25 @@ class BaseMCPAgent(ABC):
                 raise
 
         # Handle subagent coordination using existing centralized logic
-        continuation_message = (
-            await self.subagent_coordinator.handle_subagent_coordination(
-                tool_calls,
-                original_messages,
-                interactive=interactive,
-                streaming_mode=streaming_mode,
-            )
+        subagent_result = await self.subagent_coordinator.handle_subagent_coordination(
+            tool_calls,
+            original_messages,
+            interactive=interactive,
+            streaming_mode=streaming_mode,
         )
 
-        if continuation_message:
-            return current_messages, continuation_message, True
+        if subagent_result:
+            # Handle status messages centrally based on mode
+            if streaming_mode:
+                # For streaming mode, store messages for the caller to yield
+                subagent_result["_should_yield_messages"] = True
+            elif interactive:
+                # For non-streaming interactive mode, print messages immediately
+                print(subagent_result["interrupt_msg"], flush=True)
+                print(subagent_result["completion_msg"], flush=True)
+                print(subagent_result["restart_msg"], flush=True)
+
+            return current_messages, subagent_result, True
 
         # Add tool results to conversation
         if tool_results:

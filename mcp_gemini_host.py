@@ -1203,37 +1203,42 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                                 self._text_buffer = ""
 
                             if continuation_message:
-                                # Yield the interrupt and completion messages for streaming
-                                if not (
-                                    hasattr(self, "streaming_json_callback")
-                                    and self.streaming_json_callback
+                                # Handle subagent coordination result
+                                if (
+                                    isinstance(continuation_message, dict)
+                                    and "continuation_message" in continuation_message
                                 ):
-                                    print(
-                                        "\r\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
-                                    )
-                                if not (
-                                    hasattr(self, "streaming_json_callback")
-                                    and self.streaming_json_callback
-                                ):
-                                    print(
-                                        "\r\n📋 Collected subagent result(s). Restarting with results...\n"
-                                    )
+                                    # New structured format from centralized coordinator
+                                    if continuation_message.get(
+                                        "_should_yield_messages"
+                                    ) and not (
+                                        hasattr(self, "streaming_json_callback")
+                                        and self.streaming_json_callback
+                                    ):
+                                        # Yield status messages for streaming mode
+                                        yield continuation_message["interrupt_msg"]
+                                        yield continuation_message["completion_msg"]
+                                        yield continuation_message["restart_msg"]
+
+                                    actual_continuation = continuation_message[
+                                        "continuation_message"
+                                    ]
+                                else:
+                                    # Legacy format - just the continuation message
+                                    actual_continuation = continuation_message
 
                                 # Create a modified continuation message that doesn't repeat the tool-spawning request
                                 modified_continuation = {
                                     "role": "user",
                                     "content": f"""Subagent results have been collected:
 
-{continuation_message['content'].split('Subagent results:')[1] if 'Subagent results:' in continuation_message['content'] else continuation_message['content']}
+{actual_continuation['content'].split('Subagent results:')[1] if 'Subagent results:' in actual_continuation['content'] else actual_continuation['content']}
 
 Please continue with your task.""",
                                 }
                                 new_messages = current_messages[:-1] + [
                                     modified_continuation
                                 ]
-
-                                # Restart the conversation with subagent results
-                                yield "\n🔄 Restarting conversation with subagent results...\n"
                                 new_response = await self._generate_completion(
                                     new_messages,
                                     tools=self.convert_tools_to_llm_format(),
@@ -1334,7 +1339,7 @@ Please continue with your task.""",
                                 new_messages = [continuation_message]
 
                                 # Restart the conversation with subagent results
-                                yield f"\n🔄 Restarting conversation with subagent results...\n"
+                                # Note: Status messages should be handled by centralized coordination
                                 new_response = await self._generate_completion(
                                     new_messages,
                                     tools=self.convert_tools_to_llm_format(),
