@@ -116,20 +116,22 @@ def mock_base_agent(sample_host_config, mock_tools):
         def _get_llm_specific_instructions(self) -> str:
             """Mock LLM-specific instructions for testing."""
             return ""
-            
+
         # Add missing methods that tests are looking for
         def get_token_limit(self) -> int:
             """Mock token limit for testing."""
             return 4000
-            
-        async def compact_conversation(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+
+        async def compact_conversation(
+            self, messages: List[Dict[str, Any]]
+        ) -> List[Dict[str, Any]]:
             """Mock conversation compacting for testing."""
             return self.formatting_utils.compact_conversation(messages)
-            
+
         async def _task(self, args: Dict[str, Any]) -> str:
             """Mock task execution for testing."""
             return await self.builtin_executor.task(args)
-            
+
         def format_markdown(self, text: str) -> str:
             """Mock markdown formatting for testing."""
             return self.formatting_utils.format_markdown(text)
