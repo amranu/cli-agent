@@ -98,7 +98,7 @@ class HostConfig(BaseSettings):
     auto_approve_tools: bool = Field(default=False, alias="AUTO_APPROVE_TOOLS")
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", env_prefix=""
+        env_file=".env", env_file_encoding="utf-8", env_prefix="", extra="ignore"
     )
 
     def get_deepseek_config(self) -> DeepseekConfig:
@@ -196,37 +196,97 @@ class HostConfig(BaseSettings):
         return False
 
     def save(self):
-        """Save current configuration to .env file."""
-        env_content = []
+        """Save current configuration to .env file, preserving existing variables."""
+        import re
 
-        # Add Deepseek configuration
-        env_content.append("# Deepseek API Configuration")
-        env_content.append(f"DEEPSEEK_API_KEY={self.deepseek_api_key}")
-        env_content.append(f"DEEPSEEK_MODEL={self.deepseek_model}")
-        env_content.append(f"DEEPSEEK_TEMPERATURE={self.deepseek_temperature}")
-        env_content.append(f"DEEPSEEK_MAX_TOKENS={self.deepseek_max_tokens}")
-        env_content.append(f"DEEPSEEK_STREAM={str(self.deepseek_stream).lower()}")
-        env_content.append("")
+        # Variables that this config manages
+        managed_vars = {
+            "DEEPSEEK_API_KEY": self.deepseek_api_key,
+            "DEEPSEEK_MODEL": self.deepseek_model,
+            "DEEPSEEK_TEMPERATURE": str(self.deepseek_temperature),
+            "DEEPSEEK_MAX_TOKENS": str(self.deepseek_max_tokens),
+            "DEEPSEEK_STREAM": str(self.deepseek_stream).lower(),
+            "GEMINI_API_KEY": self.gemini_api_key,
+            "GEMINI_MODEL": self.gemini_model,
+            "GEMINI_TEMPERATURE": str(self.gemini_temperature),
+            "GEMINI_MAX_TOKENS": str(self.gemini_max_tokens),
+            "GEMINI_TOP_P": str(self.gemini_top_p),
+            "GEMINI_TOP_K": str(self.gemini_top_k),
+            "GEMINI_STREAM": str(self.gemini_stream).lower(),
+            "HOST_NAME": self.host_name,
+            "LOG_LEVEL": self.log_level,
+        }
 
-        # Add Gemini configuration
-        env_content.append("# Gemini API Configuration")
-        env_content.append(f"GEMINI_API_KEY={self.gemini_api_key}")
-        env_content.append(f"GEMINI_MODEL={self.gemini_model}")
-        env_content.append(f"GEMINI_TEMPERATURE={self.gemini_temperature}")
-        env_content.append(f"GEMINI_MAX_TOKENS={self.gemini_max_tokens}")
-        env_content.append(f"GEMINI_TOP_P={self.gemini_top_p}")
-        env_content.append(f"GEMINI_TOP_K={self.gemini_top_k}")
-        env_content.append(f"GEMINI_STREAM={str(self.gemini_stream).lower()}")
-        env_content.append("")
+        # Read existing .env file if it exists
+        existing_lines = []
+        if os.path.exists(".env"):
+            try:
+                with open(".env", "r") as f:
+                    existing_lines = f.readlines()
+            except Exception as e:
+                print(f"Warning: Could not read existing .env file: {e}")
 
-        # Add host configuration
-        env_content.append("# Host Configuration")
-        env_content.append(f"HOST_NAME={self.host_name}")
-        env_content.append(f"LOG_LEVEL={self.log_level}")
+        # Process existing lines and update managed variables
+        updated_lines = []
+        updated_vars = set()
 
-        # Write to .env file
-        with open(".env", "w") as f:
-            f.write("\n".join(env_content) + "\n")
+        for line in existing_lines:
+            line = line.rstrip("\n\r")
+
+            # Check if this line sets a managed variable
+            match = re.match(r"^([A-Z_][A-Z0-9_]*)=(.*)$", line)
+            if match:
+                var_name = match.group(1)
+                if var_name in managed_vars:
+                    # Update with new value
+                    updated_lines.append(f"{var_name}={managed_vars[var_name]}")
+                    updated_vars.add(var_name)
+                else:
+                    # Keep existing non-managed variable
+                    updated_lines.append(line)
+            else:
+                # Keep comments, empty lines, etc.
+                updated_lines.append(line)
+
+        # Add any managed variables that weren't in the existing file
+        missing_vars = set(managed_vars.keys()) - updated_vars
+        if missing_vars:
+            # Add a section for new variables
+            if updated_lines and updated_lines[-1].strip():
+                updated_lines.append("")  # Add blank line before new section
+
+            # Group by type for better organization
+            deepseek_vars = [v for v in missing_vars if v.startswith("DEEPSEEK_")]
+            gemini_vars = [v for v in missing_vars if v.startswith("GEMINI_")]
+            host_vars = [
+                v for v in missing_vars if v.startswith("HOST_") or v in ["LOG_LEVEL"]
+            ]
+
+            if deepseek_vars:
+                updated_lines.append("# Deepseek API Configuration")
+                for var in sorted(deepseek_vars):
+                    updated_lines.append(f"{var}={managed_vars[var]}")
+                updated_lines.append("")
+
+            if gemini_vars:
+                updated_lines.append("# Gemini API Configuration")
+                for var in sorted(gemini_vars):
+                    updated_lines.append(f"{var}={managed_vars[var]}")
+                updated_lines.append("")
+
+            if host_vars:
+                updated_lines.append("# Host Configuration")
+                for var in sorted(host_vars):
+                    updated_lines.append(f"{var}={managed_vars[var]}")
+
+        # Write back to .env file
+        try:
+            with open(".env", "w") as f:
+                for line in updated_lines:
+                    f.write(line + "\n")
+        except Exception as e:
+            print(f"Error: Could not write to .env file: {e}")
+            raise
 
 
 def load_config() -> HostConfig:
