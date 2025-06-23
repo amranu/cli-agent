@@ -261,7 +261,7 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
     ) -> str:
         """Handle non-streaming response from Gemini, processing tool calls if needed."""
         from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
-        
+
         current_messages = original_messages.copy()
         max_rounds = 10  # Prevent infinite loops
 
@@ -323,7 +323,6 @@ Based on these tool results, please provide your final response. Do not re-execu
                     temperature=self.gemini_config.temperature,
                     max_output_tokens=self.gemini_config.max_output_tokens,
                 )
-
 
                 # Make another request
                 response = await self._make_gemini_request_with_retry(
@@ -844,12 +843,11 @@ Based on these tool results, please provide your final response. Do not re-execu
     ) -> tuple:
         """Execute a list of function calls and return results and output."""
         from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
-        
+
         function_results = []
         all_tool_output = (
             []
         )  # Collect all tool execution output for non-interactive mode
-        
 
         # Prepare tool info for parallel execution
         tool_info_list = []
@@ -967,7 +965,7 @@ Based on these tool results, please provide your final response. Do not re-execu
                 # Re-raise tool permission denials without adding to results
                 if isinstance(e, ToolDeniedReturnToPrompt):
                     raise e  # Re-raise without adding to function_results
-                
+
                 # Handle any unexpected errors during parallel execution
                 error_msg = f"Error during parallel tool execution: {str(e)}"
                 all_tool_output.append(error_msg)
@@ -983,7 +981,7 @@ Based on these tool results, please provide your final response. Do not re-execu
     ) -> str:
         """Handle complete response from Gemini with iterative tool calling."""
         from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
-        
+
         current_prompt = prompt
         all_accumulated_output = []
 
@@ -1044,16 +1042,18 @@ Based on these tool results, please provide your final response. Do not re-execu
                     # Handle function calls
                     if not self.is_subagent:
                         # Check if there's any buffered text that needs to be displayed before tool execution
-                        text_buffer = getattr(self, '_text_buffer', "")
+                        text_buffer = getattr(self, "_text_buffer", "")
                         if text_buffer.strip():
                             # Format and display the buffered text with Assistant prefix
                             formatted_response = self.format_markdown(text_buffer)
                             # Replace newlines with \r\n for proper terminal handling
-                            formatted_response = formatted_response.replace("\n", "\r\n")
+                            formatted_response = formatted_response.replace(
+                                "\n", "\r\n"
+                            )
                             print(f"\r\x1b[K\r\nAssistant: {formatted_response}")
                             # Clear the buffer
                             self._text_buffer = ""
-                            
+
                         print(
                             f"\r\n{self.display_tool_execution_start(len(function_calls), self.is_subagent, interactive=not self.is_subagent)}",
                             flush=True,
@@ -1061,8 +1061,8 @@ Based on these tool results, please provide your final response. Do not re-execu
 
                     # Execute function calls using centralized method
                     try:
-                        function_results, tool_output = await self._execute_function_calls(
-                            function_calls
+                        function_results, tool_output = (
+                            await self._execute_function_calls(function_calls)
                         )
                     except ToolDeniedReturnToPrompt as e:
                         # Tool permission denied - exit immediately without making API call
@@ -1085,7 +1085,6 @@ Tool execution completed successfully. Results:
 {tool_results_text}
 
 Based on these tool results, please provide your final response. Do not re-execute any tools unless specifically needed for a different purpose."""
-
 
                     # Continue the loop - let Gemini decide if more tools are needed
                     continue
@@ -1334,16 +1333,18 @@ Based on these tool results, please provide your final response. Do not re-execu
                     # Check if we have function calls to execute
                     if function_calls:
                         # Check if there's any buffered text that needs to be displayed before tool execution
-                        text_buffer = getattr(self, '_text_buffer', "")
+                        text_buffer = getattr(self, "_text_buffer", "")
                         if text_buffer.strip():
                             # Format and display the buffered text with Assistant prefix
                             formatted_response = self.format_markdown(text_buffer)
                             # Replace newlines with \r\n for proper terminal handling
-                            formatted_response = formatted_response.replace("\n", "\r\n")
+                            formatted_response = formatted_response.replace(
+                                "\n", "\r\n"
+                            )
                             print(f"\r\x1b[K\r\nAssistant: {formatted_response}")
                             # Clear the buffer
                             self._text_buffer = ""
-                            
+
                         # Show tool execution indicator to user via print (not yielded to avoid LLM contamination)
                         print(
                             f"\r\n{self.display_tool_execution_start(len(function_calls), self.is_subagent, interactive=not self.is_subagent)}",
@@ -1462,7 +1463,6 @@ Based on these tool results, please provide your final response. Do not re-execu
                             f"Updated prompt length after tool execution: {len(current_prompt)}"
                         )
                         logger.debug(f"Tool results length: {len(tool_results_text)}")
-
 
                         # Continue the loop - let Gemini decide if more tools are needed
                         continue

@@ -36,8 +36,7 @@ class MCPDeepseekHost(BaseMCPAgent):
 
         # Initialize Deepseek client with appropriate timeout for reasoner model
         timeout_seconds = (
-            600 if self.deepseek_config.model == "deepseek-reasoner" 
-            else 600
+            600 if self.deepseek_config.model == "deepseek-reasoner" else 600
         )
         self.deepseek_client = OpenAI(
             api_key=self.deepseek_config.api_key,
@@ -54,7 +53,7 @@ class MCPDeepseekHost(BaseMCPAgent):
 
         # Pattern to find text before tool call markers
         before_tool_pattern = (
-            r'^(.*?)(?=<｜tool▁calls▁begin｜>|<｜tool▁call▁begin｜>'
+            r"^(.*?)(?=<｜tool▁calls▁begin｜>|<｜tool▁call▁begin｜>"
             r'|```json\s*\{\s*"function"|```python\s*<｜tool▁calls▁begin｜>)'
         )
         match = re.search(before_tool_pattern, content, re.DOTALL)
@@ -478,7 +477,11 @@ Please provide your final analysis based on these subagent results. Do not spawn
                         tool_result_content = f"Error executing tool: {result}"
                     else:
                         # Result is not an exception, use the extracted value from tuple
-                        tool_result_content = result if not isinstance(result, tuple) else tool_result_content
+                        tool_result_content = (
+                            result
+                            if not isinstance(result, tuple)
+                            else tool_result_content
+                        )
 
                     # Check if tool failed and add notice to the content sent to the model
                     tool_failed = (
@@ -551,6 +554,7 @@ Please provide your final analysis based on these subagent results. Do not spawn
 
         class StreamingContext:
             """Context to store exceptions that need to be raised after streaming."""
+
             def __init__(self):
                 self.tool_denial_exception = None
 
