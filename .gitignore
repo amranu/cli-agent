@@ -33,6 +33,13 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+
 # PyInstaller
 *.manifest
 *.spec
@@ -142,6 +149,12 @@ debug_*.py
 verify_*.py
 example_*.py
 todo.json
+
+# Analysis and sample files
+analysis_*.py
+sample_*.jsonl
+*_conversation.jsonl
+test_input.jsonl
 
 # API keys and secrets
 *key*
