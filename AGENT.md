@@ -37,13 +37,18 @@ cli_agent/
 ├── tools/                         # Built-in tool definitions
 │   ├── __init__.py                # Tool exports
 │   └── builtin_tools.py           # 12 built-in tools with JSON schemas (292 lines)
-└── utils/                         # Shared utility modules
-    ├── __init__.py                # Centralized utility exports
-    ├── tool_conversion.py         # LLM-specific tool format conversion (188 lines)
-    ├── tool_parsing.py            # Multi-format tool call parsing (280 lines)
-    ├── content_processing.py      # Content extraction and cleaning utilities
-    ├── http_client.py             # HTTP client factory and lifecycle management
-    └── retry.py                   # Retry logic with exponential backoff
+├── utils/                         # Shared utility modules
+│   ├── __init__.py                # Centralized utility exports
+│   ├── tool_conversion.py         # LLM-specific tool format conversion (188 lines)
+│   ├── tool_parsing.py            # Multi-format tool call parsing (280 lines)
+│   ├── content_processing.py      # Content extraction and cleaning utilities
+│   ├── http_client.py             # HTTP client factory and lifecycle management
+│   ├── retry.py                   # Retry logic with exponential backoff
+│   └── tool_permissions.py        # Tool permissions management
+└── tests/                         # Testing framework
+    ├── __init__.py
+    ├── test_agent.py
+    └── test_tools.py
 ```
 
 ### `cli_agent/` Package: Modular Core Framework

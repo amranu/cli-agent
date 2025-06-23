@@ -22,6 +22,8 @@ from fastmcp.client import StdioTransport
 from cli_agent.core.slash_commands import SlashCommandManager
 from cli_agent.tools.builtin_tools import get_all_builtin_tools
 from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+from cli_agent.core.token_manager import TokenManager
+from cli_agent.core.tool_schema import ToolSchemaManager
 from config import HostConfig
 
 # Configure logging
@@ -100,6 +102,14 @@ class BaseMCPAgent(ABC):
         except ImportError as e:
             logger.warning(f"Failed to import tool permission manager: {e}")
             self.permission_manager = None
+
+        # Initialize token manager
+        self.token_manager = TokenManager(config)
+        logger.debug("Initialized token manager")
+
+        # Initialize tool schema manager
+        self.tool_schema = ToolSchemaManager()
+        logger.debug("Initialized tool schema manager")
 
         logger.info(
             f"Initialized Base MCP Agent with {len(self.available_tools)} built-in tools"
@@ -1689,146 +1699,27 @@ You are the expert. Complete the task."""
 
     def estimate_tokens(self, text: str) -> int:
         """Rough estimation of tokens (1 token ≈ 4 characters for most models)."""
-        return len(text) // 4
+        return self.token_manager.estimate_tokens(text)
 
     def count_conversation_tokens(self, messages: List[Dict[str, Any]]) -> int:
         """Count estimated tokens in the conversation."""
-        total_tokens = 0
-        for message in messages:
-            if isinstance(message.get("content"), str):
-                total_tokens += self.estimate_tokens(message["content"])
-            # Add small overhead for role and structure
-            total_tokens += 10
-        return total_tokens
+        return self.token_manager.count_conversation_tokens(messages)
 
     def get_token_limit(self) -> int:
         """Get the context token limit for the current model."""
-        # Enhanced centralized token limit management with model configuration support
-        model_limits = self._get_model_token_limits()
-
-        # Try to get model name from config
-        model_name = self._get_current_model_name()
-
-        if model_name and model_name in model_limits:
-            return model_limits[model_name]
-
-        # Fallback: check for model patterns
-        if model_name:
-            for pattern, limit in model_limits.items():
-                if pattern in model_name.lower():
-                    return limit
-
-        # Conservative default - subclasses can override
-        return 32000
-
-    def _get_model_token_limits(self) -> Dict[str, int]:
-        """Define token limits for known models. Subclasses can extend this."""
-        return {
-            # DeepSeek models
-            "deepseek-reasoner": 128000,
-            "deepseek-chat": 64000,
-            # Gemini models
-            "gemini-pro": 128000,
-            "pro": 128000,  # Pattern matching for any "pro" model
-            "gemini-flash": 64000,
-            "flash": 64000,  # Pattern matching for any "flash" model
-            # Common defaults
-            "gpt-4": 128000,
-            "gpt-3.5": 16000,
-            "claude": 200000,
-        }
-
-    def _get_current_model_name(self) -> Optional[str]:
-        """Get the current model name. Subclasses should override to provide specific model."""
-        # Try common config patterns
-        for attr_name in ["deepseek_config", "gemini_config", "openai_config"]:
-            if hasattr(self, attr_name):
-                config = getattr(self, attr_name)
-                if hasattr(config, "model"):
-                    return config.model
-
-        return None
+        return self.token_manager.get_token_limit()
 
     def should_compact(self, messages: List[Dict[str, Any]]) -> bool:
         """Determine if conversation should be compacted."""
-        current_tokens = self.count_conversation_tokens(messages)
-        limit = self.get_token_limit()
-        # Compact when we're at 80% of the limit
-        return current_tokens > (limit * 0.8)
+        return self.token_manager.should_compact(messages)
 
     async def compact_conversation(
         self, messages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """Create a compact summary of the conversation to preserve context while reducing tokens."""
-        if len(messages) <= 3:  # Keep conversations that are already short
-            return messages
-
-        # Always keep the first message (system prompt) and last 2 messages
-        system_message = messages[0] if messages[0].get("role") == "system" else None
-        recent_messages = messages[-2:]
-
-        # Messages to summarize (everything except system and last 2)
-        start_idx = 1 if system_message else 0
-        messages_to_summarize = messages[start_idx:-2]
-
-        if not messages_to_summarize:
-            return messages
-
-        # Create summary prompt
-        conversation_text = "\n".join(
-            [
-                f"{msg.get('role', 'unknown')}: {msg.get('content', '')}"
-                for msg in messages_to_summarize
-            ]
+        return await self.token_manager.compact_conversation(
+            messages, generate_response_func=self.generate_response
         )
-
-        summary_prompt = f"""Please create a concise summary of this conversation that preserves:
-1. Key decisions and actions taken
-2. Important file changes or tool usage
-3. Current project state and context
-4. Any pending tasks or next steps
-
-Conversation to summarize:
-{conversation_text}
-
-Provide a brief but comprehensive summary that maintains continuity for ongoing work."""
-
-        try:
-            # Use the current model to create summary
-            summary_messages = [{"role": "user", "content": summary_prompt}]
-            summary_response = await self.generate_response(
-                summary_messages, tools=None
-            )
-
-            # Create condensed conversation
-            condensed = []
-            if system_message:
-                condensed.append(system_message)
-
-            # Add summary as a system message
-            condensed.append(
-                {
-                    "role": "system",
-                    "content": f"[CONVERSATION SUMMARY] {summary_response}",
-                }
-            )
-
-            # Add recent messages
-            condensed.extend(recent_messages)
-
-            print(
-                f"\n🗜️  Conversation compacted: {len(messages)} → {len(condensed)} messages"
-            )
-            return condensed
-
-        except Exception as e:
-            print(f"⚠️  Failed to compact conversation: {e}")
-            # Fallback: just keep system + last 5 messages
-            fallback = []
-            if system_message:
-                fallback.append(system_message)
-            fallback.extend(messages[-5:])
-            return fallback
 
     async def generate_response(
         self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None
@@ -1852,41 +1743,27 @@ Provide a brief but comprehensive summary that maintains continuity for ongoing 
     # Tool conversion and parsing helper methods
     def normalize_tool_name(self, tool_key: str) -> str:
         """Normalize tool name by replacing colons with underscores."""
-        return tool_key.replace(":", "_")
+        return self.tool_schema.normalize_tool_name(tool_key)
 
     def generate_default_description(self, tool_info: dict) -> str:
         """Generate a default description for a tool if none exists."""
-        return tool_info.get("description") or f"Execute {tool_info['name']} tool"
+        return self.tool_schema.generate_default_description(tool_info)
 
     def get_tool_schema(self, tool_info: dict) -> dict:
         """Get tool schema with fallback to basic object schema."""
-        return tool_info.get("schema") or {"type": "object", "properties": {}}
+        return self.tool_schema.get_tool_schema(tool_info)
 
     def validate_json_arguments(self, args_json: str) -> bool:
         """Validate that a string contains valid JSON."""
-        try:
-            json.loads(args_json)
-            return True
-        except (json.JSONDecodeError, TypeError):
-            return False
+        return self.tool_schema.validate_json_arguments(args_json)
 
     def validate_tool_name(self, tool_name: str) -> bool:
         """Validate tool name format."""
-        return tool_name and (tool_name.startswith("builtin_") or "_" in tool_name)
+        return self.tool_schema.validate_tool_name(tool_name)
 
     def create_tool_call_object(self, name: str, args: str, call_id: str = None):
         """Create a standardized tool call object."""
-        import types
-
-        # Create a SimpleNamespace object similar to OpenAI's format
-        tool_call = types.SimpleNamespace()
-        tool_call.function = types.SimpleNamespace()
-        tool_call.function.name = name
-        tool_call.function.arguments = args
-        tool_call.id = call_id or f"call_{name}_{int(time.time())}"
-        tool_call.type = "function"
-
-        return tool_call
+        return self.tool_schema.create_tool_call_object(name, args, call_id)
 
     @abstractmethod
     def convert_tools_to_llm_format(self) -> List[Dict]:
