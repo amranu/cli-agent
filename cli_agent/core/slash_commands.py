@@ -79,12 +79,12 @@ class SlashCommandManager:
             return self._handle_tools()
         elif command == "permissions":
             return self._handle_permissions(args)
-        elif command == "switch-chat":
-            return self._handle_switch_chat()
+        elif command == "switch-deepseek" or command == "switch-chat":
+            return self._handle_switch_deepseek()
         elif command == "switch-reason":
             return self._handle_switch_reason()
-        elif command == "switch-gemini":
-            return self._handle_switch_gemini()
+        elif command == "switch-gemini-flash" or command == "switch-gemini":
+            return self._handle_switch_gemini_flash()
         elif command == "switch-gemini-pro":
             return self._handle_switch_gemini_pro()
         elif command == "init":
@@ -117,9 +117,9 @@ Built-in Commands:
   /quit, /exit    - Exit the interactive chat
 
 Model Switching:
-  /switch-chat    - Switch to deepseek-chat model
+  /switch-deepseek - Switch to deepseek-chat model
   /switch-reason  - Switch to deepseek-reasoner model
-  /switch-gemini  - Switch to Gemini Flash 2.5 backend
+  /switch-gemini-flash - Switch to Gemini Flash 2.5 backend
   /switch-gemini-pro - Switch to Gemini Pro 2.5 backend
 
 Custom Commands:"""
@@ -184,9 +184,15 @@ Custom Commands:"""
                     tokens_after = self.agent.count_conversation_tokens(
                         compacted_messages
                     )
-                    result = f"✅ Conversation compacted: {len(messages)} → {len(compacted_messages)} messages\n📊 Token usage: ~{tokens_before} → ~{tokens_after} tokens"
+                    result = (
+                        f"✅ Conversation compacted: {len(messages)} → {len(compacted_messages)} messages\n"
+                        f"📊 Token usage: ~{tokens_before} → ~{tokens_after} tokens"
+                    )
                 else:
-                    result = f"✅ Conversation compacted: {len(messages)} → {len(compacted_messages)} messages"
+                    result = (
+                        f"✅ Conversation compacted: {len(messages)} → "
+                        f"{len(compacted_messages)} messages"
+                    )
 
                 # Return both the result message and the compacted messages
                 # The interactive chat will need to update its messages list
@@ -219,14 +225,14 @@ Custom Commands:"""
 
         return result
 
-    def _handle_switch_chat(self) -> Dict[str, Any]:
-        """Handle /switch-chat command."""
+    def _handle_switch_deepseek(self) -> Dict[str, Any]:
+        """Handle /switch-deepseek command."""
         try:
             from config import load_config
 
             config = load_config()
             config.deepseek_model = "deepseek-chat"
-            config.save()
+            config.save_persistent_config()
             return {
                 "status": f"✅ Model switched to: {config.deepseek_model}",
                 "reload_host": "deepseek",
@@ -241,7 +247,7 @@ Custom Commands:"""
 
             config = load_config()
             config.deepseek_model = "deepseek-reasoner"
-            config.save()
+            config.save_persistent_config()
             return {
                 "status": f"✅ Model switched to: {config.deepseek_model}",
                 "reload_host": "deepseek",
@@ -249,15 +255,15 @@ Custom Commands:"""
         except Exception as e:
             return f"❌ Failed to switch model: {str(e)}"
 
-    def _handle_switch_gemini(self) -> Dict[str, Any]:
-        """Handle /switch-gemini command."""
+    def _handle_switch_gemini_flash(self) -> Dict[str, Any]:
+        """Handle /switch-gemini-flash command."""
         try:
             from config import load_config
 
             config = load_config()
             config.deepseek_model = "gemini"
             config.gemini_model = "gemini-2.5-flash"
-            config.save()
+            config.save_persistent_config()
             return {
                 "status": f"✅ Backend switched to: Gemini Flash 2.5 ({config.gemini_model})",
                 "reload_host": "gemini",
@@ -273,7 +279,7 @@ Custom Commands:"""
             config = load_config()
             config.deepseek_model = "gemini"
             config.gemini_model = "gemini-2.5-pro"
-            config.save()
+            config.save_persistent_config()
             return {
                 "status": f"✅ Backend switched to: Gemini Pro 2.5 ({config.gemini_model})",
                 "reload_host": "gemini",

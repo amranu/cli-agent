@@ -237,6 +237,10 @@ class MCPDeepseekHost(BaseMCPAgent):
 
         return updated_messages
 
+    def _get_current_runtime_model(self) -> str:
+        """Get the actual DeepSeek model being used at runtime."""
+        return self.deepseek_config.model
+
     async def _handle_complete_response(
         self,
         response,
@@ -360,23 +364,19 @@ class MCPDeepseekHost(BaseMCPAgent):
                     }
                 )
 
-                # Execute tool calls in parallel
-                tool_coroutines = []
+                # Convert tool calls to format expected by base agent's execute_function_calls
+                function_calls = []
                 for tool_call in tool_calls:
-                    tool_name = tool_call.function.name.replace("_", ":", 1)
+                    from types import SimpleNamespace
+
+                    function_call = SimpleNamespace()
+                    function_call.name = tool_call.function.name
                     try:
-                        arguments = json.loads(tool_call.function.arguments)
-                        tool_coroutines.append(
-                            self._execute_mcp_tool_with_keepalive(
-                                tool_name,
-                                arguments,
-                                keepalive_interval=self.deepseek_config.keepalive_interval,
-                            )
-                        )
+                        function_call.args = json.loads(tool_call.function.arguments)
                     except json.JSONDecodeError as e:
                         # Handle JSON parsing errors immediately
                         error_content = (
-                            f"Error parsing arguments for {tool_name}: {e}\n"
+                            f"Error parsing arguments for {tool_call.function.name}: {e}\n"
                             "⚠️  Command failed - take this into account for your next action."
                         )
                         current_messages.append(
@@ -386,11 +386,20 @@ class MCPDeepseekHost(BaseMCPAgent):
                                 "content": error_content,
                             }
                         )
+                        continue  # Skip this tool call
+                    function_calls.append(function_call)
 
-                # Run all tool calls concurrently
-                tool_results = await asyncio.gather(
-                    *tool_coroutines, return_exceptions=True
-                )
+                # Execute tool calls using base agent's centralized method
+                if function_calls:
+                    try:
+                        tool_results, tool_output = await self.execute_function_calls(
+                            function_calls,
+                            interactive=interactive,
+                            streaming_mode=False,
+                        )
+                    except ToolDeniedReturnToPrompt:
+                        # Re-raise permission denials to exit immediately
+                        raise
 
                 # Check if we just spawned subagents and should interrupt immediately
                 task_tools_executed = any(
@@ -452,56 +461,13 @@ Please provide your final analysis based on these subagent results. Do not spawn
                         current_messages = new_messages
                         continue
 
-                # Process results - check for permission denials FIRST before adding to conversation
-                for i, result in enumerate(tool_results):
-                    tool_call = tool_calls[i]
-                    # Handle tuple return from keep-alive version first
-                    if isinstance(result, tuple) and len(result) == 2:
-                        actual_result, keepalive_messages = result
-                        if isinstance(actual_result, Exception):
-                            result = actual_result  # Extract the exception from tuple
-                        else:
-                            tool_result_content, keepalive_messages = result
-                            # In non-interactive mode, we can log keep-alive messages
-                            for msg in keepalive_messages:
-                                logger.info(f"Keep-alive: {msg}")
-                            # Continue to add tool result below
-
-                    # CHECK FOR PERMISSION DENIAL FIRST - before adding anything to conversation
-                    if isinstance(result, Exception):
-                        if isinstance(result, ToolDeniedReturnToPrompt):
-                            raise result  # Exit immediately - don't add ANYTHING to conversation
-
-                    # If we get here, permission was granted, process the result normally
-                    if isinstance(result, Exception):
-                        tool_result_content = f"Error executing tool: {result}"
-                    else:
-                        # Result is not an exception, use the extracted value from tuple
-                        tool_result_content = (
-                            result
-                            if not isinstance(result, tuple)
-                            else tool_result_content
-                        )
-
-                    # Check if tool failed and add notice to the content sent to the model
-                    tool_failed = (
-                        isinstance(result, Exception)
-                        or tool_result_content.startswith("Error:")
-                        or "error" in tool_result_content.lower()[:100]
-                    )
-                    if tool_failed:
-                        tool_result_content += "\n⚠️  Command failed - take this into account for your next action."
-
-                    # Display tool result to user (matching streaming behavior)
-                    if interactive:
-                        result_msg = f"Result: {tool_result_content}"
-                        print(f"\nTool {i+1} {result_msg}\n", flush=True)
-
+                # Add tool results to conversation using centralized format
+                for i, (tool_call, result) in enumerate(zip(tool_calls, tool_results)):
                     current_messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_call.id,
-                            "content": tool_result_content,
+                            "content": result,
                         }
                     )
 
@@ -688,133 +654,66 @@ Please provide your final analysis based on these subagent results. Do not spawn
                         }
                     )
 
-                    # Execute tools and add results to conversation
-                    # Execute all tools in parallel like the non-streaming version
-                    tool_coroutines = []
-                    tool_call_mapping = {}
+                    # Convert tool calls to format expected by base agent's execute_function_calls
+                    function_calls = []
+                    for tool_call in tool_calls:
+                        from types import SimpleNamespace
 
-                    # Prepare all tool executions
-                    for i, tool_call in enumerate(tool_calls, 1):
-                        tool_name = tool_call.function.name.replace("_", ":", 1)
+                        function_call = SimpleNamespace()
+                        function_call.name = tool_call.function.name
                         try:
-                            arguments = json.loads(tool_call.function.arguments)
-                            # Show tool name and abbreviated parameters
-                            args_preview = (
-                                str(arguments)[:100] + "..."
-                                if len(str(arguments)) > 100
-                                else str(arguments)
+                            function_call.args = json.loads(
+                                tool_call.function.arguments
                             )
-                            yield f"\n🔧 Tool {i}: {tool_name}\n📝 Parameters: {args_preview}\n"
-
-                            tool_coroutines.append(
-                                self._execute_mcp_tool_with_keepalive(
-                                    tool_name,
-                                    arguments,
-                                    keepalive_interval=self.deepseek_config.keepalive_interval,
-                                )
-                            )
-                            tool_call_mapping[len(tool_coroutines) - 1] = tool_call
-
+                            function_calls.append(function_call)
                         except json.JSONDecodeError as e:
-                            error_msg = f"Error parsing arguments for {tool_name}: {e} ⚠️  Command failed - take this into account for your next action."
-                            yield f"{error_msg}\n"
-                            # Add error to conversation
+                            # Handle JSON parsing errors immediately
+                            error_content = (
+                                f"Error parsing arguments for {tool_call.function.name}: {e}\n"
+                                "⚠️  Command failed - take this into account for your next action."
+                            )
+                            yield f"\n🔧 Tool parsing error: {error_content}\n"
                             current_messages.append(
                                 {
                                     "role": "tool",
                                     "tool_call_id": tool_call.id,
-                                    "content": error_msg,
+                                    "content": error_content,
                                 }
                             )
 
-                    # Execute all tools with real-time streaming
-                    if tool_coroutines:
-                        yield f"\n⚡ Executing {len(tool_coroutines)} tool(s) in parallel...\n"
-
-                        # Create tasks with identifiers for real-time completion tracking
-                        tasks_to_tools = {}
-                        for i, (coro, tool_call) in enumerate(
-                            zip(tool_coroutines, tool_call_mapping.values())
-                        ):
-                            task = asyncio.create_task(coro)
-                            tasks_to_tools[task] = (tool_call, i + 1)
-
-                        pending_tasks = set(tasks_to_tools.keys())
-                        completed_count = 0
-
-                        # Process tools as they complete for real-time output
-                        while pending_tasks:
-                            done, pending_tasks = await asyncio.wait(
-                                pending_tasks, return_when=asyncio.FIRST_COMPLETED
+                    # Execute tool calls using base agent's centralized method with streaming
+                    if function_calls:
+                        try:
+                            yield f"\n🔧 Executing {len(function_calls)} tool(s)...\n"
+                            tool_results, tool_output = (
+                                await self.execute_function_calls(
+                                    function_calls,
+                                    interactive=interactive,
+                                    streaming_mode=True,
+                                )
                             )
 
-                            for task in done:
-                                completed_count += 1
-                                tool_call, tool_num = tasks_to_tools[task]
+                            # Yield tool output in streaming mode
+                            for output in tool_output:
+                                yield f"{output}\n"
 
-                                try:
-                                    result = task.result()
+                        except ToolDeniedReturnToPrompt:
+                            # Store the exception to raise after generator completes
+                            context.tool_denial_exception = ToolDeniedReturnToPrompt()
+                            yield "\nTool execution denied - returning to prompt.\n"
+                            return  # Exit the generator
 
-                                    if isinstance(result, Exception):
-                                        if isinstance(result, ToolDeniedReturnToPrompt):
-                                            # Store the exception to raise after generator completes
-                                            context.tool_denial_exception = result
-                                            yield "\nTool execution denied - returning to prompt.\n"
-                                            return  # Exit the generator
-
-                                        error_msg = f"Error executing tool: {str(result)} ⚠️  Command failed - take this into account for your next action."
-                                        yield f"\nTool {completed_count} Result: {error_msg}\n"
-                                        current_messages.append(
-                                            {
-                                                "role": "tool",
-                                                "tool_call_id": tool_call.id,
-                                                "content": error_msg,
-                                            }
-                                        )
-                                    else:
-                                        tool_result, keepalive_messages = result
-
-                                        # Yield any keep-alive messages immediately
-                                        for msg in keepalive_messages:
-                                            yield f"{msg}\n"
-
-                                        # Subagent messages displayed immediately via callback - no duplication needed
-
-                                        # Check if tool failed and add appropriate notice
-                                        tool_failed = (
-                                            tool_result.startswith("Error:")
-                                            or "error" in tool_result.lower()[:100]
-                                        )
-                                        result_msg = f"Result: {tool_result}"
-                                        if tool_failed:
-                                            result_msg += " ⚠️  Command failed - take this into account for your next action."
-                                        yield f"\nTool {completed_count} {result_msg}\n"
-
-                                        # Add tool result to conversation
-                                        current_messages.append(
-                                            {
-                                                "role": "tool",
-                                                "tool_call_id": tool_call.id,
-                                                "content": tool_result,
-                                            }
-                                        )
-
-                                except Exception as e:
-                                    # Handle tool permission denials specially - don't add to conversation
-                                    if isinstance(e, ToolDeniedReturnToPrompt):
-                                        context.tool_denial_exception = e
-                                        yield "\nTool execution denied - returning to prompt.\n"
-                                        return  # Exit the generator
-
-                                    error_msg = f"Error executing tool: {str(e)} ⚠️  Command failed - take this into account for your next action."
-                                    yield f"\nTool {completed_count} Result: {error_msg}\n"
-                                    current_messages.append(
-                                        {
-                                            "role": "tool",
-                                            "tool_call_id": tool_call.id,
-                                            "content": error_msg,
-                                        }
-                                    )
+                    # Add tool results to conversation
+                    for i, (tool_call, result) in enumerate(
+                        zip(tool_calls, tool_results)
+                    ):
+                        current_messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": result,
+                            }
+                        )
 
                     # Check if we just spawned subagents and should interrupt immediately
                     task_tools_executed = any(

@@ -759,6 +759,10 @@ Based on these tool results, please provide your final response. Do not re-execu
 
         return updated_messages
 
+    def _get_current_runtime_model(self) -> str:
+        """Get the actual Gemini model being used at runtime."""
+        return self.gemini_config.model
+
     async def _generate_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -837,139 +841,6 @@ Based on these tool results, please provide your final response. Do not re-execu
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise
 
-    async def _execute_function_calls(
-        self, function_calls: List, streaming_mode=False
-    ) -> tuple:
-        """Execute a list of function calls and return results and output."""
-
-        function_results = []
-        all_tool_output = (
-            []
-        )  # Collect all tool execution output for non-interactive mode
-
-        # Prepare tool info for parallel execution
-        tool_info_list = []
-        tool_coroutines = []
-
-        # Check for interruption before starting any tool execution - removed input_handler dependency
-
-        for i, function_call in enumerate(function_calls, 1):
-            tool_name = function_call.name.replace(
-                "_", ":", 1
-            )  # Convert back to MCP format
-
-            # Parse arguments from function call
-            arguments = {}
-            if hasattr(function_call, "args") and function_call.args:
-                try:
-                    # First try to access as dict directly
-                    if hasattr(function_call.args, "items"):
-                        arguments = dict(function_call.args)
-                    elif hasattr(function_call.args, "__iter__"):
-                        arguments = dict(function_call.args)
-                    else:
-                        # If args is a string, try to parse as JSON
-                        if isinstance(function_call.args, str):
-                            arguments = json.loads(function_call.args)
-                        else:
-                            arguments = {}
-                except json.JSONDecodeError as e:
-                    logger.warning(f"JSON decode error in function call args: {e}")
-                    logger.warning(f"Raw args: {function_call.args}")
-                    arguments = {}
-                except Exception as e:
-                    logger.warning(f"Error parsing function call args: {e}")
-                    logger.warning(f"Raw args: {function_call.args}")
-                    arguments = {}
-
-            # Store tool info for processing
-            tool_info_list.append((i, tool_name, arguments))
-
-            # Display tool execution step
-            tool_execution_msg = self.display_tool_execution_step(
-                i,
-                tool_name,
-                arguments,
-                self.is_subagent,
-                interactive=not self.is_subagent,
-            )
-            if not self.is_subagent and not streaming_mode:
-                print(f"\r\x1b[K{tool_execution_msg}", flush=True)
-            elif not self.is_subagent and streaming_mode:
-                print(f"\r\x1b[K{tool_execution_msg}", flush=True)
-            else:
-                all_tool_output.append(tool_execution_msg)
-
-            # Create coroutine for parallel execution
-            tool_coroutines.append(self._execute_mcp_tool(tool_name, arguments))
-
-        # Execute all tools in parallel
-        if tool_coroutines:
-            try:
-                # Execute all tool calls concurrently like DeepSeek
-                tool_results = await asyncio.gather(
-                    *tool_coroutines, return_exceptions=True
-                )
-
-                # Process results in order
-                for (i, tool_name, arguments), tool_result in zip(
-                    tool_info_list, tool_results
-                ):
-                    tool_success = True
-
-                    # Handle exceptions
-                    if isinstance(tool_result, Exception):
-                        if isinstance(tool_result, ToolDeniedReturnToPrompt):
-                            raise tool_result  # Re-raise the exception to bubble up to interactive chat
-
-                        tool_success = False
-                        tool_result = f"Exception during execution: {str(tool_result)}"
-                    elif isinstance(tool_result, str):
-                        # Check if tool result indicates an error
-                        if (
-                            tool_result.startswith("Error:")
-                            or "error" in tool_result.lower()[:100]
-                        ):
-                            tool_success = False
-                    else:
-                        # Convert non-string results to string
-                        tool_result = str(tool_result)
-
-                    # Format result with success/failure status
-                    status = "SUCCESS" if tool_success else "FAILED"
-                    result_content = f"Tool {tool_name} {status}: {tool_result}"
-                    if not tool_success:
-                        result_content += "\n⚠️  Command failed - take this into account for your next action."
-                    function_results.append(result_content)
-
-                    # Use unified tool result display
-                    tool_result_msg = self.display_tool_execution_result(
-                        tool_result,
-                        not tool_success,
-                        self.is_subagent,
-                        interactive=not self.is_subagent,
-                    )
-
-                    # Fix newlines in tool result messages to have proper cursor positioning
-                    if not self.is_subagent and (not streaming_mode or streaming_mode):
-                        # Replace any bare newlines with \n\r to ensure proper cursor positioning
-                        formatted_result_msg = tool_result_msg.replace("\n", "\n\r")
-                        print(f"\r\x1b[K{formatted_result_msg}", flush=True)
-                    else:
-                        # Only add to tool output for non-interactive mode
-                        all_tool_output.append(tool_result_msg)
-
-            except Exception as e:
-                # Re-raise tool permission denials without adding to results
-                if isinstance(e, ToolDeniedReturnToPrompt):
-                    raise e  # Re-raise without adding to function_results
-
-                # Handle any unexpected errors during parallel execution
-                error_msg = f"Error during parallel tool execution: {str(e)}"
-                all_tool_output.append(error_msg)
-                function_results.append(f"PARALLEL EXECUTION FAILED: {error_msg}")
-
-        return function_results, all_tool_output
 
     async def _handle_complete_response(
         self,
@@ -1056,10 +927,14 @@ Based on these tool results, please provide your final response. Do not re-execu
                             flush=True,
                         )
 
-                    # Execute function calls using centralized method
+                    # Execute function calls using base agent's centralized method
                     try:
                         function_results, tool_output = (
-                            await self._execute_function_calls(function_calls)
+                            await self.execute_function_calls(
+                                function_calls, 
+                                interactive=not self.is_subagent,
+                                streaming_mode=False
+                            )
                         )
                     except ToolDeniedReturnToPrompt as e:
                         # Tool permission denied - exit immediately without making API call
@@ -1347,11 +1222,13 @@ Based on these tool results, please provide your final response. Do not re-execu
                             flush=True,
                         )
 
-                        # Execute function calls using centralized method
+                        # Execute function calls using base agent's centralized method
                         try:
                             function_results, tool_output = (
-                                await self._execute_function_calls(
-                                    function_calls, streaming_mode=True
+                                await self.execute_function_calls(
+                                    function_calls, 
+                                    interactive=not self.is_subagent,
+                                    streaming_mode=True
                                 )
                             )
                         except ToolDeniedReturnToPrompt as e:

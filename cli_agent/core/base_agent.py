@@ -450,6 +450,10 @@ class BaseMCPAgent(ABC):
             full_prompt += f"\n\nAdditional context: {context}"
 
         try:
+            # If no model specified, detect and use the current running model
+            if model is None:
+                model = self._get_current_runtime_model()
+
             # Track active count before and after spawning
             initial_count = self.subagent_manager.get_active_count()
             task_id = await self.subagent_manager.spawn_subagent(
@@ -986,9 +990,9 @@ Runtime: {runtime:.2f} seconds"""
                         interactive=interactive,
                     )
                     if interactive and not streaming_mode:
-                        print(f"\r\x1b[K{tool_result_msg}", flush=True)
+                        print(f"\r\x1b[K{tool_result_msg}\n", flush=True)
                     elif interactive and streaming_mode:
-                        print(f"\r\x1b[K{tool_result_msg}", flush=True)
+                        print(f"\r\x1b[K{tool_result_msg}\n", flush=True)
                     else:
                         all_tool_output.append(tool_result_msg)
 
@@ -1541,6 +1545,11 @@ You are the expert. Complete the task."""
         """Add tool results to conversation in model-specific format. Must be implemented by subclasses."""
         pass
 
+    @abstractmethod
+    def _get_current_runtime_model(self) -> str:
+        """Get the actual model being used at runtime. Must be implemented by subclasses."""
+        pass
+
     def _prepend_agent_md_to_first_message(
         self, messages: List[Dict[str, Any]], is_first_message: bool
     ) -> List[Dict[str, Any]]:
@@ -1873,13 +1882,41 @@ You are the expert. Complete the task."""
                     current_task = None
                     continue
 
-                # Get user input with smart multiline detection
-                user_input = input_handler.get_multiline_input("You: ")
+                # Check for subagent interruption before getting input
+                if input_handler.interrupted and self.subagent_manager:
+                    active_count = self.subagent_manager.get_active_count()
+                    if active_count > 0:
+                        print(f"\n🛑 Interrupting {active_count} active subagent(s)...")
+                        await self.subagent_manager.terminate_all()
+                        print("✅ All subagents terminated. Returning to prompt.")
+                        input_handler.interrupted = False
+                        continue
+
+                # Get user input with smart multiline detection, but check for subagents first
+                prompt_text = "You: "
+                if (
+                    self.subagent_manager
+                    and self.subagent_manager.get_active_count() > 0
+                ):
+                    active_tasks = self.subagent_manager.get_active_task_ids()
+                    prompt_text = f"You (🤖 {len(active_tasks)} subagents active - ESC to cancel): "
+
+                user_input = input_handler.get_multiline_input(prompt_text)
 
                 if user_input is None:  # Interrupted
-                    if current_task and not current_task.done():
+                    # Check if we should terminate subagents
+                    if (
+                        self.subagent_manager
+                        and self.subagent_manager.get_active_count() > 0
+                    ):
+                        active_count = self.subagent_manager.get_active_count()
+                        print(f"\n🛑 Interrupting {active_count} active subagent(s)...")
+                        await self.subagent_manager.terminate_all()
+                        print("✅ All subagents terminated. Returning to prompt.")
+                    elif current_task and not current_task.done():
                         current_task.cancel()
                         print("🛑 Operation cancelled by user")
+
                     input_handler.interrupted = False
                     current_task = None
                     continue

@@ -1,6 +1,6 @@
 """Unit tests for SlashCommandManager functionality."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -88,11 +88,13 @@ class TestSlashCommandManager:
         """Test model switching commands."""
         manager = SlashCommandManager(mock_base_agent)
 
-        # Test various model switching commands
+        # Test various model switching commands (both old and new names)
         commands = [
-            "/switch-chat",
+            "/switch-chat",  # old name (backward compatibility)
+            "/switch-deepseek",  # new name
             "/switch-reason",
-            "/switch-gemini",
+            "/switch-gemini",  # old name (backward compatibility)
+            "/switch-gemini-flash",  # new name
             "/switch-gemini-pro",
         ]
 
@@ -173,7 +175,7 @@ class TestSlashCommandManager:
 
         # Should not raise an exception
         try:
-            result = await manager.handle_slash_command("/help")
+            await manager.handle_slash_command("/help")
             assert True  # No exception was raised
         except Exception:
             # Some errors might be expected in test environment

@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
@@ -13,8 +12,6 @@ import pytest
 # Import the modules we'll be testing
 from cli_agent.core.base_agent import BaseMCPAgent
 from cli_agent.core.input_handler import InterruptibleInput
-from cli_agent.core.slash_commands import SlashCommandManager
-from cli_agent.tools.builtin_tools import get_all_builtin_tools
 from config import HostConfig
 
 
@@ -91,6 +88,10 @@ def mock_base_agent(sample_host_config, mock_tools):
 
         def _add_tool_results_to_conversation(self, messages, tool_calls, tool_results):
             return messages
+
+        def _get_current_runtime_model(self) -> str:
+            """Return mock model name for testing."""
+            return "mock-model"
 
     agent = MockAgent(sample_host_config, is_subagent=False)
     agent.available_tools = mock_tools

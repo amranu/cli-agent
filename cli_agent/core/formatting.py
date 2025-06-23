@@ -5,7 +5,6 @@ import logging
 import re
 import shutil
 from io import StringIO
-from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -294,7 +293,17 @@ class ResponseFormatter:
         else:
             result_preview = result
 
-        return f"{prefix} {result_preview}"
+        # Handle multi-line results properly with newlines and carriage returns
+        if "\n" in result_preview:
+            lines = result_preview.split("\n")
+            formatted_lines = [f"{prefix} {lines[0]}"]
+            for line in lines[1:]:
+                formatted_lines.append(
+                    f"\r{line}"
+                )  # Add carriage return to start of each line
+            return "\n".join(formatted_lines)
+        else:
+            return f"{prefix} {result_preview}"
 
     def display_tool_processing(
         self, is_subagent: bool = False, interactive: bool = True
