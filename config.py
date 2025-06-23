@@ -150,8 +150,12 @@ class HostConfig(BaseSettings):
     def save_mcp_servers(self):
         """Save MCP server configurations to mcp_servers.json."""
         import json
+        from pathlib import Path
 
-        mcp_config_file = "mcp_servers.json"
+        # Store MCP config in ~/.config/agent/ to persist across working directories
+        config_dir = Path.home() / ".config" / "agent"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        mcp_config_file = config_dir / "mcp_servers.json"
 
         servers_data = {}
         for name, server_config in self.mcp_servers.items():
@@ -168,10 +172,13 @@ class HostConfig(BaseSettings):
     def load_mcp_servers(self):
         """Load MCP server configurations from mcp_servers.json."""
         import json
+        from pathlib import Path
 
-        mcp_config_file = "mcp_servers.json"
+        # Load MCP config from ~/.config/agent/ to persist across working directories
+        config_dir = Path.home() / ".config" / "agent"
+        mcp_config_file = config_dir / "mcp_servers.json"
 
-        if not os.path.exists(mcp_config_file):
+        if not mcp_config_file.exists():
             return
 
         try:
