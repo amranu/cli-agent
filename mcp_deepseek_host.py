@@ -161,13 +161,14 @@ class MCPDeepseekHost(BaseMCPAgent):
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict]] = None,
         stream: Optional[bool] = None,
+        modify_messages_in_place: bool = False,
     ) -> Union[str, Any]:
         """DeepSeek-specific response generation with message cleaning."""
         # Clean messages first to prevent JSON deserialization errors
         cleaned_messages = self._clean_messages_for_deepseek(messages)
 
-        # Call parent's generate_response with cleaned messages and stream parameter
-        return await super().generate_response(cleaned_messages, tools, stream)
+        # Call parent's generate_response with cleaned messages and all parameters
+        return await super().generate_response(cleaned_messages, tools, stream, modify_messages_in_place)
 
     async def _generate_completion(
         self,

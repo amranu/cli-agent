@@ -236,14 +236,12 @@ class SubagentCoordinator:
         results_text = "\n\n".join(results_summary)
 
         return {
-            "role": "user",
+            "role": "user", 
             "content": f"""I requested: {original_request}
 
-You spawned subagents and they have completed their tasks. Here are the results:
+Subagent results:
 
-{results_text}
-
-Please provide your final analysis based on these subagent results. Do not spawn any new subagents - just analyze the provided data.""",
+{results_text}""",
         }
 
     async def handle_subagent_coordination(
