@@ -24,6 +24,7 @@ from cli_agent.tools.builtin_tools import get_all_builtin_tools
 from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 from cli_agent.core.token_manager import TokenManager
 from cli_agent.core.tool_schema import ToolSchemaManager
+from cli_agent.core.formatting import ResponseFormatter
 from config import HostConfig
 
 # Configure logging
@@ -110,6 +111,10 @@ class BaseMCPAgent(ABC):
         # Initialize tool schema manager
         self.tool_schema = ToolSchemaManager()
         logger.debug("Initialized tool schema manager")
+
+        # Initialize response formatter
+        self.formatter = ResponseFormatter(config)
+        logger.debug("Initialized response formatter")
 
         logger.info(
             f"Initialized Base MCP Agent with {len(self.available_tools)} built-in tools"
@@ -1360,298 +1365,47 @@ You are the expert. Complete the task."""
 
     def _format_chunk_safely(self, chunk: str) -> str:
         """Apply basic formatting to streaming chunks without losing spaces."""
-        if not chunk:
-            return chunk
-
-        try:
-            # Don't try to format chunks that are just whitespace or very short
-            if len(chunk.strip()) < 2:
-                return chunk
-
-            # Only apply formatting if the chunk contains complete markdown patterns
-            if self._chunk_has_complete_markdown(chunk):
-                return self._apply_simple_formatting(chunk)
-            else:
-                return chunk
-
-        except Exception:
-            # Always fall back to original chunk to preserve spaces
-            return chunk
+        return self.formatter.format_chunk_safely(chunk)
 
     def _apply_simple_formatting(self, chunk: str) -> str:
         """Apply simple visible formatting that definitely works."""
-        import re
-
-        formatted = chunk
-
-        # Make bold text UPPERCASE and remove asterisks
-        formatted = re.sub(r"\*\*([^*]+)\*\*", lambda m: m.group(1).upper(), formatted)
-
-        # Make italic text with underscores and remove asterisks
-        formatted = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"_\1_", formatted)
-
-        # Make code text with brackets and remove backticks
-        formatted = re.sub(r"`([^`]+)`", r"[\1]", formatted)
-
-        return formatted
+        return self.formatter._apply_simple_formatting(chunk)
 
     def _apply_rich_console_formatting(self, chunk: str) -> str:
         """Use Rich Console to apply formatting directly to stdout."""
-        import re
-        import sys
-        from rich.console import Console
-        from rich.text import Text
-        from io import StringIO
-
-        # Create a console that writes directly to our stdout
-        console = Console(
-            file=sys.stdout,
-            force_terminal=True,
-            width=None,
-            legacy_windows=False,
-            no_color=False,
-            color_system="auto",
-        )
-
-        # Create formatted text
-        text = Text()
-        last_pos = 0
-
-        # Find all markdown patterns
-        patterns = [
-            (r"\*\*([^*]+)\*\*", "bold red"),
-            (r"(?<!\*)\*([^*]+)\*(?!\*)", "italic blue"),
-            (r"`([^`]+)`", "dim yellow"),
-        ]
-
-        matches = []
-        for pattern, style in patterns:
-            for match in re.finditer(pattern, chunk):
-                matches.append((match.start(), match.end(), match.group(1), style))
-
-        # Sort by position
-        matches.sort()
-
-        # Build styled text
-        for start, end, inner_text, style in matches:
-            # Add text before match
-            if start > last_pos:
-                text.append(chunk[last_pos:start])
-            # Add styled text
-            text.append(inner_text, style=style)
-            last_pos = end
-
-        # Add remaining text
-        if last_pos < len(chunk):
-            text.append(chunk[last_pos:])
-
-        # Print directly and capture what was printed
-        with StringIO() as capture:
-            temp_console = Console(file=capture, force_terminal=True, width=200)
-            temp_console.print(text, end="")
-            return capture.getvalue()
+        return self.formatter._apply_rich_console_formatting(chunk)
 
     def _apply_direct_ansi_formatting(self, chunk: str) -> str:
         """Apply ANSI formatting with proper terminal handling."""
-        import re
-        import os
-        import sys
-
-        # Force color support
-        os.environ["FORCE_COLOR"] = "1"
-        os.environ["TERM"] = "xterm-256color"
-
-        # ANSI escape codes - using proper sequences
-        BOLD = "\x1b[1m"
-        ITALIC = "\x1b[3m"
-        DIM = "\x1b[2m"
-        CYAN = "\x1b[96m"  # Bright cyan
-        YELLOW = "\x1b[93m"  # Bright yellow
-        RESET = "\x1b[0m"
-
-        formatted = chunk
-
-        # Replace **bold** with ANSI bold
-        formatted = re.sub(r"\*\*([^*]+)\*\*", f"{BOLD}\\1{RESET}", formatted)
-
-        # Replace *italic* with ANSI italic
-        formatted = re.sub(
-            r"(?<!\*)\*([^*]+)\*(?!\*)", f"{ITALIC}\\1{RESET}", formatted
-        )
-
-        # Replace `code` with ANSI colored background
-        formatted = re.sub(r"`([^`]+)`", f"{YELLOW}\\1{RESET}", formatted)
-
-        # Ensure output is flushed immediately
-        sys.stdout.flush()
-
-        return formatted
+        return self.formatter._apply_direct_ansi_formatting(chunk)
 
     def _chunk_has_complete_markdown(self, chunk: str) -> bool:
         """Check if chunk contains complete markdown patterns that are safe to format."""
-        # Only format chunks with complete, simple markdown patterns
-        complete_patterns = [
-            r"\*\*[^*]+\*\*",  # Complete bold: **text**
-            r"\*[^*]+\*",  # Complete italic: *text*
-            r"`[^`]+`",  # Complete code: `text`
-            r"~~[^~]+~~",  # Complete strikethrough: ~~text~~
-        ]
-
-        import re
-
-        for pattern in complete_patterns:
-            if re.search(pattern, chunk):
-                return True
-        return False
+        return self.formatter._chunk_has_complete_markdown(chunk)
 
     def _apply_basic_markdown_to_text(self, text, chunk: str):
         """Apply basic markdown styling to Rich Text object."""
-        import re
-        from rich.text import Text
-
-        # Create a new Text object and manually build it with styling
-        styled_text = Text()
-        last_end = 0
-
-        # Find all markdown patterns and their positions
-        patterns = [
-            (r"\*\*([^*]+)\*\*", "bold"),  # **text**
-            (r"`([^`]+)`", "dim cyan"),  # `text`
-            (r"\*([^*]+)\*", "italic"),  # *text*
-        ]
-
-        # Collect all matches with their positions
-        matches = []
-        for pattern, style in patterns:
-            for match in re.finditer(pattern, chunk):
-                matches.append(
-                    (match.start(), match.end(), match.group(1), style, match.group(0))
-                )
-
-        # Sort matches by position
-        matches.sort(key=lambda x: x[0])
-
-        # Build the styled text
-        for start, end, inner_text, style, full_match in matches:
-            # Add any text before this match
-            if start > last_end:
-                styled_text.append(chunk[last_end:start])
-
-            # Add the styled text (without markdown syntax)
-            styled_text.append(inner_text, style=style)
-
-            last_end = end
-
-        # Add any remaining text
-        if last_end < len(chunk):
-            styled_text.append(chunk[last_end:])
-
-        return styled_text
+        return self.formatter._apply_basic_markdown_to_text(text, chunk)
 
     def _find_safe_markdown_boundary(self, text: str, start_pos: int) -> int:
         """Find a safe position to apply markdown formatting without breaking syntax."""
-        if start_pos >= len(text):
-            return start_pos
-
-        # Look for safe boundaries from the current position
-        search_text = text[start_pos:]
-        safe_boundaries = [
-            # Sentence endings with space
-            ". ",
-            ".\n",
-            "! ",
-            "!\n",
-            "? ",
-            "?\n",
-            # Paragraph breaks
-            "\n\n",
-            # End of code blocks
-            "```\n",
-            "```\r\n",
-            # End of lists (line ending after list item)
-            "\n\n",
-            # Word boundaries after reasonable length
-        ]
-
-        # Find the latest safe boundary
-        latest_boundary = start_pos
-        for boundary in safe_boundaries:
-            pos = search_text.find(boundary)
-            if pos != -1:
-                boundary_end = start_pos + pos + len(boundary)
-                if boundary_end > latest_boundary:
-                    latest_boundary = boundary_end
-
-        # If no boundary found but we have substantial text, find a word boundary
-        if latest_boundary == start_pos and len(search_text) > 50:
-            # Look for word boundaries (space after word) in the last part
-            for i in range(min(50, len(search_text) - 1), 10, -1):
-                if search_text[i] == " " and search_text[i - 1].isalnum():
-                    latest_boundary = start_pos + i + 1
-                    break
-
-        return latest_boundary
+        return self.formatter._find_safe_markdown_boundary(text, start_pos)
 
     def format_markdown(self, text: str) -> str:
         """Format markdown text for terminal display using Rich."""
-        if not text:
-            return text
-
-        try:
-            import shutil
-            from io import StringIO
-
-            from rich.console import Console
-            from rich.markdown import Markdown
-
-            # Detect actual terminal width, fallback to 80 if detection fails
-            try:
-                terminal_width = shutil.get_terminal_size().columns
-                # Ensure reasonable bounds (minimum 40, maximum 200)
-                terminal_width = max(40, min(200, terminal_width))
-            except (OSError, AttributeError):
-                terminal_width = 80  # Fallback for environments without terminal
-
-            # Create a console that outputs to a string buffer
-            console = Console(
-                file=StringIO(), force_terminal=True, width=terminal_width
-            )
-
-            # Parse and render markdown
-            md = Markdown(text)
-            console.print(md)
-
-            # Get the formatted output
-            formatted = console.file.getvalue()
-
-            # Clean up any extra newlines at the end
-            return formatted.rstrip()
-
-        except ImportError:
-            # Fallback to basic formatting if Rich is not available
-            logger.warning(
-                "Rich library not available, using basic markdown formatting"
-            )
-            return self._basic_markdown_format(text)
+        return self.formatter.format_markdown(text)
 
     def _basic_markdown_format(self, text: str) -> str:
         """Basic fallback markdown formatting."""
-        if not text:
-            return text
-
-        # Simple bold and code formatting as fallback
-        text = re.sub(r"\*\*(.*?)\*\*", r"\033[1m\1\033[0m", text)  # Bold
-        text = re.sub(r"`(.*?)`", r"\033[47m\033[30m\1\033[0m", text)  # Inline code
-        return text
+        return self.formatter._basic_markdown_format(text)
 
     def display_tool_execution_start(
         self, tool_count: int, is_subagent: bool = False, interactive: bool = True
     ) -> str:
         """Display tool execution start message."""
-        if is_subagent:
-            return f"🤖 [SUBAGENT] Executing {tool_count} tool(s)..."
-        else:
-            return f"🔧 Using {tool_count} tool(s)..."
+        return self.formatter.display_tool_execution_start(
+            tool_count, is_subagent, interactive
+        )
 
     def display_tool_execution_step(
         self,
@@ -1662,10 +1416,9 @@ You are the expert. Complete the task."""
         interactive: bool = True,
     ) -> str:
         """Display individual tool execution step."""
-        if is_subagent:
-            return f"🤖 [SUBAGENT] Step {step_num}: Executing {tool_name}..."
-        else:
-            return f"{step_num}. Executing {tool_name}..."
+        return self.formatter.display_tool_execution_step(
+            step_num, tool_name, arguments, is_subagent, interactive
+        )
 
     def display_tool_execution_result(
         self,
@@ -1675,27 +1428,15 @@ You are the expert. Complete the task."""
         interactive: bool = True,
     ) -> str:
         """Display tool execution result."""
-        if is_error:
-            prefix = "❌ [SUBAGENT] Error:" if is_subagent else "❌ Error:"
-        else:
-            prefix = "✅ [SUBAGENT] Result:" if is_subagent else "✅ Result:"
-
-        # Truncate long results for display
-        if len(result) > 200:
-            result_preview = result[:200] + "..."
-        else:
-            result_preview = result
-
-        return f"{prefix} {result_preview}"
+        return self.formatter.display_tool_execution_result(
+            result, is_error, is_subagent, interactive
+        )
 
     def display_tool_processing(
         self, is_subagent: bool = False, interactive: bool = True
     ) -> str:
         """Display tool processing message."""
-        if is_subagent:
-            return "🤖 [SUBAGENT] Processing tool results..."
-        else:
-            return "⚙️ Processing tool results..."
+        return self.formatter.display_tool_processing(is_subagent, interactive)
 
     def estimate_tokens(self, text: str) -> int:
         """Rough estimation of tokens (1 token ≈ 4 characters for most models)."""
