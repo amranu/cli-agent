@@ -146,6 +146,33 @@ class MCPGeminiHost(BaseMCPAgent):
 
         return converted_calls
 
+    def _extract_text_before_tool_calls(self, content: str) -> str:
+        """Extract text that appears before Gemini tool calls."""
+        import re
+
+        # Gemini-specific patterns
+        patterns = [
+            # Gemini XML-style tool calls
+            r"^(.*?)(?=<execute_tool>)",
+            r"^(.*?)(?=<tool_call>)",
+            # Function call patterns
+            r"^(.*?)(?=\w+\s*\()",
+            # Inline tool calls
+            r"^(.*?)(?=Tool:\s*\w+:\w+)",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                text_before = match.group(1).strip()
+                if text_before:  # Only return if there's actual content
+                    # Remove code block markers if present
+                    text_before = re.sub(r"^```\w*\s*", "", text_before)
+                    text_before = re.sub(r"\s*```$", "", text_before)
+                    return text_before
+
+        return ""
+
     def _get_llm_specific_instructions(self) -> str:
         """Provide Gemini-specific instructions that emphasize tool usage and action."""
         # Add Gemini-specific instructions based on agent type

@@ -50,6 +50,9 @@ class TestBaseMCPAgent:
 
                 return MagicMock()
 
+            def _extract_text_before_tool_calls(self, content: str) -> str:
+                return ""
+
         agent = TestAgent(sample_host_config, is_subagent=False)
 
         assert agent.config == sample_host_config
@@ -98,6 +101,9 @@ class TestBaseMCPAgent:
                 from unittest.mock import MagicMock
 
                 return MagicMock()
+
+            def _extract_text_before_tool_calls(self, content: str) -> str:
+                return ""
 
         agent = TestAgent(sample_host_config, is_subagent=True)
 

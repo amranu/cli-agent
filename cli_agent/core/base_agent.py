@@ -1644,42 +1644,13 @@ You are the expert. Complete the task."""
     # Centralized Text Processing Utilities
     # ====================================
 
+    @abstractmethod
     def _extract_text_before_tool_calls(self, content: str) -> str:
-        """Extract any text that appears before tool calls in the response.
+        """Extract text that appears before tool calls in provider-specific format.
 
-        This method handles multiple tool call formats used by different LLMs:
-        - DeepSeek tool call markers
-        - Gemini XML-style tool calls
-        - Python-style function calls
-        - Inline tool format
+        Must be implemented by subclasses to handle their specific tool call formats.
         """
-        import re
-
-        # Combined patterns for all supported tool call formats
-        patterns = [
-            # DeepSeek tool call markers
-            r"^(.*?)(?=<｜tool▁calls▁begin｜>|<｜tool▁call▁begin｜>)",
-            r"^(.*?)(?=```json\s*\{\s*\"function\")",
-            r"^(.*?)(?=```python\s*<｜tool▁calls▁begin｜>)",
-            # Gemini XML-style tool calls
-            r"^(.*?)(?=<execute_tool>)",
-            # Python-style function calls
-            r"^(.*?)(?=\w+\s*\()",
-            # Inline tool calls
-            r"^(.*?)(?=Tool:\s*\w+:\w+)",
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, content, re.DOTALL)
-            if match:
-                text_before = match.group(1).strip()
-                if text_before:  # Only return if there's actual content
-                    # Remove code block markers if present
-                    text_before = re.sub(r"^```\w*\s*", "", text_before)
-                    text_before = re.sub(r"\s*```$", "", text_before)
-                    return text_before
-
-        return ""
+        pass
 
     def _format_chunk_safely(self, chunk: str) -> str:
         """Apply basic formatting to streaming chunks without losing spaces."""
@@ -2587,12 +2558,17 @@ You are the expert. Complete the task."""
             if isinstance(call, dict):
                 # Already in dict format (DeepSeek style)
                 if "function" in call:
+                    # Ensure type field is present for DeepSeek compatibility
+                    if "type" not in call:
+                        call = call.copy()
+                        call["type"] = "function"
                     normalized_calls.append(call)
                 elif "name" in call and "args" in call:
                     # Convert from simple format to standard format
                     normalized_calls.append(
                         {
                             "id": f"call_{i}_{int(time.time())}",
+                            "type": "function",
                             "function": {
                                 "name": call["name"],
                                 "arguments": call.get("args", {}),
@@ -2604,6 +2580,7 @@ You are the expert. Complete the task."""
                 normalized_calls.append(
                     {
                         "id": getattr(call, "id", f"call_{i}_{int(time.time())}"),
+                        "type": "function",
                         "function": {
                             "name": call.function.name,
                             "arguments": call.function.arguments,
@@ -2787,7 +2764,13 @@ You are the expert. Complete the task."""
             response, accumulated_content
         )
 
+        logger.debug(f"Extracted tool calls in centralized processing: {tool_calls}")
+        logger.debug(
+            f"Number of tool calls found: {len(tool_calls) if tool_calls else 0}"
+        )
+
         if not tool_calls:
+            logger.debug("No tool calls found - returning early")
             return current_messages, None, False
 
         # Display tool execution info
@@ -2810,6 +2793,15 @@ You are the expert. Complete the task."""
         response_content = self._extract_content_from_response(response)
         if accumulated_content:
             response_content = accumulated_content
+
+        # Extract and display text that appears before tool calls
+        if interactive and response_content and function_calls:
+            text_before_tools = self._extract_text_before_tool_calls(response_content)
+            if text_before_tools:
+                formatted_text = self.format_markdown(text_before_tools)
+                print(f"\n{formatted_text}", flush=True)
+                # Use only the extracted text for conversation history
+                response_content = text_before_tools
 
         current_messages.append(
             {

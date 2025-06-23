@@ -40,7 +40,7 @@ except ImportError:
 
 # Configure logging
 logging.basicConfig(
-    level=logging.ERROR,  # Suppress WARNING messages during interactive chat
+    level=logging.DEBUG,  # Suppress WARNING messages during interactive chat
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)

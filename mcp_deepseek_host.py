@@ -15,7 +15,7 @@ from config import HostConfig
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Changed to INFO to see subagent messages
+    level=logging.DEBUG,  # Changed to INFO to see subagent messages
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -66,14 +66,79 @@ class MCPDeepseekHost(BaseMCPAgent):
 
     def parse_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
         """Parse tool calls from Deepseek response using shared utilities."""
-        if isinstance(response, str):
+        logger.debug(f"parse_tool_calls received response type: {type(response)}")
+        logger.debug(f"parse_tool_calls response content: {response}")
+
+        # Handle standard OpenAI-style response objects with tool_calls attribute
+        if hasattr(response, "choices") and response.choices:
+            message = response.choices[0].message
+            if hasattr(message, "tool_calls") and message.tool_calls:
+                logger.debug(
+                    f"Found {len(message.tool_calls)} tool calls in response object"
+                )
+                result = []
+                for tc in message.tool_calls:
+                    try:
+                        # Handle both dict and object arguments
+                        if hasattr(tc.function, "arguments"):
+                            args = tc.function.arguments
+                            if isinstance(args, str):
+                                import json
+
+                                args = json.loads(args)
+                        else:
+                            args = {}
+
+                        result.append({"name": tc.function.name, "args": args})
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to parse tool call {tc.function.name}: {e}"
+                        )
+
+                logger.debug(f"Parsed tool calls from response object: {result}")
+                return result
+
+        # Handle string responses (custom DeepSeek format)
+        elif isinstance(response, str):
+            logger.debug("Parsing string response for tool calls")
             tool_calls = DeepSeekToolCallParser.parse_tool_calls(response)
+            logger.debug(f"DeepSeekToolCallParser found {len(tool_calls)} tool calls")
             # Convert to dict format for compatibility
-            return [
+            result = [
                 {"name": tc.function.name, "args": tc.function.arguments}
                 for tc in tool_calls
             ]
+            logger.debug(f"Converted tool calls: {result}")
+            return result
+        else:
+            logger.debug(f"Response type not handled, returning empty list")
         return []
+
+    def _extract_text_before_tool_calls(self, content: str) -> str:
+        """Extract text that appears before DeepSeek tool calls."""
+        import re
+
+        # DeepSeek-specific patterns
+        patterns = [
+            # DeepSeek tool call markers
+            r"^(.*?)(?=<｜tool▁calls▁begin｜>|<｜tool▁call▁begin｜>)",
+            r"^(.*?)(?=```json\s*\{\s*\"function\")",
+            r"^(.*?)(?=```python\s*<｜tool▁calls▁begin｜>)",
+            # JSON function calls
+            r"^(.*?)(?=\{\s*\"function\":)",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                text_before = match.group(1).strip()
+                if text_before:  # Only return if there's actual content
+                    # Remove code block markers if present
+                    text_before = re.sub(r"^```\w*\s*", "", text_before)
+                    text_before = re.sub(r"\s*```$", "", text_before)
+                    return text_before
+
+        return ""
 
     def _get_llm_specific_instructions(self) -> str:
         """Provide DeepSeek-specific instructions."""
@@ -91,6 +156,16 @@ class MCPDeepseekHost(BaseMCPAgent):
 2.  **Act:** Execute your plan with tool calls. You can execute tool calls during reasoning blocks
 3.  **Respond:** Provide the final answer to the user."""
 
+    async def generate_response(
+        self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None
+    ) -> Union[str, Any]:
+        """DeepSeek-specific response generation with message cleaning."""
+        # Clean messages first to prevent JSON deserialization errors
+        cleaned_messages = self._clean_messages_for_deepseek(messages)
+
+        # Call parent's generate_response with cleaned messages
+        return await super().generate_response(cleaned_messages, tools)
+
     async def _generate_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -101,8 +176,11 @@ class MCPDeepseekHost(BaseMCPAgent):
         """Generate completion using DeepSeek API."""
         # Use the stream parameter passed in (centralized logic decides streaming behavior)
 
+        # Clean messages again as a safety net in case they bypassed generate_response
+        cleaned_messages = self._clean_messages_for_deepseek(messages)
+
         # Handle deepseek-reasoner specific message formatting
-        enhanced_messages = self._format_messages_for_reasoner(messages)
+        enhanced_messages = self._format_messages_for_reasoner(cleaned_messages)
 
         try:
             response = self.deepseek_client.chat.completions.create(
@@ -167,6 +245,85 @@ class MCPDeepseekHost(BaseMCPAgent):
                     ] = f"Previous reasoning: {self.last_reasoning_content}\n\n---\n\nUser Request: {user_content}"
 
         return enhanced_messages
+
+    def _clean_messages_for_deepseek(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Clean messages to remove non-standard fields that cause DeepSeek JSON deserialization errors."""
+        logger.debug(f"Cleaning {len(messages)} messages for DeepSeek")
+        cleaned_messages = []
+
+        for i, message in enumerate(messages):
+            logger.debug(
+                f"Processing message {i}: {type(message)} with keys: {list(message.keys()) if isinstance(message, dict) else 'not_dict'}"
+            )
+
+            # Ensure content is always a string
+            content = message.get("content", "")
+            if not isinstance(content, str):
+                logger.debug(
+                    f"Converting non-string content from {type(content)} to string"
+                )
+                content = str(content)
+
+            cleaned_msg = {"role": message.get("role", "user"), "content": content}
+
+            # Only add tool_calls if DeepSeek supports them in the expected format
+            if message.get("tool_calls") and isinstance(
+                message.get("tool_calls"), list
+            ):
+                # Convert to DeepSeek format if needed
+                tool_calls = []
+                for tc in message["tool_calls"]:
+                    if isinstance(tc, dict) and "function" in tc:
+                        # Ensure function.arguments is a JSON string, not a dict
+                        cleaned_tc = tc.copy()
+                        # Ensure type field is present for DeepSeek compatibility
+                        if "type" not in cleaned_tc:
+                            cleaned_tc["type"] = "function"
+                        if (
+                            "function" in cleaned_tc
+                            and "arguments" in cleaned_tc["function"]
+                        ):
+                            args = cleaned_tc["function"]["arguments"]
+                            if isinstance(args, dict):
+                                cleaned_tc["function"]["arguments"] = json.dumps(args)
+                            elif not isinstance(args, str):
+                                cleaned_tc["function"]["arguments"] = str(args)
+                        tool_calls.append(cleaned_tc)
+                    elif isinstance(tc, dict) and "name" in tc:
+                        # Convert from simplified format
+                        tool_calls.append(
+                            {
+                                "id": tc.get("id", f"call_{len(tool_calls)}"),
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": (
+                                        json.dumps(tc.get("args", {}))
+                                        if isinstance(tc.get("args"), dict)
+                                        else tc.get("args", "{}")
+                                    ),
+                                },
+                            }
+                        )
+
+                if tool_calls:
+                    cleaned_msg["tool_calls"] = tool_calls
+
+            # Handle tool results/responses
+            if message.get("tool_call_id"):
+                cleaned_msg["tool_call_id"] = message["tool_call_id"]
+
+            cleaned_messages.append(cleaned_msg)
+
+        logger.debug(f"Cleaned messages result: {len(cleaned_messages)} messages")
+        for i, msg in enumerate(cleaned_messages):
+            logger.debug(
+                f"Message {i}: role={msg.get('role')}, content_len={len(str(msg.get('content', '')))}, has_tool_calls={bool(msg.get('tool_calls'))}"
+            )
+
+        return cleaned_messages
 
     def _normalize_tool_calls_to_standard_format(
         self, tool_calls: List[Any]
@@ -298,9 +455,13 @@ class MCPDeepseekHost(BaseMCPAgent):
                 if continuation_message:
                     # Restart with subagent results (non-streaming for subagents)
                     new_messages = [continuation_message]
+                    # Clean messages before API call to prevent JSON deserialization errors
+                    cleaned_new_messages = self._clean_messages_for_deepseek(
+                        new_messages
+                    )
                     response = self.deepseek_client.chat.completions.create(
                         model=self.deepseek_config.model,
-                        messages=new_messages,
+                        messages=cleaned_new_messages,
                         temperature=self.deepseek_config.temperature,
                         max_tokens=self.deepseek_config.max_tokens,
                         stream=False,
@@ -313,9 +474,13 @@ class MCPDeepseekHost(BaseMCPAgent):
                     continue
 
                 # Make another request with tool results
+                # Clean messages before API call to prevent JSON deserialization errors
+                cleaned_current_messages = self._clean_messages_for_deepseek(
+                    current_messages
+                )
                 response = self.deepseek_client.chat.completions.create(
                     model=self.deepseek_config.model,
-                    messages=current_messages,
+                    messages=cleaned_current_messages,
                     temperature=self.deepseek_config.temperature,
                     max_tokens=self.deepseek_config.max_tokens,
                     stream=interactive,  # Stream if in interactive mode
@@ -381,9 +546,14 @@ class MCPDeepseekHost(BaseMCPAgent):
 
                 # Process the current streaming response
                 for chunk in current_response:
+                    logger.debug(f"Streaming chunk: {chunk}")
 
                     if chunk.choices:
                         delta = chunk.choices[0].delta
+                        logger.debug(f"Delta content: {delta.content}")
+                        logger.debug(
+                            f"Delta has tool_calls: {hasattr(delta, 'tool_calls') and delta.tool_calls}"
+                        )
 
                         # Handle reasoning content (deepseek-reasoner)
                         if (
@@ -440,6 +610,11 @@ class MCPDeepseekHost(BaseMCPAgent):
 
                 # Create a mock response for centralized processing
                 # Build response object that includes both standard and custom tool calls
+                logger.debug(
+                    f"Accumulated content before tool parsing: {repr(accumulated_content)}"
+                )
+                logger.debug(f"Accumulated tool calls: {accumulated_tool_calls}")
+
                 mock_response = type("MockResponse", (), {})()
                 mock_response.choices = [type("MockChoice", (), {})()]
                 mock_response.choices[0].message = type("MockMessage", (), {})()
@@ -524,9 +699,13 @@ class MCPDeepseekHost(BaseMCPAgent):
                             if self.available_tools
                             else None
                         )
+                        # Clean messages before API call to prevent JSON deserialization errors
+                        cleaned_current_messages = self._clean_messages_for_deepseek(
+                            current_messages
+                        )
                         current_response = self.deepseek_client.chat.completions.create(
                             model=self.deepseek_config.model,
-                            messages=current_messages,
+                            messages=cleaned_current_messages,
                             temperature=self.deepseek_config.temperature,
                             max_tokens=self.deepseek_config.max_tokens,
                             stream=self.deepseek_config.stream,

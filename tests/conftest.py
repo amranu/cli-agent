@@ -109,6 +109,14 @@ def mock_base_agent(sample_host_config, mock_tools):
             """Mock client creation for testing."""
             return MagicMock()  # Return a mock client
 
+        def _extract_text_before_tool_calls(self, content: str) -> str:
+            """Mock text extraction for testing."""
+            return ""
+
+        def _get_llm_specific_instructions(self) -> str:
+            """Mock LLM-specific instructions for testing."""
+            return ""
+
     agent = MockAgent(sample_host_config, is_subagent=False)
     agent.available_tools = mock_tools
     return agent
