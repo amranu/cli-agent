@@ -223,7 +223,7 @@ class MCPDeepseekHost(BaseMCPAgent):
         is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
         is_reasoner = self.deepseek_config.model == "deepseek-reasoner"
 
-        enhanced_messages = messages.copy()
+        enhanced_messages = messages
 
         # Handle system prompt differently for deepseek-reasoner
         if is_reasoner:
@@ -700,7 +700,7 @@ class MCPDeepseekHost(BaseMCPAgent):
                 except ToolDeniedReturnToPrompt:
                     # Store the exception to raise after generator completes
                     context.tool_denial_exception = ToolDeniedReturnToPrompt()
-                    yield "\nTool execution denied - returning to prompt.\n"
+                    #yield "\nTool execution denied - returning to prompt.\n"
                     return  # Exit the generator
 
                 # Make a new streaming request with tool results if we had tool calls

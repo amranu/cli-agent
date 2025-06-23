@@ -264,22 +264,23 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
                     except Exception as e:
                         function_results.append(f"Error executing {fc.name}: {str(e)}")
 
-                # Instead of adding tool messages to conversation, create a clean prompt
-                # that focuses on the original request and tool results
-                original_request = (
-                    original_messages[-1]["content"]
-                    if original_messages
-                    else "Continue processing"
-                )
-                tool_results_text = "\n".join(function_results)
+                # Add assistant message with tool calls to maintain conversation context
+                current_messages.append({
+                    "role": "assistant", 
+                    "content": text_response or "",
+                    "tool_calls": [{"name": fc.name, "args": fc.args} for fc in function_calls]
+                })
+                
+                # Add tool result messages to maintain proper conversation history
+                for i, result in enumerate(function_results):
+                    current_messages.append({
+                        "role": "tool",
+                        "content": str(result),
+                        "tool_call_id": f"call_{i}"
+                    })
 
-                # Create a focused prompt that avoids re-execution
-                gemini_prompt = f"""Original request: {original_request}
-
-Tool execution completed successfully. Results:
-{tool_results_text}
-
-Based on these tool results, please provide your final response. Do not re-execute any tools unless specifically needed for a different purpose."""
+                # Convert the maintained conversation history back to Gemini format
+                gemini_prompt = self._convert_messages_to_gemini_format(current_messages)
                 config = types.GenerateContentConfig(
                     tools=(
                         self.convert_tools_to_llm_format()
@@ -849,20 +850,23 @@ Based on these tool results, please provide your final response. Do not re-execu
                     # Note: We don't add tool execution status messages to accumulated output
                     # as they are only for user feedback and cause LLM hallucinations
 
-                    # Create a clean follow-up prompt to avoid re-execution loops
-                    tool_results_text = "\n".join(function_results)
-                    original_request = (
-                        original_messages[-1]["content"]
-                        if original_messages
-                        else "Continue processing"
-                    )
+                    # Add assistant message with tool calls to maintain conversation context  
+                    original_messages.append({
+                        "role": "assistant",
+                        "content": text_response or "", 
+                        "tool_calls": [{"name": fc.name, "args": fc.args} for fc in function_calls]
+                    })
+                    
+                    # Add tool result messages to maintain proper conversation history
+                    for i, result in enumerate(function_results):
+                        original_messages.append({
+                            "role": "tool",
+                            "content": str(result),
+                            "tool_call_id": f"call_{i}"
+                        })
 
-                    current_prompt = f"""Original request: {original_request}
-
-Tool execution completed successfully. Results:
-{tool_results_text}
-
-Based on these tool results, please provide your final response. Do not re-execute any tools unless specifically needed for a different purpose."""
+                    # Convert the maintained conversation history back to Gemini format
+                    current_prompt = self._convert_messages_to_gemini_format(original_messages)
 
                     # Continue the loop - let Gemini decide if more tools are needed
                     continue
@@ -1042,6 +1046,21 @@ Based on these tool results, please provide your final response. Do not re-execu
                                 )
                                 # Don't yield error to user, just log and continue
                                 continue
+                    except json.JSONDecodeError as json_error:
+                        import traceback
+
+                        logger.error(
+                            f"JSON decode error in stream after {chunk_count} chunks: {json_error}"
+                        )
+                        logger.error(f"JSON error details: {traceback.format_exc()}")
+                        
+                        if has_any_content:
+                            logger.warning("Stream had content before JSON error, continuing with what we have")
+                        else:
+                            logger.error("JSON error occurred before any content was received")
+                            yield f"\n⚠️ Gemini API returned malformed JSON. This may be a temporary API issue. Error: {json_error}\n"
+                            return
+                            
                     except Exception as stream_error:
                         import traceback
 
@@ -1181,33 +1200,15 @@ Based on these tool results, please provide your final response. Do not re-execu
                                 flush=True,
                             )
 
-                            # Extract tool results from updated messages for prompt creation
-                            tool_results_text = ""
-                            for msg in updated_messages:
-                                if msg.get("role") == "tool":
-                                    tool_results_text += f"{msg.get('content', '')}\n"
-
-                            # Instead of appending to the growing prompt, create a clean context
-                            # with just the original request and tool results to avoid confusion
-                            original_request = (
-                                original_messages[-1]["content"]
-                                if original_messages
-                                else "Continue processing"
-                            )
-
-                            # Create a focused prompt that prevents re-execution
-                            current_prompt = f"""Original request: {original_request}
-
-Tool execution has been completed successfully. Results:
-{tool_results_text}
-
-Based on these tool results, please provide your final response. Do not re-execute any tools unless specifically needed for a different purpose."""
+                            # Use the updated messages from centralized processing to maintain context
+                            # Convert the conversation history (which now includes tool calls and results) back to Gemini format
+                            current_prompt = self._convert_messages_to_gemini_format(updated_messages)
 
                             logger.debug(
                                 f"Updated prompt length after tool execution: {len(current_prompt)}"
                             )
                             logger.debug(
-                                f"Tool results length: {len(tool_results_text)}"
+                                f"Updated messages count: {len(updated_messages)}"
                             )
 
                             # Continue the loop - let Gemini decide if more tools are needed
@@ -1215,13 +1216,12 @@ Based on these tool results, please provide your final response. Do not re-execu
 
                     except ToolDeniedReturnToPrompt as e:
                         # Exit generator immediately - cannot continue
-                        yield f"\n🚫 Tool execution denied - returning to prompt.\n"
+                        #yield f"\n🚫 Tool execution denied - returning to prompt.\n"
                         raise e  # Raise the exception after yielding the message
                     else:
                         # No function calls - this is the final response
-                        # Yield any accumulated content before exiting
-                        if accumulated_content.strip():
-                            yield accumulated_content
+                        # Content has already been yielded chunk by chunk during streaming
+                        # No need to yield accumulated_content again as it would cause duplication
 
                         # Check for subagent interrupts before ending
                         if (

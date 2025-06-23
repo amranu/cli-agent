@@ -158,7 +158,9 @@ class SystemPromptBuilder:
     ) -> Dict[str, str]:
         """Prepend Agent.md content to the first user message."""
         original_content = first_message["content"]
-        enhanced_content = f"""# Project Context and Instructions
+        enhanced_content = f"""# Project Context and Instructions (For Reference Only)
+
+The following information is provided for context and reference purposes only. Please respond to the user's actual request below.
 
 {agent_md_content}
 
