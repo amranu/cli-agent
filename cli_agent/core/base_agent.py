@@ -55,9 +55,6 @@ class BaseMCPAgent(ABC):
         # Centralized subagent management system
         if not is_subagent:
             try:
-                import os
-                import sys
-
                 # Add project root directory to path for subagent import
                 # subagent.py is in the root directory, not in cli_agent/core/
                 project_root = os.path.dirname(
@@ -222,8 +219,6 @@ class BaseMCPAgent(ABC):
             emit_result(full_result)
 
             # Exit the subagent process to terminate cleanly
-            import sys
-
             sys.exit(0)
 
         except Exception as e:
@@ -550,8 +545,6 @@ class BaseMCPAgent(ABC):
                         return f"Tool execution denied: {permission_result.reason}"
 
             # Forward to parent if this is a subagent (except for subagent management tools)
-            import sys
-
             if self.is_subagent and self.comm_socket:
                 excluded_tools = ["task", "task_status", "task_results"]
                 if tool_name not in excluded_tools:
@@ -1141,7 +1134,6 @@ class BaseMCPAgent(ABC):
         """Extract tool calls from content string. Override in subclasses if needed."""
         # Default implementation - try to find JSON-like tool calls
         import json
-        import re
 
         tool_calls = []
         # Look for function call patterns in the content
@@ -1280,8 +1272,6 @@ class BaseMCPAgent(ABC):
         self, input_handler, existing_messages: List[Dict[str, Any]] = None
     ):
         """Interactive chat session with shared functionality."""
-        import sys
-
         from cli_agent.core.input_handler import InterruptibleInput
 
         # Store input handler for tool permission prompts
