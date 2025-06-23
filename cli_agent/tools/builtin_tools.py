@@ -223,6 +223,16 @@ def get_task_tool() -> Dict[str, Any]:
                     "type": "string",
                     "description": "Optional additional context or files the subagent should consider",
                 },
+                "model": {
+                    "type": "string",
+                    "description": "Model to use for subagent. Options: 'deepseek-chat' (fast), 'deepseek-reasoner' (complex reasoning), 'gemini-2.5-flash' (fast), 'gemini-2.5-pro' (advanced). If not specified, inherits from main agent.",
+                    "enum": [
+                        "deepseek-chat",
+                        "deepseek-reasoner",
+                        "gemini-2.5-flash",
+                        "gemini-2.5-pro",
+                    ],
+                },
             },
             "required": ["description", "prompt"],
         },

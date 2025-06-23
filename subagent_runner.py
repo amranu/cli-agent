@@ -69,16 +69,48 @@ async def run_subagent_task(task_file_path: str):
         # Load config and create host
         config = load_config()
 
-        if config.deepseek_model == "gemini":
-            from mcp_gemini_host import MCPGeminiHost
+        # Check if task specifies a specific model to use
+        task_model = task_data.get("model", None)
 
-            host = MCPGeminiHost(config, is_subagent=True)
-            emit_output_with_id("Created Gemini subagent")
+        if task_model:
+            # Use task-specific model
+            if task_model.startswith("gemini"):
+                # Create config copy with task-specific model
+                import copy
+
+                from mcp_gemini_host import MCPGeminiHost
+
+                task_config = copy.deepcopy(config)
+                task_config.gemini_model = task_model
+                task_config.deepseek_model = "gemini"  # Signal to use Gemini backend
+                host = MCPGeminiHost(task_config, is_subagent=True)
+                emit_output_with_id(f"Created {task_model} subagent")
+            else:  # deepseek models
+                # Create config copy with task-specific model
+                import copy
+
+                from mcp_deepseek_host import MCPDeepseekHost
+
+                task_config = copy.deepcopy(config)
+                task_config.deepseek_model = task_model
+                host = MCPDeepseekHost(task_config, is_subagent=True)
+                emit_output_with_id(f"Created {task_model} subagent")
         else:
-            from mcp_deepseek_host import MCPDeepseekHost
+            # Inherit from main agent (existing logic)
+            if config.deepseek_model == "gemini":
+                from mcp_gemini_host import MCPGeminiHost
 
-            host = MCPDeepseekHost(config, is_subagent=True)
-            emit_output_with_id("Created DeepSeek subagent")
+                host = MCPGeminiHost(config, is_subagent=True)
+                emit_output_with_id(
+                    "Created Gemini subagent (inherited from main agent)"
+                )
+            else:
+                from mcp_deepseek_host import MCPDeepseekHost
+
+                host = MCPDeepseekHost(config, is_subagent=True)
+                emit_output_with_id(
+                    "Created DeepSeek subagent (inherited from main agent)"
+                )
 
         # Set up tool permission manager for subagent (inherits main agent settings)
         from cli_agent.core.input_handler import InterruptibleInput

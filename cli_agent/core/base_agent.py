@@ -439,6 +439,7 @@ class BaseMCPAgent(ABC):
         description = args.get("description", "Investigation task")
         prompt = args.get("prompt", "")
         context = args.get("context", "")
+        model = args.get("model", None)  # None means inherit from main agent
 
         if not prompt:
             return "Error: prompt is required"
@@ -452,15 +453,18 @@ class BaseMCPAgent(ABC):
             # Track active count before and after spawning
             initial_count = self.subagent_manager.get_active_count()
             task_id = await self.subagent_manager.spawn_subagent(
-                description, full_prompt
+                description, full_prompt, model=model
             )
             final_count = self.subagent_manager.get_active_count()
 
-            # Display spawn confirmation with active count
+            # Display spawn confirmation with active count and model info
             active_info = (
                 f" (Now {final_count} active subagents)" if final_count > 1 else ""
             )
-            return f"Spawned subagent task: {task_id}\nDescription: {description}{active_info}\nTask is running in the background - output will appear in the chat as it becomes available."
+            model_info = (
+                f" using {model}" if model else " (inheriting main agent model)"
+            )
+            return f"Spawned subagent task: {task_id}\nDescription: {description}\nModel: {model_info}{active_info}\nTask is running in the background - output will appear in the chat as it becomes available."
         except Exception as e:
             return f"Error spawning subagent: {e}"
 
