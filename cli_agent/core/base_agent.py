@@ -870,22 +870,30 @@ class BaseMCPAgent(ABC):
         pass
 
     async def generate_response(
-        self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict]] = None,
+        stream: Optional[bool] = None,
     ) -> Union[str, Any]:
         """Generate a response using the specific LLM. Centralized implementation with subagent yielding."""
         # For subagents, use interactive=False to avoid terminal formatting issues
         interactive = not self.is_subagent
 
-        # Default to streaming behavior, but allow subclasses to override
+        # Use provided stream parameter, or fall back to instance/default behavior
         # Subagents should not stream to avoid generator issues
-        stream = getattr(self, "stream", True) and not self.is_subagent
+        if stream is not None:
+            # Use explicitly provided stream parameter
+            use_stream = stream and not self.is_subagent
+        else:
+            # Fall back to instance attribute or default
+            use_stream = getattr(self, "stream", True) and not self.is_subagent
 
         # Call the concrete implementation's _generate_completion method
         tools_list = (
             self.convert_tools_to_llm_format() if self.available_tools else None
         )
         return await self._generate_completion(
-            messages, tools_list, stream, interactive
+            messages, tools_list, use_stream, interactive
         )
 
     # Tool conversion and parsing helper methods

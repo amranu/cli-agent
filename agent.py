@@ -379,10 +379,10 @@ async def ask(
 
         # Get response with AGENT.md prepended to first message
         messages = [{"role": "user", "content": message}]
-        enhanced_messages = host._prepend_agent_md_to_first_message(
-            messages, is_first_message=True
+        enhanced_messages = (
+            host.system_prompt_builder.enhance_first_message_with_agent_md(messages)
         )
-        response = await host.chat_completion(enhanced_messages, stream=False)
+        response = await host.generate_response(enhanced_messages, stream=False)
 
         click.echo(response)
 

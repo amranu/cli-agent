@@ -1290,25 +1290,6 @@ Please provide your final analysis based on these subagent results. Do not spawn
 
         return async_stream_generator()
 
-    async def chat_completion(
-        self,
-        messages: List[Dict[str, Any]],
-        stream: bool = True,
-        interactive: bool = True,
-    ) -> Union[str, Any]:
-        """Chat completion method for compatibility with agent.py."""
-        # Store original stream setting
-        original_stream = getattr(self, "stream", True)
-
-        # Temporarily set stream based on parameter
-        self.stream = stream
-
-        try:
-            return await self.generate_response(messages)
-        finally:
-            # Restore original stream setting
-            self.stream = original_stream
-
     async def shutdown(self):
         """Shutdown all MCP connections and HTTP client."""
         # Close HTTP client first

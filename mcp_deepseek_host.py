@@ -157,14 +157,17 @@ class MCPDeepseekHost(BaseMCPAgent):
 3.  **Respond:** Provide the final answer to the user."""
 
     async def generate_response(
-        self, messages: List[Dict[str, Any]], tools: Optional[List[Dict]] = None
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict]] = None,
+        stream: Optional[bool] = None,
     ) -> Union[str, Any]:
         """DeepSeek-specific response generation with message cleaning."""
         # Clean messages first to prevent JSON deserialization errors
         cleaned_messages = self._clean_messages_for_deepseek(messages)
 
-        # Call parent's generate_response with cleaned messages
-        return await super().generate_response(cleaned_messages, tools)
+        # Call parent's generate_response with cleaned messages and stream parameter
+        return await super().generate_response(cleaned_messages, tools, stream)
 
     async def _generate_completion(
         self,
@@ -766,22 +769,3 @@ class MCPDeepseekHost(BaseMCPAgent):
                     raise context.tool_denial_exception
 
         return wrapper()
-
-    async def chat_completion(
-        self,
-        messages: List[Dict[str, Any]],
-        stream: bool = True,
-        interactive: bool = True,
-    ) -> Union[str, Any]:
-        """Chat completion method for compatibility with agent.py."""
-        # Store original stream setting
-        original_stream = getattr(self, "stream", True)
-
-        # Temporarily set stream based on parameter
-        self.stream = stream
-
-        try:
-            return await self.generate_response(messages)
-        finally:
-            # Restore original stream setting
-            self.stream = original_stream
