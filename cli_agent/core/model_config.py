@@ -272,6 +272,9 @@ class GPTModel(ModelConfig):
             "gpt-4-turbo": "gpt-4-turbo-2024-04-09",
             "gpt-4o": "gpt-4o-2024-08-06",
             "gpt-4o-mini": "gpt-4o-mini-2024-07-18",
+            "gpt-4.1": "gpt-4.1",
+            "gpt-4.1-mini": "gpt-4.1-mini",
+            "gpt-4.1-nano": "gpt-4.1-nano",
             "gpt-3.5-turbo": "gpt-3.5-turbo-0125",
             "o1-preview": "o1-preview",
             "o1-mini": "o1-mini",
@@ -283,6 +286,9 @@ class GPTModel(ModelConfig):
             "gpt-4-turbo": 128000,
             "gpt-4o": 128000,
             "gpt-4o-mini": 128000,
+            "gpt-4.1": 1000000,  # 1M token context
+            "gpt-4.1-mini": 1000000,  # 1M token context
+            "gpt-4.1-nano": 1000000,  # 1M token context
             "gpt-3.5-turbo": 16385,
             "o1-preview": 128000,
             "o1-mini": 128000,
