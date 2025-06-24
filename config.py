@@ -472,16 +472,9 @@ class HostConfig(BaseSettings):
                 logger.info(f"Successfully fetched {len(models)} OpenAI models dynamically")
                 
             except Exception as e:
-                logger.warning(f"Failed to get dynamic OpenAI models, using fallback: {e}")
-                # Fallback to known models
-                available["openai"] = [
-                    "gpt-4o",
-                    "gpt-4o-mini", 
-                    "gpt-4-turbo",
-                    "gpt-3.5-turbo",
-                    "o1-preview",
-                    "o1-mini",
-                ]
+                logger.warning(f"Failed to get dynamic OpenAI models: {e}")
+                # Don't add OpenAI to available providers if we can't fetch models
+                pass
 
         if self.openrouter_api_key:
             available["openrouter"] = [

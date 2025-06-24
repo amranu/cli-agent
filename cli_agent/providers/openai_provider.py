@@ -62,16 +62,9 @@ class OpenAIProvider(BaseProvider):
             logger.info(f"OpenAI provider found {len(chat_models)} chat models: {chat_models}")
             return sorted(chat_models)
         except Exception as e:
-            logger.warning(f"Failed to fetch OpenAI models: {e}")
-            # Fallback to known models
-            return [
-                "gpt-4o",
-                "gpt-4o-mini", 
-                "gpt-4-turbo",
-                "gpt-3.5-turbo",
-                "o1-preview",
-                "o1-mini"
-            ]
+            logger.error(f"Failed to fetch OpenAI models: {e}")
+            # Return empty list if we can't fetch models
+            return []
 
     async def make_request(
         self,
@@ -85,8 +78,6 @@ class OpenAIProvider(BaseProvider):
 
         # Check if this is an o1 model which has different parameter requirements
         is_o1_model = model_name.startswith("o1-")
-        logger.info(f"OpenAI make_request: model={model_name}, is_o1_model={is_o1_model}, stream={stream}")
-        
         # For o1 models, adjust parameter names and restrictions
         if is_o1_model:
             # Convert max_tokens to max_completion_tokens for o1 models
