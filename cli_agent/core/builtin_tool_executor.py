@@ -149,8 +149,8 @@ class BuiltinToolExecutor:
         config_dir = Path.home() / ".config" / "agent"
         config_dir.mkdir(parents=True, exist_ok=True)
 
-        # Get session ID from agent config if available, otherwise use 'default'
-        session_id = getattr(self.agent.config, "session_id", "default")
+        # Get session ID from agent if available, otherwise use 'default'
+        session_id = getattr(self.agent, "_session_id", "default")
         if not session_id or session_id == "None":
             session_id = "default"
 
@@ -180,9 +180,8 @@ class BuiltinToolExecutor:
                 json.dump(todos, f, indent=2)
 
             # Return the actual todo list data to the LLM for proper feedback
-            session_info = (
-                f" (session: {getattr(self.agent.config, 'session_id', 'default')})"
-            )
+            session_id = getattr(self.agent, "_session_id", "default")
+            session_info = f" (session: {session_id})"
             return f"Successfully updated todo list with {len(todos)} items{session_info}. Current todo list:\n{json.dumps(todos, indent=2)}"
 
         except Exception as e:

@@ -373,6 +373,8 @@ async def ask(
         # Create host using helper function
         try:
             host = create_host(config)
+            # Set session ID on host for session-specific todo files
+            host._session_id = session_id
         except Exception as e:
             click.echo(f"Error creating host: {e}")
             return
