@@ -7,6 +7,8 @@ import tempfile
 import time
 from typing import Any, Dict, List, Optional
 
+from cli_agent.core.global_interrupt import get_global_interrupt_manager
+
 logger = logging.getLogger(__name__)
 
 
@@ -16,6 +18,7 @@ class SubagentCoordinator:
     def __init__(self, agent):
         """Initialize with reference to the parent agent."""
         self.agent = agent
+        self.global_interrupt_manager = get_global_interrupt_manager()
 
     def handle_subagent_permission_request(self, message, task_id):
         """Handle permission requests from subagents."""
@@ -150,6 +153,25 @@ class SubagentCoordinator:
         while self.agent.subagent_manager.get_active_count() > 0:
             current_time = time.time()
 
+            # Check for cancellation messages
+            pending_messages = await self.agent.subagent_manager.get_pending_messages()
+            for msg in pending_messages:
+                if (
+                    msg.type == "status"
+                    and hasattr(msg, "data")
+                    and msg.data.get("status") == "cancelled"
+                ):
+                    logger.info(
+                        f"Subagent {msg.data.get('task_id', 'unknown')} was cancelled by user"
+                    )
+                    # Terminate all subagents and return to prompt
+                    await self.agent.subagent_manager.terminate_all()
+                    return []  # Return empty results to indicate cancellation
+                elif msg.type == "error" and "Tool execution denied" in msg.content:
+                    logger.info(f"Subagent tool denied, terminating all subagents")
+                    await self.agent.subagent_manager.terminate_all()
+                    return []  # Return empty results to indicate cancellation
+
             # Check timeout based on time since last message received
             time_since_last_message = (
                 current_time - self.agent.last_subagent_message_time
@@ -282,6 +304,19 @@ Please continue with your task.""",
 
         # Wait for all subagents to complete and collect results
         subagent_results = await self.collect_subagent_results()
+
+        # Special handling for cancellation - empty list with no active subagents means cancelled
+        if (
+            subagent_results == []
+            and self.agent.subagent_manager.get_active_count() == 0
+        ):
+            # Subagents were cancelled, return special result to trigger return to prompt
+            return {
+                "cancelled": True,
+                "interrupt_msg": interrupt_msg,
+                "completion_msg": "\r\n🚫 Subagent cancelled due to tool denial. Returning to prompt.\r\n",
+                "restart_msg": "",
+            }
 
         if subagent_results:
             completion_msg = f"\r\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\r\n"

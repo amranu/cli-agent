@@ -247,16 +247,37 @@ class BaseMCPAgent(ABC):
     async def start_mcp_server(self, server_name: str, server_config) -> bool:
         """Start and connect to an MCP server using FastMCP."""
         try:
-            logger.info(f"Starting MCP server: {server_name}")
+            logger.debug(f"Starting MCP server: {server_name}")
 
             # Construct command and args for FastMCP client
             command = server_config.command[0]
             args = server_config.command[1:] + server_config.args
 
+            # Process environment variables to expand ${VAR} syntax
+            processed_env = {}
+            if server_config.env:
+                import os
+                import re
+
+                for key, value in server_config.env.items():
+                    if isinstance(value, str):
+                        # Expand ${VAR} and $VAR patterns
+                        def replace_var(match):
+                            var_name = match.group(1) or match.group(2)
+                            return os.environ.get(var_name, match.group(0))
+
+                        # Handle both ${VAR} and $VAR patterns
+                        expanded_value = re.sub(
+                            r"\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)",
+                            replace_var,
+                            value,
+                        )
+                        processed_env[key] = expanded_value
+                    else:
+                        processed_env[key] = value
+
             # Create FastMCP client with stdio transport
-            transport = StdioTransport(
-                command=command, args=args, env=server_config.env
-            )
+            transport = StdioTransport(command=command, args=args, env=processed_env)
             client = FastMCPClient(transport=transport)
 
             # Enter the context manager and store it for cleanup
@@ -405,9 +426,19 @@ class BaseMCPAgent(ABC):
         tool_coroutines = []
 
         # Check for interruption before starting any tool execution
-        if input_handler and input_handler.interrupted:
-            all_tool_output.append("🛑 Tool execution interrupted by user")
+        from cli_agent.core.global_interrupt import get_global_interrupt_manager
+
+        global_interrupt_manager = get_global_interrupt_manager()
+
+        if global_interrupt_manager.is_interrupted():
+            all_tool_output.append("🛑 Tool execution interrupted by global interrupt")
             return function_results, all_tool_output
+
+        if input_handler:
+            # Check for both existing interrupted state and new interrupts
+            if input_handler.interrupted or input_handler.check_for_interrupt():
+                all_tool_output.append("🛑 Tool execution interrupted by user")
+                return function_results, all_tool_output
 
         # Check if there's any buffered text that needs to be displayed before tool execution
         text_buffer = getattr(self, "_text_buffer", "")
@@ -978,18 +1009,24 @@ class BaseMCPAgent(ABC):
         model_supports_streaming = True
         if hasattr(self, "model") and hasattr(self.model, "supports_streaming"):
             model_supports_streaming = self.model.supports_streaming
-        
+
         if stream is not None:
             # Use explicitly provided stream parameter, but respect model limitations
             use_stream = stream and not self.is_subagent and model_supports_streaming
         else:
             # Fall back to instance attribute or default, but respect model limitations
-            use_stream = getattr(self, "stream", True) and not self.is_subagent and model_supports_streaming
+            use_stream = (
+                getattr(self, "stream", True)
+                and not self.is_subagent
+                and model_supports_streaming
+            )
 
         # Store the modify_messages_in_place flag for use by implementations
         self._modify_messages_in_place = modify_messages_in_place
 
-        logger.info(f"generate_response: model_supports_streaming={model_supports_streaming}, use_stream={use_stream}")
+        logger.info(
+            f"generate_response: model_supports_streaming={model_supports_streaming}, use_stream={use_stream}"
+        )
 
         # Call the concrete implementation's _generate_completion method
         tools_list = (
@@ -1861,6 +1898,7 @@ class BaseMCPAgent(ABC):
                 tool_results, tool_output = await self.execute_function_calls(
                     function_calls,
                     interactive=interactive,
+                    input_handler=getattr(self, "_input_handler", None),
                     streaming_mode=streaming_mode,
                 )
 
@@ -1882,7 +1920,16 @@ class BaseMCPAgent(ABC):
         )
 
         if subagent_result:
-            # Handle status messages centrally based on mode
+            # Check if subagent was cancelled due to tool denial
+            if subagent_result.get("cancelled"):
+                from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+
+                print(subagent_result["interrupt_msg"], flush=True)
+                print(subagent_result["completion_msg"], flush=True)
+                # Raise exception to return to prompt immediately
+                raise ToolDeniedReturnToPrompt("Subagent cancelled due to tool denial")
+
+            # Handle normal subagent completion status messages centrally based on mode
             if streaming_mode:
                 # For streaming mode, store messages for the caller to yield
                 subagent_result["_should_yield_messages"] = True

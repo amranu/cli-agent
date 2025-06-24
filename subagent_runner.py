@@ -308,6 +308,21 @@ CRITICAL INSTRUCTIONS:
 
             async def capture_tool_execution(tool_key, arguments):
                 result = await original_execute_mcp_tool(tool_key, arguments)
+
+                # Check if tool was denied by user
+                if isinstance(result, str) and "Tool execution denied" in result:
+                    emit_error_with_id(
+                        "Tool execution denied by user",
+                        "User denied tool permission, terminating subagent",
+                    )
+                    emit_status_with_id(
+                        "cancelled", "Task cancelled due to tool denial"
+                    )
+                    # Exit the subagent cleanly
+                    import sys
+
+                    sys.exit(0)
+
                 captured_tool_results.append({"tool": tool_key, "result": result})
 
                 # Emit tool result immediately for real-time feedback
@@ -368,6 +383,16 @@ CRITICAL INSTRUCTIONS:
             # This is expected when emit_result calls sys.exit(0)
             return
         except Exception as e:
+            # Check if this is a tool denial that should terminate the subagent
+            if "ToolDeniedReturnToPrompt" in str(
+                type(e)
+            ) or "Tool execution denied" in str(e):
+                emit_error_with_id(
+                    "Tool execution denied by user",
+                    "User denied tool permission, terminating subagent",
+                )
+                emit_status_with_id("cancelled", "Task cancelled due to tool denial")
+                return  # Terminate subagent cleanly
             emit_error_with_id(f"Task execution error: {str(e)}", str(e))
             raise
 
