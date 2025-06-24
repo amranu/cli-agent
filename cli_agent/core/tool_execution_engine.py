@@ -124,6 +124,17 @@ class ToolExecutionEngine:
                     else:
                         content_parts.append(str(content))
                 return "\n".join(content_parts)
+            elif isinstance(result, list):
+                # Handle case where result is directly a list of content objects (FastMCP format)
+                content_parts = []
+                for content in result:
+                    if hasattr(content, "text"):
+                        content_parts.append(content.text)
+                    elif hasattr(content, "data"):
+                        content_parts.append(str(content.data))
+                    else:
+                        content_parts.append(str(content))
+                return "\n".join(content_parts)
             elif isinstance(result, str):
                 return result
             elif isinstance(result, dict):
