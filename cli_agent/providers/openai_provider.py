@@ -43,6 +43,36 @@ class OpenAIProvider(BaseProvider):
     def supports_streaming(self) -> bool:
         return True
 
+    async def get_available_models(self) -> List[str]:
+        """Get list of available models from OpenAI API."""
+        try:
+            response = await self.client.models.list()
+            # Filter for chat completion models (exclude embeddings, etc.)
+            chat_models = []
+            for model in response.data:
+                model_id = model.id
+                # Filter for GPT models and o1 models that support chat completions
+                if (model_id.startswith("gpt-") or 
+                    model_id.startswith("o1-") or
+                    model_id in ["chatgpt-4o-latest"]):
+                    # Exclude fine-tuned models (contain colons) and deprecated models
+                    if ":" not in model_id and not model_id.endswith("-instruct"):
+                        chat_models.append(model_id)
+            
+            logger.info(f"OpenAI provider found {len(chat_models)} chat models: {chat_models}")
+            return sorted(chat_models)
+        except Exception as e:
+            logger.warning(f"Failed to fetch OpenAI models: {e}")
+            # Fallback to known models
+            return [
+                "gpt-4o",
+                "gpt-4o-mini", 
+                "gpt-4-turbo",
+                "gpt-3.5-turbo",
+                "o1-preview",
+                "o1-mini"
+            ]
+
     async def make_request(
         self,
         messages: List[Dict[str, Any]],

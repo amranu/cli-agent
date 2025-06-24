@@ -1,11 +1,14 @@
 """Configuration management for MCP Agent with Provider-Model Architecture."""
 
+import logging
 import os
 import time
 from typing import Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class MCPServerConfig(BaseModel):
@@ -435,13 +438,35 @@ class HostConfig(BaseSettings):
             ]
 
         if self.openai_api_key:
-            available["openai"] = [
-                "gpt-4-turbo-preview",
-                "gpt-4-0125-preview",
-                "gpt-3.5-turbo",
-                "o1-preview",
-                "o1-mini",
-            ]
+            # Try to get dynamic model list from OpenAI API
+            try:
+                from cli_agent.providers.openai_provider import OpenAIProvider
+                import asyncio
+                
+                provider = OpenAIProvider(api_key=self.openai_api_key)
+                # Get models synchronously
+                if hasattr(asyncio, 'run'):
+                    models = asyncio.run(provider.get_available_models())
+                else:
+                    # Fallback for older Python versions
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        models = loop.run_until_complete(provider.get_available_models())
+                    finally:
+                        loop.close()
+                available["openai"] = models
+            except Exception as e:
+                logger.warning(f"Failed to get dynamic OpenAI models, using fallback: {e}")
+                # Fallback to known models
+                available["openai"] = [
+                    "gpt-4o",
+                    "gpt-4o-mini", 
+                    "gpt-4-turbo",
+                    "gpt-3.5-turbo",
+                    "o1-preview",
+                    "o1-mini",
+                ]
 
         if self.openrouter_api_key:
             available["openrouter"] = [
