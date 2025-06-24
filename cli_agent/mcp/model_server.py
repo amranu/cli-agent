@@ -176,6 +176,18 @@ def create_model_server() -> FastMCP:
             "Warning: No models available. Check your API key configuration.",
             file=sys.stderr,
         )
+        print(
+            "Configure API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)",
+            file=sys.stderr,
+        )
+        return app
+
+    # Log which providers are available
+    provider_counts = {provider: len(models) for provider, models in available_models.items()}
+    print(
+        f"Exposing models from {len(available_models)} providers: {', '.join(f'{p} ({c})' for p, c in provider_counts.items())}",
+        file=sys.stderr,
+    )
 
     # Create tools for each available model
     total_tools = 0

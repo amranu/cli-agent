@@ -273,6 +273,8 @@ class GPTModel(ModelConfig):
             "gpt-4o": "gpt-4o-2024-08-06",
             "gpt-4o-mini": "gpt-4o-mini-2024-07-18",
             "gpt-3.5-turbo": "gpt-3.5-turbo-0125",
+            "o1-preview": "o1-preview",
+            "o1-mini": "o1-mini",
         }
 
         # Context length varies by model
@@ -282,15 +284,20 @@ class GPTModel(ModelConfig):
             "gpt-4o": 128000,
             "gpt-4o-mini": 128000,
             "gpt-3.5-turbo": 16385,
+            "o1-preview": 128000,
+            "o1-mini": 128000,
         }
 
+        # o1 models have different capabilities
+        is_o1_model = variant.startswith("o1-")
+        
         super().__init__(
             name=variant,
             provider_model_name=model_map.get(variant, variant),
             context_length=context_lengths.get(variant, 8192),
-            supports_tools=True,
-            supports_streaming=True,
-            temperature=0.7,
+            supports_tools=not is_o1_model,  # o1 models don't support tools
+            supports_streaming=not is_o1_model,  # o1 models don't support streaming
+            temperature=0.7 if not is_o1_model else 1.0,  # o1 models don't use temperature
             max_tokens=4000,
         )
 

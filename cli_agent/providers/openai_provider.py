@@ -53,6 +53,32 @@ class OpenAIProvider(BaseProvider):
     ) -> Any:
         """Make request to OpenAI API."""
 
+        # Check if this is an o1 model which has different parameter requirements
+        is_o1_model = model_name.startswith("o1-")
+        
+        # For o1 models, adjust parameter names and restrictions
+        if is_o1_model:
+            # Convert max_tokens to max_completion_tokens for o1 models
+            if "max_tokens" in model_params:
+                model_params["max_completion_tokens"] = model_params.pop("max_tokens")
+            
+            # o1 models don't support tools, temperature, or streaming
+            if tools:
+                logger.warning(f"o1 model {model_name} does not support tools, ignoring tool calls")
+                tools = None
+            
+            # Remove unsupported parameters for o1 models
+            unsupported_params = ["temperature", "top_p", "frequency_penalty", "presence_penalty"]
+            for param in unsupported_params:
+                if param in model_params:
+                    logger.debug(f"Removing unsupported parameter '{param}' for o1 model {model_name}")
+                    model_params.pop(param)
+            
+            # o1 models don't support streaming
+            if stream:
+                logger.warning(f"o1 model {model_name} does not support streaming, disabling")
+                stream = False
+
         request_params = {
             "model": model_name,
             "messages": messages,  # Already in OpenAI format
@@ -60,8 +86,8 @@ class OpenAIProvider(BaseProvider):
             **model_params,
         }
 
-        # Add tools if present
-        if tools:
+        # Add tools if present and supported
+        if tools and not is_o1_model:
             request_params["tools"] = tools
 
         logger.debug(
@@ -70,6 +96,13 @@ class OpenAIProvider(BaseProvider):
 
         try:
             response = await self.client.chat.completions.create(**request_params)
+            
+            # Add metadata to indicate actual streaming state for o1 models
+            if is_o1_model and stream and not request_params.get("stream", False):
+                # Mark that streaming was requested but disabled for o1 model
+                response._actual_streaming_disabled = True
+                response._requested_streaming = True
+            
             return response
         except Exception as e:
             logger.error(f"OpenAI API request failed: {e}")

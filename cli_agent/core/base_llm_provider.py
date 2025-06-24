@@ -42,19 +42,35 @@ class BaseLLMProvider(BaseMCPAgent):
 
         try:
             if stream:
-                if use_buffering:
-                    # Use buffering for streaming JSON mode
-                    return await self._handle_buffered_streaming_response(
-                        await self._make_api_request(messages, tools, stream=True),
-                        messages,
-                        interactive=interactive,
+                # Make API request with streaming requested
+                response = await self._make_api_request(messages, tools, stream=True)
+                
+                # Check if provider actually disabled streaming (e.g., for o1 models)
+                streaming_disabled = getattr(response, "_actual_streaming_disabled", False)
+                
+                if streaming_disabled:
+                    # Provider disabled streaming, handle as non-streaming response
+                    logger.info(f"Streaming was disabled by provider, handling as non-streaming response")
+                    result = await self._handle_complete_response_generic(
+                        response, messages, interactive=interactive
                     )
+                    logger.info(f"Handled non-streaming response result: {result}")
+                    return result
                 else:
-                    return self._handle_streaming_response_generic(
-                        await self._make_api_request(messages, tools, stream=True),
-                        messages,
-                        interactive=interactive,
-                    )
+                    # Normal streaming response
+                    if use_buffering:
+                        # Use buffering for streaming JSON mode
+                        return await self._handle_buffered_streaming_response(
+                            response,
+                            messages,
+                            interactive=interactive,
+                        )
+                    else:
+                        return self._handle_streaming_response_generic(
+                            response,
+                            messages,
+                            interactive=interactive,
+                        )
             else:
                 # Non-streaming response
                 response = await self._make_api_request(messages, tools, stream=False)
@@ -72,6 +88,17 @@ class BaseLLMProvider(BaseMCPAgent):
 
             logger.error(f"Error in generate completion: {e}")
             return f"Error: {str(e)}"
+
+    async def _handle_complete_response_generic(
+        self,
+        response: Any,
+        original_messages: List[Dict[str, str]] = None,
+        interactive: bool = True,
+    ) -> Any:
+        """Handle complete response - centralized implementation."""
+        return await self.response_handler.handle_complete_response_generic(
+            response, original_messages, interactive
+        )
 
     async def _handle_buffered_streaming_response(
         self,
