@@ -193,9 +193,8 @@ class ClaudeModel(ModelConfig):
             role = msg["role"]
             content = msg["content"]
 
-            # Skip system messages (handled separately)
-            if role == "system":
-                continue
+            # Keep system messages for provider to extract (don't skip them)
+            # The Anthropic provider will extract system messages and use them as the system parameter
 
             # Ensure alternating pattern
             if role == last_role:

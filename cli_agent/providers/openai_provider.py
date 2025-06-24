@@ -166,10 +166,9 @@ class OpenAIProvider(BaseProvider):
         if tools and not is_o1_model:
             request_params["tools"] = tools
 
-        logger.info(
+        logger.debug(
             f"OpenAI API request: model={model_name}, {len(messages)} messages, tools={len(tools) if tools else 0}"
         )
-        logger.info(f"Full request params: {request_params}")
 
         try:
             response = await self.client.chat.completions.create(**request_params)

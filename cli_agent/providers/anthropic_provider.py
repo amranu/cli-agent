@@ -54,6 +54,12 @@ class AnthropicProvider(BaseProvider):
         # Convert messages to Anthropic format
         anthropic_messages = self._convert_messages_to_anthropic(messages)
 
+        # Validate that we have messages after conversion
+        if not anthropic_messages:
+            raise ValueError(
+                "No valid messages after filtering system messages for Anthropic API"
+            )
+
         # Extract system message if present
         system_content = self._extract_system_content(messages)
 
@@ -103,6 +109,18 @@ class AnthropicProvider(BaseProvider):
                 return response.json()
 
         except Exception as e:
+            # Log detailed error information for billing/quota issues
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    error_details = e.response.json()
+                    if "credit balance" in str(error_details).lower():
+                        logger.error(
+                            f"Anthropic API billing issue: {error_details.get('error', {}).get('message', 'Unknown billing error')}"
+                        )
+                    else:
+                        logger.debug(f"Anthropic API error details: {error_details}")
+                except:
+                    pass
             logger.error(f"Anthropic API request failed: {e}")
             raise
 
@@ -316,11 +334,28 @@ class AnthropicProvider(BaseProvider):
             if role == "system":
                 continue
 
+            # Handle tool results - convert to user message with tool result content
+            if role == "tool":
+                tool_call_id = msg.get("tool_call_id", "")
+                tool_name = msg.get("name", "unknown_tool")
+
+                # Ensure content is a string and handle potential encoding issues
+                if content is None:
+                    content = ""
+                content_str = str(content)
+
+                # Format tool result as user message for Anthropic
+                formatted_content = f"Tool result for {tool_name} (call_id: {tool_call_id}):\n{content_str}"
+                anthropic_messages.append(
+                    {"role": "user", "content": formatted_content}
+                )
+                continue
+
             # Convert role names
             if role == "assistant":
                 anthropic_role = "assistant"
             else:
-                anthropic_role = "user"  # user, tool results, etc.
+                anthropic_role = "user"  # user and other message types
 
             anthropic_messages.append({"role": anthropic_role, "content": content})
 

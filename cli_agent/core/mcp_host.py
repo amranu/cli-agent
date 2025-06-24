@@ -325,6 +325,11 @@ class MCPHost(BaseLLMProvider):
                 enhanced_messages = [
                     {"role": "system", "content": system_prompt}
                 ] + messages
+            elif system_style == "parameter":
+                # Add as system message for provider to extract and use as system parameter
+                enhanced_messages = [
+                    {"role": "system", "content": system_prompt}
+                ] + messages
             elif system_style == "prepend":
                 # Prepend to first user message (for models that don't support system messages)
                 if enhanced_messages and enhanced_messages[0].get("role") == "user":
@@ -335,7 +340,6 @@ class MCPHost(BaseLLMProvider):
             elif system_style == "none":
                 # Skip system prompt entirely (e.g., for o1 models that don't work well with instructions)
                 pass
-            # For "parameter" style (Anthropic), system prompt is handled in the API request
 
         return enhanced_messages
 

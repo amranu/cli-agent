@@ -270,7 +270,8 @@ async def chat(
             click.echo(f"Started new session: {session_id[:8]}...")
 
         # Initialize todo file for this session
-        import os, json
+        import json
+        import os
 
         todo_dir = os.path.expanduser("~/.config/agent")
         os.makedirs(todo_dir, exist_ok=True)
@@ -375,8 +376,6 @@ async def ask(
         # Create host using helper function
         try:
             host = create_host(config)
-            # Set session ID on host for session-specific todo files
-            host._session_id = session_id
         except Exception as e:
             click.echo(f"Error creating host: {e}")
             return
