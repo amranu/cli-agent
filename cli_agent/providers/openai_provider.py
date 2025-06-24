@@ -55,6 +55,7 @@ class OpenAIProvider(BaseProvider):
 
         # Check if this is an o1 model which has different parameter requirements
         is_o1_model = model_name.startswith("o1-")
+        logger.info(f"OpenAI make_request: model={model_name}, is_o1_model={is_o1_model}, stream={stream}")
         
         # For o1 models, adjust parameter names and restrictions
         if is_o1_model:
@@ -100,8 +101,23 @@ class OpenAIProvider(BaseProvider):
             # Add metadata to indicate actual streaming state for o1 models
             if is_o1_model and stream and not request_params.get("stream", False):
                 # Mark that streaming was requested but disabled for o1 model
-                response._actual_streaming_disabled = True
-                response._requested_streaming = True
+                # Use a wrapper class to add metadata
+                class ResponseWrapper:
+                    def __init__(self, response):
+                        self._response = response
+                        self._actual_streaming_disabled = True
+                        self._requested_streaming = True
+                    
+                    def __getattr__(self, name):
+                        return getattr(self._response, name)
+                    
+                    def __setattr__(self, name, value):
+                        if name.startswith('_'):
+                            super().__setattr__(name, value)
+                        else:
+                            setattr(self._response, name, value)
+                
+                return ResponseWrapper(response)
             
             return response
         except Exception as e:

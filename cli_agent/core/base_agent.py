@@ -974,15 +974,22 @@ class BaseMCPAgent(ABC):
 
         # Use provided stream parameter, or fall back to instance/default behavior
         # Subagents should not stream to avoid generator issues
+        # Also check if the model supports streaming (e.g., o1 models don't)
+        model_supports_streaming = True
+        if hasattr(self, "model") and hasattr(self.model, "supports_streaming"):
+            model_supports_streaming = self.model.supports_streaming
+        
         if stream is not None:
-            # Use explicitly provided stream parameter
-            use_stream = stream and not self.is_subagent
+            # Use explicitly provided stream parameter, but respect model limitations
+            use_stream = stream and not self.is_subagent and model_supports_streaming
         else:
-            # Fall back to instance attribute or default
-            use_stream = getattr(self, "stream", True) and not self.is_subagent
+            # Fall back to instance attribute or default, but respect model limitations
+            use_stream = getattr(self, "stream", True) and not self.is_subagent and model_supports_streaming
 
         # Store the modify_messages_in_place flag for use by implementations
         self._modify_messages_in_place = modify_messages_in_place
+
+        logger.info(f"generate_response: model_supports_streaming={model_supports_streaming}, use_stream={use_stream}")
 
         # Call the concrete implementation's _generate_completion method
         tools_list = (

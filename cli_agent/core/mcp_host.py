@@ -177,8 +177,11 @@ class MCPHost(BaseLLMProvider):
         stream: bool = True,
     ) -> Any:
         """Make an API request to the provider."""
-        # Format messages for the specific model
-        formatted_messages = self.model.format_messages_for_model(messages)
+        # First enhance messages with system prompts and model-specific formatting
+        enhanced_messages = self._enhance_messages_for_model(messages)
+        
+        # Then format messages for the specific model
+        formatted_messages = self.model.format_messages_for_model(enhanced_messages)
 
         # Get model parameters and validate them
         model_params = self.model.get_default_parameters()
@@ -315,12 +318,15 @@ class MCPHost(BaseLLMProvider):
                     {"role": "system", "content": system_prompt}
                 ] + messages
             elif system_style == "prepend":
-                # Prepend to first user message
+                # Prepend to first user message (for models that don't support system messages)
                 if enhanced_messages and enhanced_messages[0].get("role") == "user":
                     user_content = enhanced_messages[0]["content"]
                     enhanced_messages[0][
                         "content"
                     ] = f"{system_prompt}\n\n---\n\nUser: {user_content}"
+            elif system_style == "none":
+                # Skip system prompt entirely (e.g., for o1 models that don't work well with instructions)
+                pass
             # For "parameter" style (Anthropic), system prompt is handled in the API request
 
         return enhanced_messages

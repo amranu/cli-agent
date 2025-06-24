@@ -47,6 +47,7 @@ class BaseLLMProvider(BaseMCPAgent):
                 
                 # Check if provider actually disabled streaming (e.g., for o1 models)
                 streaming_disabled = getattr(response, "_actual_streaming_disabled", False)
+                logger.info(f"Response type: {type(response)}, streaming_disabled: {streaming_disabled}")
                 
                 if streaming_disabled:
                     # Provider disabled streaming, handle as non-streaming response

@@ -309,7 +309,10 @@ class GPTModel(ModelConfig):
         return "openai"
 
     def get_system_prompt_style(self) -> str:
-        return "message"  # GPT uses system messages
+        # o1 models don't support system messages and work better without explicit instructions
+        if self.name.startswith("o1-"):
+            return "none"
+        return "message"  # Regular GPT models use system messages
 
     def format_messages_for_model(
         self, messages: List[Dict[str, Any]]
