@@ -198,6 +198,28 @@ class BuiltinToolExecutor:
             return "Error: No file path provided"
         if not old_text:
             return "Error: No old text to replace provided"
+            
+        # Validate spacing patterns to help detect model issues
+        warnings = []
+        
+        # Check for leading/trailing whitespace that might be lost
+        if old_text != old_text.strip():
+            if old_text.startswith(' ') or old_text.startswith('\t'):
+                warnings.append("old_text has leading whitespace")
+            if old_text.endswith(' ') or old_text.endswith('\t'):
+                warnings.append("old_text has trailing whitespace")
+        
+        if new_text != new_text.strip():
+            if new_text.startswith(' ') or new_text.startswith('\t'):
+                warnings.append("new_text has leading whitespace")
+            if new_text.endswith(' ') or new_text.endswith('\t'):
+                warnings.append("new_text has trailing whitespace")
+        
+        # Log warnings for debugging
+        if warnings:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"replace_in_file whitespace check: {', '.join(warnings)}")
 
         try:
             # Read the file
@@ -206,7 +228,24 @@ class BuiltinToolExecutor:
 
             # Check if old text exists
             if old_text not in content:
-                return f"Error: Text to replace not found in {file_path}"
+                # Provide helpful debugging for spacing issues
+                lines = content.split('\n')
+                old_lines = old_text.split('\n')
+                
+                # Check if text exists but with different whitespace
+                stripped_old = old_text.strip()
+                if stripped_old and stripped_old in content:
+                    return f"Error: Text found but whitespace doesn't match in {file_path}. Check for exact indentation, tabs vs spaces, and trailing whitespace. Use read_file to see exact formatting."
+                
+                # Check if first line of old_text exists (might be partial match)
+                if old_lines and old_lines[0].strip():
+                    first_line_stripped = old_lines[0].strip()
+                    matching_lines = [i for i, line in enumerate(lines) if first_line_stripped in line]
+                    if matching_lines:
+                        hint_lines = matching_lines[:3]  # Show first 3 matches
+                        return f"Error: Text to replace not found in {file_path}. Found similar text on line(s) {hint_lines} - check exact whitespace and indentation."
+                
+                return f"Error: Text to replace not found in {file_path}. Ensure you copy the exact text including all whitespace from read_file output."
 
             # Replace the text
             new_content = content.replace(old_text, new_text)

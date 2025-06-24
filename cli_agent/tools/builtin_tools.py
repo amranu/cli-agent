@@ -164,15 +164,15 @@ def get_replace_in_file_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "replace_in_file",
-        "description": "Performs exact string replacements in files. You must use your read_file tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file. When editing text from read_file tool output, ensure you preserve the exact indentation. ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.",
+        "description": "Performs exact string replacements in files. You must use your read_file tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file. CRITICAL: When editing text from read_file tool output, you MUST preserve the EXACT indentation, spacing, and whitespace characters (spaces, tabs, newlines) as they appear in the original file. Copy the text exactly including all leading/trailing whitespace. ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.",
         "schema": {
             "type": "object",
             "properties": {
                 "file_path": {"type": "string", "description": "Path to the file"},
-                "old_text": {"type": "string", "description": "Text to replace"},
+                "old_text": {"type": "string", "description": "Exact text to replace - MUST preserve all whitespace, indentation, tabs, and spacing exactly as shown in read_file output"},
                 "new_text": {
-                    "type": "string",
-                    "description": "New text to replace with",
+                    "type": "string", 
+                    "description": "New text to replace with - MUST preserve exact indentation and spacing to match surrounding code",
                 },
             },
             "required": ["file_path", "old_text", "new_text"],

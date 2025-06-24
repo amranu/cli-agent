@@ -215,6 +215,13 @@ class ResponseHandler:
                             import json
 
                             tool_args = json.loads(tool_args)
+                        
+                        # Debug log for replace_in_file spacing issues
+                        if tool_name == "replace_in_file" and isinstance(tool_args, dict):
+                            old_text = tool_args.get("old_text", "")
+                            new_text = tool_args.get("new_text", "")
+                            if old_text or new_text:
+                                logger.debug(f"replace_in_file args - old_text: {repr(old_text)}, new_text: {repr(new_text)}")
 
                         # Execute the tool - map builtin tools correctly
                         builtin_tools = [
