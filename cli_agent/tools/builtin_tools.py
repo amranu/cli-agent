@@ -169,9 +169,12 @@ def get_replace_in_file_tool() -> Dict[str, Any]:
             "type": "object",
             "properties": {
                 "file_path": {"type": "string", "description": "Path to the file"},
-                "old_text": {"type": "string", "description": "Exact text to replace - MUST preserve all whitespace, indentation, tabs, and spacing exactly as shown in read_file output"},
+                "old_text": {
+                    "type": "string",
+                    "description": "Exact text to replace - MUST preserve all whitespace, indentation, tabs, and spacing exactly as shown in read_file output",
+                },
                 "new_text": {
-                    "type": "string", 
+                    "type": "string",
                     "description": "New text to replace with - MUST preserve exact indentation and spacing to match surrounding code",
                 },
             },

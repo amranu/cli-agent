@@ -173,7 +173,10 @@ class ResponseHandler:
                         # Check for global interrupt before each tool execution
                         if self.global_interrupt_manager.is_interrupted():
                             if interactive:
-                                print("\n🛑 Tool execution interrupted by user", flush=True)
+                                print(
+                                    "\n🛑 Tool execution interrupted by user",
+                                    flush=True,
+                                )
                             break
 
                         # Also check input handler for additional interrupt detection
@@ -184,7 +187,10 @@ class ResponseHandler:
                             # Check for pending interrupts (ESC/Ctrl+C)
                             if self.agent._input_handler.check_for_interrupt():
                                 if interactive:
-                                    print("\n🛑 Tool execution interrupted by user", flush=True)
+                                    print(
+                                        "\n🛑 Tool execution interrupted by user",
+                                        flush=True,
+                                    )
                                 break
 
                         tool_name = getattr(
@@ -215,13 +221,17 @@ class ResponseHandler:
                             import json
 
                             tool_args = json.loads(tool_args)
-                        
+
                         # Debug log for replace_in_file spacing issues
-                        if tool_name == "replace_in_file" and isinstance(tool_args, dict):
+                        if tool_name == "replace_in_file" and isinstance(
+                            tool_args, dict
+                        ):
                             old_text = tool_args.get("old_text", "")
                             new_text = tool_args.get("new_text", "")
                             if old_text or new_text:
-                                logger.debug(f"replace_in_file args - old_text: {repr(old_text)}, new_text: {repr(new_text)}")
+                                logger.debug(
+                                    f"replace_in_file args - old_text: {repr(old_text)}, new_text: {repr(new_text)}"
+                                )
 
                         # Execute the tool - map builtin tools correctly
                         builtin_tools = [
@@ -313,7 +323,10 @@ class ResponseHandler:
                     and self.agent.subagent_manager.get_active_count() > 0
                 ):
                     if interactive:
-                        print(f"\n\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n", flush=True)
+                        print(
+                            f"\n\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n",
+                            flush=True,
+                        )
 
                     # Wait for all subagents to complete and collect results
                     subagent_results = (
@@ -322,7 +335,10 @@ class ResponseHandler:
 
                     if subagent_results:
                         if interactive:
-                            print(f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n", flush=True)
+                            print(
+                                f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n",
+                                flush=True,
+                            )
 
                         # Create continuation message with subagent results
                         original_request = (
@@ -336,7 +352,10 @@ class ResponseHandler:
 
                         # Restart conversation with subagent results instead of continuing
                         if interactive:
-                            print(f"\n🔄 Restarting conversation with subagent results...\n", flush=True)
+                            print(
+                                f"\n🔄 Restarting conversation with subagent results...\n",
+                                flush=True,
+                            )
 
                         restart_response = await self.agent.generate_response(
                             [continuation_message], stream=True
@@ -350,7 +369,10 @@ class ResponseHandler:
                         return  # Exit - don't continue with original tool results
                     else:
                         if interactive:
-                            print(f"\n⚠️ No results collected from subagents.\n", flush=True)
+                            print(
+                                f"\n⚠️ No results collected from subagents.\n",
+                                flush=True,
+                            )
                         return
 
                 # Generate follow-up response with tool results (only if no subagents were spawned)

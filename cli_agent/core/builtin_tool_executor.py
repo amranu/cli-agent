@@ -156,8 +156,11 @@ class BuiltinToolExecutor:
 
         # Debug logging to track session ID usage
         import logging
+
         logger = logging.getLogger(__name__)
-        logger.info(f"Todo file path: session_id='{session_id}', file=todos_{session_id}.json")
+        logger.info(
+            f"Todo file path: session_id='{session_id}', file=todos_{session_id}.json"
+        )
 
         return str(config_dir / f"todos_{session_id}.json")
 
@@ -166,19 +169,24 @@ class BuiltinToolExecutor:
         # Debug info to help track down the session issue
         session_id = getattr(self.agent, "_session_id", "NOT_SET")
         import logging
+
         logger = logging.getLogger(__name__)
         logger.info(f"todo_read called: agent._session_id = '{session_id}'")
-        
+
         todo_file = self._get_todo_file_path()
 
         try:
             if not os.path.exists(todo_file):
-                logger.info(f"Todo file doesn't exist: {todo_file}, returning empty list")
+                logger.info(
+                    f"Todo file doesn't exist: {todo_file}, returning empty list"
+                )
                 return "[]"  # Empty todo list
 
             with open(todo_file, "r", encoding="utf-8") as f:
                 content = f.read()
-                logger.info(f"Read todo file: {todo_file}, content length: {len(content)}")
+                logger.info(
+                    f"Read todo file: {todo_file}, content length: {len(content)}"
+                )
                 return content
 
         except Exception as e:
@@ -211,26 +219,27 @@ class BuiltinToolExecutor:
             return "Error: No file path provided"
         if not old_text:
             return "Error: No old text to replace provided"
-            
+
         # Validate spacing patterns to help detect model issues
         warnings = []
-        
+
         # Check for leading/trailing whitespace that might be lost
         if old_text != old_text.strip():
-            if old_text.startswith(' ') or old_text.startswith('\t'):
+            if old_text.startswith(" ") or old_text.startswith("\t"):
                 warnings.append("old_text has leading whitespace")
-            if old_text.endswith(' ') or old_text.endswith('\t'):
+            if old_text.endswith(" ") or old_text.endswith("\t"):
                 warnings.append("old_text has trailing whitespace")
-        
+
         if new_text != new_text.strip():
-            if new_text.startswith(' ') or new_text.startswith('\t'):
+            if new_text.startswith(" ") or new_text.startswith("\t"):
                 warnings.append("new_text has leading whitespace")
-            if new_text.endswith(' ') or new_text.endswith('\t'):
+            if new_text.endswith(" ") or new_text.endswith("\t"):
                 warnings.append("new_text has trailing whitespace")
-        
+
         # Log warnings for debugging
         if warnings:
             import logging
+
             logger = logging.getLogger(__name__)
             logger.info(f"replace_in_file whitespace check: {', '.join(warnings)}")
 
@@ -242,22 +251,24 @@ class BuiltinToolExecutor:
             # Check if old text exists
             if old_text not in content:
                 # Provide helpful debugging for spacing issues
-                lines = content.split('\n')
-                old_lines = old_text.split('\n')
-                
+                lines = content.split("\n")
+                old_lines = old_text.split("\n")
+
                 # Check if text exists but with different whitespace
                 stripped_old = old_text.strip()
                 if stripped_old and stripped_old in content:
                     return f"Error: Text found but whitespace doesn't match in {file_path}. Check for exact indentation, tabs vs spaces, and trailing whitespace. Use read_file to see exact formatting."
-                
+
                 # Check if first line of old_text exists (might be partial match)
                 if old_lines and old_lines[0].strip():
                     first_line_stripped = old_lines[0].strip()
-                    matching_lines = [i for i, line in enumerate(lines) if first_line_stripped in line]
+                    matching_lines = [
+                        i for i, line in enumerate(lines) if first_line_stripped in line
+                    ]
                     if matching_lines:
                         hint_lines = matching_lines[:3]  # Show first 3 matches
                         return f"Error: Text to replace not found in {file_path}. Found similar text on line(s) {hint_lines} - check exact whitespace and indentation."
-                
+
                 return f"Error: Text to replace not found in {file_path}. Ensure you copy the exact text including all whitespace from read_file output."
 
             # Replace the text

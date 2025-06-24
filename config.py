@@ -422,13 +422,16 @@ class HostConfig(BaseSettings):
         """
         current_time = time.time()
         cache_key = "provider_models"
-        
+
         # Check if we have a valid cached result
-        if (cache_key in self._model_cache and 
-            current_time - self._model_cache[cache_key].get("timestamp", 0) < self._cache_ttl):
+        if (
+            cache_key in self._model_cache
+            and current_time - self._model_cache[cache_key].get("timestamp", 0)
+            < self._cache_ttl
+        ):
             logger.debug("Using cached provider models")
             return self._model_cache[cache_key]["data"]
-        
+
         logger.debug("Fetching fresh provider models")
         available = {}
 
@@ -444,10 +447,14 @@ class HostConfig(BaseSettings):
         if self.openai_api_key:
             # Try to get dynamic model list from OpenAI API with caching
             openai_cache_key = f"openai_models_{hash(self.openai_api_key)}"
-            
+
             # Check OpenAI-specific cache first
-            if (openai_cache_key in self._model_cache and 
-                current_time - self._model_cache[openai_cache_key].get("timestamp", 0) < self._cache_ttl):
+            if (
+                openai_cache_key in self._model_cache
+                and current_time
+                - self._model_cache[openai_cache_key].get("timestamp", 0)
+                < self._cache_ttl
+            ):
                 available["openai"] = self._model_cache[openai_cache_key]["data"]
                 logger.debug("Using cached OpenAI models")
             else:
@@ -492,7 +499,7 @@ class HostConfig(BaseSettings):
                         # Cache the OpenAI models separately
                         self._model_cache[openai_cache_key] = {
                             "data": models,
-                            "timestamp": current_time
+                            "timestamp": current_time,
                         }
                         logger.info(
                             f"Successfully fetched and cached {len(models)} OpenAI models dynamically"
@@ -506,7 +513,7 @@ class HostConfig(BaseSettings):
                         "gpt-4",
                         "gpt-3.5-turbo",
                         "o1-preview",
-                        "o1-mini"
+                        "o1-mini",
                     ]
                     available["openai"] = fallback_models
                     logger.info(f"Using fallback OpenAI models: {fallback_models}")
@@ -532,11 +539,8 @@ class HostConfig(BaseSettings):
             ]
 
         # Cache the complete result
-        self._model_cache[cache_key] = {
-            "data": available,
-            "timestamp": current_time
-        }
-        
+        self._model_cache[cache_key] = {"data": available, "timestamp": current_time}
+
         return available
 
     def clear_model_cache(self):

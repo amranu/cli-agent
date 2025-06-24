@@ -271,6 +271,7 @@ async def chat(
 
         # Initialize todo file for this session
         import os, json
+
         todo_dir = os.path.expanduser("~/.config/agent")
         os.makedirs(todo_dir, exist_ok=True)
         todo_file = os.path.join(todo_dir, f"todos_{session_id}.json")
@@ -299,6 +300,7 @@ async def chat(
                 server,
                 session_manager,
                 messages,
+                session_id,
                 parsed_allowed_tools,
                 parsed_disallowed_tools,
                 auto_approve_tools,
@@ -1033,6 +1035,7 @@ async def handle_text_chat(
     server,
     session_manager,
     messages,
+    session_id,
     allowed_tools=None,
     disallowed_tools=None,
     auto_approve_tools=False,
@@ -1044,6 +1047,8 @@ async def handle_text_chat(
     # Create host using helper function
     try:
         host = create_host(config)
+        # Set session ID on host for session-specific todo files
+        host._session_id = session_id
         provider_name, model_name = config.parse_provider_model_string(
             config.default_provider_model
         )

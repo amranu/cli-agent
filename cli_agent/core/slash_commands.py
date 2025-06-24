@@ -706,14 +706,14 @@ Please start by reading the key files to understand the architecture, then write
 
             config = load_config()
             config.clear_model_cache()
-            
+
             # Fetch fresh models to populate cache
             available_models = config.get_available_provider_models()
-            
+
             total_models = sum(len(models) for models in available_models.values())
             providers = list(available_models.keys())
-            
+
             return f"✅ Model cache cleared and refreshed!\n📋 Found {total_models} models across {len(providers)} providers: {', '.join(providers)}"
-            
+
         except Exception as e:
             return f"❌ Failed to refresh models: {str(e)}"
