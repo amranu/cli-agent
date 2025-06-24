@@ -261,14 +261,13 @@ Tool usage: When users ask you to do something that requires action, use the app
 class GPTModel(ModelConfig):
     """GPT model configuration."""
 
-    def __init__(self, variant: str = "gpt-4"):
+    def __init__(self, variant: str = "gpt-4o"):
         """Initialize GPT model configuration.
 
         Args:
-            variant: GPT model variant (gpt-4, gpt-4-turbo, gpt-3.5-turbo, etc.)
+            variant: GPT model variant (gpt-4-turbo, gpt-4o, gpt-4.1, gpt-3.5-turbo, etc.)
         """
         model_map = {
-            "gpt-4": "gpt-4-0613",
             "gpt-4-turbo": "gpt-4-turbo-2024-04-09",
             "gpt-4o": "gpt-4o-2024-08-06",
             "gpt-4o-mini": "gpt-4o-mini-2024-07-18",
@@ -282,7 +281,6 @@ class GPTModel(ModelConfig):
 
         # Context length varies by model
         context_lengths = {
-            "gpt-4": 8192,
             "gpt-4-turbo": 128000,
             "gpt-4o": 128000,
             "gpt-4o-mini": 128000,
@@ -300,7 +298,7 @@ class GPTModel(ModelConfig):
         super().__init__(
             name=variant,
             provider_model_name=model_map.get(variant, variant),
-            context_length=context_lengths.get(variant, 8192),
+            context_length=context_lengths.get(variant, 128000),
             supports_tools=not is_o1_model,  # o1 models don't support tools
             supports_streaming=not is_o1_model,  # o1 models don't support streaming
             temperature=0.7 if not is_o1_model else 1.0,  # o1 models don't use temperature
