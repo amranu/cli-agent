@@ -382,15 +382,8 @@ class HostConfig(BaseSettings):
             else:
                 model = ClaudeModel(variant="claude-3.5-sonnet")  # Default
         elif "gpt" in model_name or "o1" in model_name:
-            # For GPT, extract variant
-            if "gpt-4" in model_name:
-                model = GPTModel(variant="gpt-4")
-            elif "gpt-3.5" in model_name:
-                model = GPTModel(variant="gpt-3.5-turbo")
-            elif "o1" in model_name:
-                model = GPTModel(variant="o1-preview")
-            else:
-                model = GPTModel(variant="gpt-4")  # Default
+            # For GPT, use the full model name as variant to support dynamic models
+            model = GPTModel(variant=pm_config.model_name)
         elif "gemini" in model_name:
             # For Gemini, extract variant
             if "2.5-flash" in model_name:
@@ -443,33 +436,36 @@ class HostConfig(BaseSettings):
                 from cli_agent.providers.openai_provider import OpenAIProvider
                 import asyncio
                 
-                provider = OpenAIProvider(api_key=self.openai_api_key)
-                
+                # Use static method to avoid client lifecycle issues
                 # Check if we're already in an event loop
                 try:
                     loop = asyncio.get_running_loop()
                     # We're in an async context, create a new thread to run the async call
                     import concurrent.futures
-                    import threading
                     
                     def run_in_thread():
                         new_loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(new_loop)
                         try:
-                            return new_loop.run_until_complete(provider.get_available_models())
+                            return new_loop.run_until_complete(
+                                OpenAIProvider.fetch_available_models_static(self.openai_api_key)
+                            )
                         finally:
                             new_loop.close()
                     
                     with concurrent.futures.ThreadPoolExecutor() as executor:
                         future = executor.submit(run_in_thread)
-                        models = future.result(timeout=10)  # 10 second timeout
+                        models = future.result(timeout=15)  # 15 second timeout
                         
                 except RuntimeError:
                     # No event loop running, we can use asyncio.run
-                    models = asyncio.run(provider.get_available_models())
+                    models = asyncio.run(
+                        OpenAIProvider.fetch_available_models_static(self.openai_api_key)
+                    )
                 
-                available["openai"] = models
-                logger.info(f"Successfully fetched {len(models)} OpenAI models dynamically")
+                if models:  # Only add if we got models
+                    available["openai"] = models
+                    logger.info(f"Successfully fetched {len(models)} OpenAI models dynamically")
                 
             except Exception as e:
                 logger.warning(f"Failed to get dynamic OpenAI models: {e}")
