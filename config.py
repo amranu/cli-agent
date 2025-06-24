@@ -444,18 +444,33 @@ class HostConfig(BaseSettings):
                 import asyncio
                 
                 provider = OpenAIProvider(api_key=self.openai_api_key)
-                # Get models synchronously
-                if hasattr(asyncio, 'run'):
+                
+                # Check if we're already in an event loop
+                try:
+                    loop = asyncio.get_running_loop()
+                    # We're in an async context, create a new thread to run the async call
+                    import concurrent.futures
+                    import threading
+                    
+                    def run_in_thread():
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        try:
+                            return new_loop.run_until_complete(provider.get_available_models())
+                        finally:
+                            new_loop.close()
+                    
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(run_in_thread)
+                        models = future.result(timeout=10)  # 10 second timeout
+                        
+                except RuntimeError:
+                    # No event loop running, we can use asyncio.run
                     models = asyncio.run(provider.get_available_models())
-                else:
-                    # Fallback for older Python versions
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        models = loop.run_until_complete(provider.get_available_models())
-                    finally:
-                        loop.close()
+                
                 available["openai"] = models
+                logger.info(f"Successfully fetched {len(models)} OpenAI models dynamically")
+                
             except Exception as e:
                 logger.warning(f"Failed to get dynamic OpenAI models, using fallback: {e}")
                 # Fallback to known models
