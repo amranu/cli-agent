@@ -128,8 +128,7 @@ class FormattingUtils:
             return
 
         status = "✅" if success else "❌"
-        result_preview = result[:200] + "..." if len(result) > 200 else result
-        print(f"\n{status} {tool_name}: {result_preview}", flush=True)
+        print(f"\n{status} {tool_name}: {result}", flush=True)
 
     def display_tool_processing(self, message: str, interactive: bool = True):
         """Display tool processing status."""

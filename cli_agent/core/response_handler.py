@@ -223,7 +223,7 @@ class ResponseHandler:
                         )
 
                         if interactive:
-                            yield f"\n✅ {tool_name}: {result[:100]}{'...' if len(result) > 100 else ''}"
+                            yield f"\n✅ {tool_name}: {result}"
 
                         # Add tool result to conversation
                         current_messages.append(

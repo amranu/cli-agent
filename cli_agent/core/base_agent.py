@@ -1740,10 +1740,9 @@ class BaseMCPAgent(ABC):
                     args = tc["function"]["arguments"]
                     if isinstance(args, str):
                         args = json.loads(args)
-                    args_preview = (
-                        str(args)[:100] + "..." if len(str(args)) > 100 else str(args)
-                    )
-                    print(f"   {i}. {tool_name} - {args_preview}", flush=True)
+                    # Show full arguments instead of truncating
+                    print(f"   {i}. {tool_name}")
+                    print(f"      Parameters: {json.dumps(args, indent=6)}", flush=True)
                 except Exception:
                     print(f"   {i}. {tool_name}", flush=True)
 

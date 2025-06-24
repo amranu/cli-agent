@@ -102,7 +102,7 @@ class ToolExecutionEngine:
 
             # Check if it's a built-in tool
             if tool_info["server"] == "builtin":
-                logger.info(f"Executing built-in tool: {tool_name}")
+                logger.info(f"Executing built-in tool: {tool_name} with arguments: {arguments}")
                 return await self.agent._execute_builtin_tool(tool_name, arguments)
 
             # Handle external MCP tools with FastMCP
@@ -110,7 +110,7 @@ class ToolExecutionEngine:
             if client is None:
                 return f"Error: No client session for tool {tool_key}"
 
-            logger.info(f"Executing MCP tool: {tool_name}")
+            logger.info(f"Executing MCP tool: {tool_name} with arguments: {arguments}")
             result = await client.call_tool(tool_name, arguments)
 
             # Format the result for FastMCP

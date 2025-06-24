@@ -287,11 +287,8 @@ class ResponseFormatter:
         else:
             prefix = "✅ [SUBAGENT] Result:" if is_subagent else "✅ Result:"
 
-        # Truncate long results for display
-        if len(result) > 200:
-            result_preview = result[:200] + "..."
-        else:
-            result_preview = result
+        # Don't truncate results - show full content
+        result_preview = result
 
         # Handle multi-line results properly with newlines and carriage returns
         if "\n" in result_preview:

@@ -1,11 +1,14 @@
 """MCP Model Server implementation.
 
 Exposes all available AI models as MCP tools for standardized access.
+Supports persistent conversations with each model.
 """
 
 import asyncio
 import re
 import sys
+import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 try:
@@ -18,6 +21,103 @@ except ImportError:
     FastMCP = None
 
 from config import load_config
+
+
+class ConversationManager:
+    """Manages persistent conversations for each model."""
+
+    def __init__(self):
+        """Initialize conversation storage."""
+        self.conversations: Dict[str, Dict[str, Any]] = {}
+
+    def create_conversation(self, model_key: str, conversation_id: str = None) -> str:
+        """Create a new conversation for a model.
+
+        Args:
+            model_key: The model identifier (e.g., "anthropic_claude_3_5_sonnet")
+            conversation_id: Optional specific conversation ID
+
+        Returns:
+            The conversation ID
+        """
+        if conversation_id is None:
+            conversation_id = str(uuid.uuid4())[:8]
+
+        self.conversations[conversation_id] = {
+            "id": conversation_id,
+            "model_key": model_key,
+            "messages": [],
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+        }
+
+        return conversation_id
+
+    def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """Get a conversation by ID."""
+        return self.conversations.get(conversation_id)
+
+    def add_message(self, conversation_id: str, role: str, content: str):
+        """Add a message to a conversation."""
+        if conversation_id in self.conversations:
+            self.conversations[conversation_id]["messages"].append(
+                {
+                    "role": role,
+                    "content": content,
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
+            self.conversations[conversation_id][
+                "updated_at"
+            ] = datetime.now().isoformat()
+
+    def get_messages(self, conversation_id: str) -> List[Dict[str, Any]]:
+        """Get messages from a conversation."""
+        if conversation_id in self.conversations:
+            # Return messages in format expected by models (without timestamp)
+            return [
+                {"role": msg["role"], "content": msg["content"]}
+                for msg in self.conversations[conversation_id]["messages"]
+            ]
+        return []
+
+    def clear_conversation(self, conversation_id: str) -> bool:
+        """Clear messages from a conversation."""
+        if conversation_id in self.conversations:
+            self.conversations[conversation_id]["messages"] = []
+            self.conversations[conversation_id][
+                "updated_at"
+            ] = datetime.now().isoformat()
+            return True
+        return False
+
+    def list_conversations(self, model_key: str = None) -> List[Dict[str, Any]]:
+        """List conversations, optionally filtered by model."""
+        conversations = []
+        for conv_id, conv_data in self.conversations.items():
+            if model_key is None or conv_data["model_key"] == model_key:
+                conversations.append(
+                    {
+                        "id": conv_id,
+                        "model_key": conv_data["model_key"],
+                        "message_count": len(conv_data["messages"]),
+                        "created_at": conv_data["created_at"],
+                        "updated_at": conv_data["updated_at"],
+                        "last_message": (
+                            conv_data["messages"][-1]["content"][:100] + "..."
+                            if conv_data["messages"]
+                            else ""
+                        ),
+                    }
+                )
+
+        # Sort by most recently updated
+        conversations.sort(key=lambda x: x["updated_at"], reverse=True)
+        return conversations
+
+
+# Global conversation manager
+conversation_manager = ConversationManager()
 
 
 def normalize_model_name(model_name: str) -> str:
@@ -114,30 +214,87 @@ def create_model_tool(
 
     # Create the tool function dynamically
     async def model_tool(
-        messages: List[Dict[str, Any]],
+        messages: Optional[List[Dict[str, Any]]] = None,
+        conversation_id: Optional[str] = None,
+        new_conversation: bool = False,
+        clear_conversation: bool = False,
         system_prompt: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         stream: bool = False,
-    ) -> str:
-        f"""Use {model} model via {actual_provider} provider.
+    ) -> Dict[str, Any]:
+        f"""Use {model} model via {actual_provider} provider with persistent conversations.
 
         Args:
-            messages: Array of conversation messages with 'role' and 'content' keys
+            messages: Array of conversation messages (optional if continuing conversation)
+            conversation_id: ID of existing conversation to continue
+            new_conversation: Force create new conversation (ignores existing ID)
+            clear_conversation: Clear conversation history before processing
             system_prompt: Optional system prompt to override default
             temperature: Temperature parameter (0.0-1.0) for response randomness
             max_tokens: Maximum number of tokens to generate
             stream: Enable streaming response (returns final result)
 
         Returns:
-            Generated response text from the model
+            Dictionary with 'response' text and 'conversation_id'
         """
         try:
-            # Create host for this provider-model combination
-            host = config.create_host_from_provider_model(provider_model)
+            # Handle conversation management
+            current_conversation_id = conversation_id
 
-            # Prepare messages
-            processed_messages = messages.copy()
+            # Determine conversation behavior
+            if new_conversation or (not conversation_id and not messages):
+                # Create new conversation
+                current_conversation_id = conversation_manager.create_conversation(
+                    tool_name
+                )
+            elif conversation_id and clear_conversation:
+                # Clear existing conversation
+                conversation_manager.clear_conversation(conversation_id)
+                current_conversation_id = conversation_id
+            elif conversation_id:
+                # Use existing conversation
+                current_conversation_id = conversation_id
+                # Validate conversation exists
+                if not conversation_manager.get_conversation(conversation_id):
+                    return {
+                        "error": f"Conversation {conversation_id} not found",
+                        "conversation_id": None,
+                    }
+            elif messages:
+                # New conversation with initial messages
+                current_conversation_id = conversation_manager.create_conversation(
+                    tool_name
+                )
+            else:
+                return {
+                    "error": "Either messages or conversation_id must be provided",
+                    "conversation_id": None,
+                }
+
+            # Get existing conversation messages
+            existing_messages = conversation_manager.get_messages(
+                current_conversation_id
+            )
+
+            # Prepare messages for the model
+            if messages:
+                # Add new messages to conversation
+                for msg in messages:
+                    conversation_manager.add_message(
+                        current_conversation_id, msg["role"], msg["content"]
+                    )
+                # Combine existing and new messages
+                processed_messages = existing_messages + messages
+            else:
+                # Use existing conversation messages only
+                processed_messages = existing_messages
+
+            if not processed_messages:
+                return {
+                    "error": "No messages to process",
+                    "conversation_id": current_conversation_id,
+                }
 
             # Add system prompt if provided
             if system_prompt:
@@ -162,41 +319,69 @@ def create_model_tool(
                     1, int(max_tokens)
                 )  # Ensure positive integer
 
+            # Create host for this provider-model combination
+            host = config.create_host_from_provider_model(provider_model)
+
             # Generate response
             response = await host.generate_response(
                 messages=processed_messages, stream=stream, **params
             )
 
-            # Return the response text
-            if isinstance(response, str):
-                return response
-            else:
-                # Handle case where response might be a different format
-                return str(response)
+            # Get response text
+            response_text = response if isinstance(response, str) else str(response)
+
+            # Add assistant response to conversation
+            conversation_manager.add_message(
+                current_conversation_id, "assistant", response_text
+            )
+
+            # Return response with conversation ID
+            return {
+                "response": response_text,
+                "conversation_id": current_conversation_id,
+            }
 
         except Exception as e:
             error_msg = f"Error using {provider_model}: {str(e)}"
             print(error_msg, file=sys.stderr)
-            return error_msg
+            return {
+                "error": error_msg,
+                "conversation_id": (
+                    current_conversation_id
+                    if "current_conversation_id" in locals()
+                    else None
+                ),
+            }
 
     # Set the function name and docstring
     model_tool.__name__ = tool_name
-    model_tool.__doc__ = f"""Use {model} model via {actual_provider} provider.
+    model_tool.__doc__ = f"""Use {model} model via {actual_provider} provider with persistent conversations.
 
-    This tool provides access to the {model} model through the {actual_provider} API.
+    This tool provides access to the {model} model through the {actual_provider} API
+    with support for maintaining conversation history across multiple calls.
 
     Args:
-        messages: Array of conversation messages with 'role' and 'content' keys
+        messages: Array of conversation messages (optional if continuing conversation)
+        conversation_id: ID of existing conversation to continue (optional)
+        new_conversation: Force create new conversation ignoring existing ID (default: false)
+        clear_conversation: Clear conversation history before processing (default: false)
         system_prompt: Optional system prompt to override default behavior
         temperature: Temperature parameter (0.0-1.0) for controlling response randomness
         max_tokens: Maximum number of tokens to generate in the response
         stream: Enable streaming response (tool still returns final complete result)
 
     Returns:
-        Generated response text from the model
+        Dictionary with 'response' text and 'conversation_id'
 
-    Example:
-        {{"messages": [{{"role": "user", "content": "Hello"}}], "temperature": 0.7}}
+    Examples:
+        # Start new conversation
+        {{"messages": [{{"role": "user", "content": "Hello"}}]}}
+        
+        # Continue conversation
+        {{"conversation_id": "abc123", "messages": [{{"role": "user", "content": "What's 2+2?"}}]}}
+        
+        # Clear and restart conversation
+        {{"conversation_id": "abc123", "clear_conversation": true, "messages": [{{"role": "user", "content": "New topic"}}]}}
     """
 
     # Register the tool with the MCP server
