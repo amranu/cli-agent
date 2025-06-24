@@ -268,6 +268,15 @@ class BaseMCPAgent(ABC):
             self._mcp_contexts = getattr(self, "_mcp_contexts", {})
             self._mcp_contexts[server_name] = client
 
+            # Send initialized notification (required by MCP protocol)
+            try:
+                await client.send_notification("notifications/initialized")
+                logger.debug(f"Sent initialized notification to {server_name}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to send initialized notification to {server_name}: {e}"
+                )
+
             # Get available tools from this server
             tools_result = await client.list_tools()
             if tools_result and hasattr(tools_result, "tools"):
