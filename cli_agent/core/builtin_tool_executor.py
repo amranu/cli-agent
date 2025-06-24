@@ -145,25 +145,32 @@ class BuiltinToolExecutor:
 
     def todo_read(self, args: Dict[str, Any]) -> str:
         """Read the current todo list."""
+        todo_file = "todo.json"
+
         try:
-            if hasattr(self.agent, "todo_manager"):
-                return self.agent.todo_manager.read_todos()
-            else:
-                return "Todo manager not available"
+            if not os.path.exists(todo_file):
+                return "[]"  # Empty todo list
+
+            with open(todo_file, "r", encoding="utf-8") as f:
+                return f.read()
+
         except Exception as e:
-            return f"Error reading todos: {str(e)}"
+            return f"Error reading todo list: {str(e)}"
 
     def todo_write(self, args: Dict[str, Any]) -> str:
         """Write/update the todo list."""
         todos = args.get("todos", [])
+        todo_file = "todo.json"
 
         try:
-            if hasattr(self.agent, "todo_manager"):
-                return self.agent.todo_manager.write_todos(todos)
-            else:
-                return "Todo manager not available"
+            with open(todo_file, "w", encoding="utf-8") as f:
+                json.dump(todos, f, indent=2)
+
+            # Return the actual todo list data to the LLM for proper feedback
+            return f"Successfully updated todo list with {len(todos)} items. Current todo list:\n{json.dumps(todos, indent=2)}"
+
         except Exception as e:
-            return f"Error writing todos: {str(e)}"
+            return f"Error writing todo list: {str(e)}"
 
     def replace_in_file(self, args: Dict[str, Any]) -> str:
         """Replace text in a file."""
