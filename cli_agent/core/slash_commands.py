@@ -83,6 +83,10 @@ class SlashCommandManager:
             return self._handle_tools()
         elif command == "permissions":
             return self._handle_permissions(args)
+        elif command == "truncate":
+            return self._handle_truncate(args)
+        elif command == "refresh-models":
+            return self._handle_refresh_models()
         elif command == "switch-deepseek" or command == "switch-chat":
             return self._handle_switch_deepseek()
         elif command == "switch-reason":
@@ -119,6 +123,8 @@ Built-in Commands:
   /review [file]  - Request code review
   /tools          - List all available tools
   /permissions    - Manage tool execution permissions
+  /truncate [on|off|length] - Toggle or configure tool result truncation
+  /refresh-models - Clear model cache and fetch fresh model lists
   /init           - Analyze codebase and generate AGENT.md
   /quit, /exit    - Exit the interactive chat
 
@@ -347,13 +353,13 @@ Custom Commands:"""
 
             config = load_config()
             available_models = config.get_available_provider_models()
-            
+
             if not available_models:
                 return "❌ No models available. Configure API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY)."
-            
+
             output = []
             output.append("📋 **Available Models:**\n")
-            
+
             total_models = 0
             for provider, models in available_models.items():
                 output.append(f"**{provider.upper()}** ({len(models)} models):")
@@ -363,13 +369,15 @@ Custom Commands:"""
                     usage_format = f"{provider}:{model}"
                     output.append(f"  • `{model}` → `/switch {usage_format}`")
                 output.append("")  # Empty line between providers
-            
-            output.append(f"**Total:** {total_models} models across {len(available_models)} providers")
+
+            output.append(
+                f"**Total:** {total_models} models across {len(available_models)} providers"
+            )
             output.append("\n💡 Use `/switch <provider>:<model>` to switch models")
             output.append("💡 Use `/model` to see current model")
-            
+
             return "\n".join(output)
-            
+
         except Exception as e:
             return f"❌ Failed to list models: {str(e)}"
 
@@ -653,3 +661,59 @@ Please start by reading the key files to understand the architecture, then write
 
         else:
             return "❌ Invalid permissions command. Use: reset, allow <tool>, deny <tool>, or auto"
+
+    def _handle_truncate(self, args: str) -> str:
+        """Handle /truncate command to configure tool result truncation."""
+        if not hasattr(self.agent, "config"):
+            return "❌ Configuration not available for this agent type."
+
+        config = self.agent.config
+
+        if not args:
+            # Show current status
+            status = "enabled" if config.truncate_tool_results else "disabled"
+            return f"🔧 Tool result truncation: {status} (max length: {config.tool_result_max_length} chars)"
+
+        args = args.lower().strip()
+
+        if args in ["on", "enable", "true"]:
+            config.truncate_tool_results = True
+            return "✅ Tool result truncation enabled"
+
+        elif args in ["off", "disable", "false"]:
+            config.truncate_tool_results = False
+            return "✅ Tool result truncation disabled"
+
+        elif args.isdigit():
+            # Set max length
+            length = int(args)
+            if length < 10:
+                return "❌ Minimum length is 10 characters"
+            elif length > 10000:
+                return "❌ Maximum length is 10000 characters"
+            else:
+                config.tool_result_max_length = length
+                config.truncate_tool_results = True  # Enable when setting length
+                return f"✅ Tool result max length set to {length} characters (truncation enabled)"
+
+        else:
+            return "❌ Usage: /truncate [on|off|<length>]\n  Examples: /truncate on, /truncate off, /truncate 500"
+
+    def _handle_refresh_models(self) -> str:
+        """Handle /refresh-models command to clear cache and fetch fresh models."""
+        try:
+            from config import load_config
+
+            config = load_config()
+            config.clear_model_cache()
+            
+            # Fetch fresh models to populate cache
+            available_models = config.get_available_provider_models()
+            
+            total_models = sum(len(models) for models in available_models.values())
+            providers = list(available_models.keys())
+            
+            return f"✅ Model cache cleared and refreshed!\n📋 Found {total_models} models across {len(providers)} providers: {', '.join(providers)}"
+            
+        except Exception as e:
+            return f"❌ Failed to refresh models: {str(e)}"

@@ -100,6 +100,10 @@ class ProviderModelConfig(BaseModel):
 class HostConfig(BaseSettings):
     """Main configuration for the MCP Host."""
 
+    # Class-level cache for model lists to prevent repeated API calls
+    _model_cache: Dict[str, Dict] = {}
+    _cache_ttl: int = 300  # 5 minutes TTL
+
     # Deepseek configuration
     deepseek_api_key: str = Field(default="", alias="DEEPSEEK_API_KEY")
     deepseek_model: str = Field(default="deepseek-chat", alias="DEEPSEEK_MODEL")
@@ -176,6 +180,10 @@ class HostConfig(BaseSettings):
     )
     disallowed_tools: List[str] = Field(default_factory=list, alias="DISALLOWED_TOOLS")
     auto_approve_tools: bool = Field(default=False, alias="AUTO_APPROVE_TOOLS")
+
+    # Tool result display configuration
+    truncate_tool_results: bool = Field(default=True, alias="TRUNCATE_TOOL_RESULTS")
+    tool_result_max_length: int = Field(default=1000, alias="TOOL_RESULT_MAX_LENGTH")
 
     # MCP Server settings
     mcp_server_enabled: bool = Field(default=False, alias="MCP_SERVER_ENABLED")
@@ -372,15 +380,8 @@ class HostConfig(BaseSettings):
         # Create model instance based on model name
         model_name = pm_config.model_name.lower()
         if "claude" in model_name:
-            # For Claude, try to map to variant name
-            if "3.5-sonnet" in model_name or "3-5-sonnet" in model_name:
-                model = ClaudeModel(variant="claude-3.5-sonnet")
-            elif "3.5-haiku" in model_name or "3-5-haiku" in model_name:
-                model = ClaudeModel(variant="claude-3.5-haiku")
-            elif "opus" in model_name:
-                model = ClaudeModel(variant="claude-3-opus")
-            else:
-                model = ClaudeModel(variant="claude-3.5-sonnet")  # Default
+            # For Claude, use the actual model name as variant for dynamic model support
+            model = ClaudeModel(variant=pm_config.model_name)
         elif "gpt" in model_name or "o1" in model_name:
             # For GPT, use the full model name as variant to support dynamic models
             model = GPTModel(variant=pm_config.model_name)
@@ -414,11 +415,21 @@ class HostConfig(BaseSettings):
         return MCPHost(provider=provider, model=model, config=self)
 
     def get_available_provider_models(self) -> Dict[str, List[str]]:
-        """Get available provider-model combinations.
+        """Get available provider-model combinations with caching.
 
         Returns:
             Dict mapping provider names to lists of available models
         """
+        current_time = time.time()
+        cache_key = "provider_models"
+        
+        # Check if we have a valid cached result
+        if (cache_key in self._model_cache and 
+            current_time - self._model_cache[cache_key].get("timestamp", 0) < self._cache_ttl):
+            logger.debug("Using cached provider models")
+            return self._model_cache[cache_key]["data"]
+        
+        logger.debug("Fetching fresh provider models")
         available = {}
 
         if self.anthropic_api_key:
@@ -431,46 +442,74 @@ class HostConfig(BaseSettings):
             ]
 
         if self.openai_api_key:
-            # Try to get dynamic model list from OpenAI API
-            try:
-                from cli_agent.providers.openai_provider import OpenAIProvider
-                import asyncio
-                
-                # Use static method to avoid client lifecycle issues
-                # Check if we're already in an event loop
+            # Try to get dynamic model list from OpenAI API with caching
+            openai_cache_key = f"openai_models_{hash(self.openai_api_key)}"
+            
+            # Check OpenAI-specific cache first
+            if (openai_cache_key in self._model_cache and 
+                current_time - self._model_cache[openai_cache_key].get("timestamp", 0) < self._cache_ttl):
+                available["openai"] = self._model_cache[openai_cache_key]["data"]
+                logger.debug("Using cached OpenAI models")
+            else:
                 try:
-                    loop = asyncio.get_running_loop()
-                    # We're in an async context, create a new thread to run the async call
-                    import concurrent.futures
-                    
-                    def run_in_thread():
-                        new_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(new_loop)
-                        try:
-                            return new_loop.run_until_complete(
-                                OpenAIProvider.fetch_available_models_static(self.openai_api_key)
+                    import asyncio
+
+                    from cli_agent.providers.openai_provider import OpenAIProvider
+
+                    # Use static method to avoid client lifecycle issues
+                    # Check if we're already in an event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # We're in an async context, create a new thread to run the async call
+                        import concurrent.futures
+
+                        def run_in_thread():
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                return new_loop.run_until_complete(
+                                    OpenAIProvider.fetch_available_models_static(
+                                        self.openai_api_key
+                                    )
+                                )
+                            finally:
+                                new_loop.close()
+
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(run_in_thread)
+                            models = future.result(timeout=15)  # 15 second timeout
+
+                    except RuntimeError:
+                        # No event loop running, we can use asyncio.run
+                        models = asyncio.run(
+                            OpenAIProvider.fetch_available_models_static(
+                                self.openai_api_key
                             )
-                        finally:
-                            new_loop.close()
-                    
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(run_in_thread)
-                        models = future.result(timeout=15)  # 15 second timeout
-                        
-                except RuntimeError:
-                    # No event loop running, we can use asyncio.run
-                    models = asyncio.run(
-                        OpenAIProvider.fetch_available_models_static(self.openai_api_key)
-                    )
-                
-                if models:  # Only add if we got models
-                    available["openai"] = models
-                    logger.info(f"Successfully fetched {len(models)} OpenAI models dynamically")
-                
-            except Exception as e:
-                logger.warning(f"Failed to get dynamic OpenAI models: {e}")
-                # Don't add OpenAI to available providers if we can't fetch models
-                pass
+                        )
+
+                    if models:  # Only add if we got models
+                        available["openai"] = models
+                        # Cache the OpenAI models separately
+                        self._model_cache[openai_cache_key] = {
+                            "data": models,
+                            "timestamp": current_time
+                        }
+                        logger.info(
+                            f"Successfully fetched and cached {len(models)} OpenAI models dynamically"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"Failed to get dynamic OpenAI models: {e}")
+                    # Fallback to static list if API fails
+                    fallback_models = [
+                        "gpt-4-turbo-preview",
+                        "gpt-4",
+                        "gpt-3.5-turbo",
+                        "o1-preview",
+                        "o1-mini"
+                    ]
+                    available["openai"] = fallback_models
+                    logger.info(f"Using fallback OpenAI models: {fallback_models}")
 
         if self.openrouter_api_key:
             available["openrouter"] = [
@@ -492,7 +531,18 @@ class HostConfig(BaseSettings):
                 "gemini-1.5-flash",
             ]
 
+        # Cache the complete result
+        self._model_cache[cache_key] = {
+            "data": available,
+            "timestamp": current_time
+        }
+        
         return available
+
+    def clear_model_cache(self):
+        """Clear the model cache to force fresh API calls."""
+        self._model_cache.clear()
+        logger.info("Model cache cleared")
 
     def get_default_provider_for_model(self, model_name: str) -> Optional[str]:
         """Determine the default provider for a given model name.
@@ -623,6 +673,8 @@ class HostConfig(BaseSettings):
             "MODEL_TYPE": self.model_type,
             "HOST_NAME": self.host_name,
             "LOG_LEVEL": self.log_level,
+            "TRUNCATE_TOOL_RESULTS": str(self.truncate_tool_results).lower(),
+            "TOOL_RESULT_MAX_LENGTH": str(self.tool_result_max_length),
         }
 
         # Read existing .env file if it exists
