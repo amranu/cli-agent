@@ -235,21 +235,7 @@ def create_model_tool(
         max_tokens: Optional[int] = None,
         stream: bool = False,
     ) -> Dict[str, Any]:
-        f"""Use {model} model via {actual_provider} provider with persistent conversations.
-
-        Args:
-            messages: Array of conversation messages (optional if continuing conversation)
-            conversation_id: ID of existing conversation to continue
-            new_conversation: Force create new conversation (ignores existing ID)
-            clear_conversation: Clear conversation history before processing
-            system_prompt: Optional system prompt to override default
-            temperature: Temperature parameter (0.0-1.0) for response randomness
-            max_tokens: Maximum number of tokens to generate
-            stream: Enable streaming response (returns final result)
-
-        Returns:
-            Dictionary with 'response' text and 'conversation_id'
-        """
+        f"""Use {model} model via {actual_provider} provider with persistent conversations."""
         try:
             # Handle conversation management
             current_conversation_id = conversation_id
@@ -367,34 +353,7 @@ def create_model_tool(
 
     # Set the function name and docstring
     model_tool.__name__ = tool_name
-    model_tool.__doc__ = f"""Use {model} model via {actual_provider} provider with persistent conversations.
-
-    This tool provides access to the {model} model through the {actual_provider} API
-    with support for maintaining conversation history across multiple calls.
-
-    Args:
-        messages: Array of conversation messages (optional if continuing conversation)
-        conversation_id: ID of existing conversation to continue (optional)
-        new_conversation: Force create new conversation ignoring existing ID (default: false)
-        clear_conversation: Clear conversation history before processing (default: false)
-        system_prompt: Optional system prompt to override default behavior
-        temperature: Temperature parameter (0.0-1.0) for controlling response randomness
-        max_tokens: Maximum number of tokens to generate in the response
-        stream: Enable streaming response (tool still returns final complete result)
-
-    Returns:
-        Dictionary with 'response' text and 'conversation_id'
-
-    Examples:
-        # Start new conversation
-        {{"messages": [{{"role": "user", "content": "Hello"}}]}}
-        
-        # Continue conversation
-        {{"conversation_id": "abc123", "messages": [{{"role": "user", "content": "What's 2+2?"}}]}}
-        
-        # Clear and restart conversation
-        {{"conversation_id": "abc123", "clear_conversation": true, "messages": [{{"role": "user", "content": "New topic"}}]}}
-    """
+    model_tool.__doc__ = f"Use {model} model via {actual_provider} provider with persistent conversations."
 
     # Register the tool with the MCP server
     app.tool(name=tool_name)(model_tool)
