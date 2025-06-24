@@ -154,18 +154,32 @@ class BuiltinToolExecutor:
         if not session_id or session_id == "None":
             session_id = "default"
 
+        # Debug logging to track session ID usage
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Todo file path: session_id='{session_id}', file=todos_{session_id}.json")
+
         return str(config_dir / f"todos_{session_id}.json")
 
     def todo_read(self, args: Dict[str, Any]) -> str:
         """Read the current session's todo list."""
+        # Debug info to help track down the session issue
+        session_id = getattr(self.agent, "_session_id", "NOT_SET")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"todo_read called: agent._session_id = '{session_id}'")
+        
         todo_file = self._get_todo_file_path()
 
         try:
             if not os.path.exists(todo_file):
+                logger.info(f"Todo file doesn't exist: {todo_file}, returning empty list")
                 return "[]"  # Empty todo list
 
             with open(todo_file, "r", encoding="utf-8") as f:
-                return f.read()
+                content = f.read()
+                logger.info(f"Read todo file: {todo_file}, content length: {len(content)}")
+                return content
 
         except Exception as e:
             return f"Error reading todo list: {str(e)}"

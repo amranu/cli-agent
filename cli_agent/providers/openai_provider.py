@@ -52,18 +52,61 @@ class OpenAIProvider(BaseProvider):
             for model in response.data:
                 model_id = model.id
                 # Filter for GPT models and o1 models that support chat completions
-                if (model_id.startswith("gpt-") or 
-                    model_id.startswith("o1-") or
-                    model_id in ["chatgpt-4o-latest"]):
+                if (
+                    model_id.startswith("gpt-")
+                    or model_id.startswith("o1-")
+                    or model_id in ["chatgpt-4o-latest"]
+                ):
                     # Exclude fine-tuned models (contain colons) and deprecated models
                     if ":" not in model_id and not model_id.endswith("-instruct"):
                         chat_models.append(model_id)
-            
-            logger.info(f"OpenAI provider found {len(chat_models)} chat models: {chat_models}")
+
+            logger.info(
+                f"OpenAI provider found {len(chat_models)} chat models: {chat_models}"
+            )
             return sorted(chat_models)
         except Exception as e:
             logger.error(f"Failed to fetch OpenAI models: {e}")
             # Return empty list if we can't fetch models
+            return []
+
+    @staticmethod
+    async def fetch_available_models_static(api_key: str) -> List[str]:
+        """Static method to fetch models without persisting client state."""
+        try:
+            from openai import AsyncOpenAI
+
+            # Create a temporary client for this request only
+            client = AsyncOpenAI(api_key=api_key, timeout=10.0)
+
+            try:
+                response = await client.models.list()
+                # Filter for chat completion models (exclude embeddings, etc.)
+                chat_models = []
+                for model in response.data:
+                    model_id = model.id
+                    # Filter for GPT models and o1 models that support chat completions
+                    if (
+                        model_id.startswith("gpt-")
+                        or model_id.startswith("o1-")
+                        or model_id in ["chatgpt-4o-latest"]
+                    ):
+                        # Exclude fine-tuned models (contain colons) and deprecated models
+                        if ":" not in model_id and not model_id.endswith("-instruct"):
+                            chat_models.append(model_id)
+
+                logger.info(f"OpenAI static fetch found {len(chat_models)} chat models")
+                return sorted(chat_models)
+
+            finally:
+                # Always close the client
+                await client.close()
+
+        except ImportError:
+            logger.error("openai package is required for OpenAI model discovery")
+            return []
+        except Exception as e:
+            logger.error(f"Failed to fetch OpenAI models (static): {e}")
             return []
 
     async def make_request(
@@ -83,22 +126,33 @@ class OpenAIProvider(BaseProvider):
             # Convert max_tokens to max_completion_tokens for o1 models
             if "max_tokens" in model_params:
                 model_params["max_completion_tokens"] = model_params.pop("max_tokens")
-            
+
             # o1 models don't support tools, temperature, or streaming
             if tools:
-                logger.warning(f"o1 model {model_name} does not support tools, ignoring tool calls")
+                logger.warning(
+                    f"o1 model {model_name} does not support tools, ignoring tool calls"
+                )
                 tools = None
-            
+
             # Remove unsupported parameters for o1 models
-            unsupported_params = ["temperature", "top_p", "frequency_penalty", "presence_penalty"]
+            unsupported_params = [
+                "temperature",
+                "top_p",
+                "frequency_penalty",
+                "presence_penalty",
+            ]
             for param in unsupported_params:
                 if param in model_params:
-                    logger.debug(f"Removing unsupported parameter '{param}' for o1 model {model_name}")
+                    logger.debug(
+                        f"Removing unsupported parameter '{param}' for o1 model {model_name}"
+                    )
                     model_params.pop(param)
-            
+
             # o1 models don't support streaming
             if stream:
-                logger.warning(f"o1 model {model_name} does not support streaming, disabling")
+                logger.warning(
+                    f"o1 model {model_name} does not support streaming, disabling"
+                )
                 stream = False
 
         request_params = {
@@ -112,12 +166,14 @@ class OpenAIProvider(BaseProvider):
         if tools and not is_o1_model:
             request_params["tools"] = tools
 
-        logger.info(f"OpenAI API request: model={model_name}, {len(messages)} messages, tools={len(tools) if tools else 0}")
+        logger.info(
+            f"OpenAI API request: model={model_name}, {len(messages)} messages, tools={len(tools) if tools else 0}"
+        )
         logger.info(f"Full request params: {request_params}")
 
         try:
             response = await self.client.chat.completions.create(**request_params)
-            
+
             # Add metadata to indicate actual streaming state for o1 models
             if is_o1_model and stream and not request_params.get("stream", False):
                 # Mark that streaming was requested but disabled for o1 model
@@ -127,18 +183,18 @@ class OpenAIProvider(BaseProvider):
                         self._response = response
                         self._actual_streaming_disabled = True
                         self._requested_streaming = True
-                    
+
                     def __getattr__(self, name):
                         return getattr(self._response, name)
-                    
+
                     def __setattr__(self, name, value):
-                        if name.startswith('_'):
+                        if name.startswith("_"):
                             super().__setattr__(name, value)
                         else:
                             setattr(self._response, name, value)
-                
+
                 return ResponseWrapper(response)
-            
+
             return response
         except Exception as e:
             logger.error(f"OpenAI API request failed: {e}")
@@ -172,10 +228,7 @@ class OpenAIProvider(BaseProvider):
         # Extract model information
         if hasattr(response, "model"):
             metadata["model"] = response.model
-            if requested_model:
-                logger.info(f"OpenAI response: requested={requested_model}, actual={response.model}")
-            else:
-                logger.info(f"OpenAI response: actual={response.model}")
+            logger.info(f"OpenAI response: actual model used={response.model}")
 
         logger.debug(
             f"Extracted OpenAI response: {len(text_content)} chars, {len(tool_calls)} tool calls"

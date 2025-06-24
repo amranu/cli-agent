@@ -270,7 +270,7 @@ class GPTModel(ModelConfig):
         # Known model mappings - use specific versions where preferred
         model_map = {
             "gpt-4-turbo": "gpt-4-turbo-2024-04-09",
-            "gpt-4o": "gpt-4o-2024-08-06", 
+            "gpt-4o": "gpt-4o-2024-08-06",
             "gpt-4o-mini": "gpt-4o-mini-2024-07-18",
             "gpt-3.5-turbo": "gpt-3.5-turbo-0125",
             "o1-preview": "o1-preview",
@@ -288,31 +288,33 @@ class GPTModel(ModelConfig):
             "o1-preview": 128000,
             "o1-mini": 128000,
         }
-        
+
         # Dynamic context length determination
         if variant in context_lengths:
             context_length = context_lengths[variant]
         elif variant.startswith("gpt-4.1"):
             context_length = 1000000  # GPT-4.1 models have 1M context
         elif variant.startswith("gpt-4"):
-            context_length = 128000   # Most GPT-4 models have 128K context
+            context_length = 128000  # Most GPT-4 models have 128K context
         elif variant.startswith("gpt-3.5"):
-            context_length = 16385    # GPT-3.5 models
+            context_length = 16385  # GPT-3.5 models
         elif variant.startswith("o1"):
-            context_length = 128000   # o1 models
+            context_length = 128000  # o1 models
         else:
-            context_length = 128000   # Default for unknown models
+            context_length = 128000  # Default for unknown models
 
         # o1 models have different capabilities
         is_o1_model = variant.startswith("o1-")
-        
+
         super().__init__(
             name=variant,
             provider_model_name=provider_model_name,
             context_length=context_length,
             supports_tools=not is_o1_model,  # o1 models don't support tools
             supports_streaming=not is_o1_model,  # o1 models don't support streaming
-            temperature=0.7 if not is_o1_model else 1.0,  # o1 models don't use temperature
+            temperature=(
+                0.7 if not is_o1_model else 1.0
+            ),  # o1 models don't use temperature
             max_tokens=4000,
         )
 

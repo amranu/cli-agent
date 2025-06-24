@@ -5,11 +5,17 @@ Supports persistent conversations with each model.
 """
 
 import asyncio
+import logging
 import re
 import sys
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+# Configure logging to suppress noisy MCP server messages
+logging.getLogger("FastMCP.fastmcp.server.server").setLevel(logging.WARNING)
+logging.getLogger("fastmcp").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
 try:
     from fastmcp import FastMCP
@@ -182,11 +188,13 @@ def create_model_server() -> FastMCP:
         )
         return app
 
-    # Log which providers are available
-    provider_counts = {provider: len(models) for provider, models in available_models.items()}
-    print(
-        f"Exposing models from {len(available_models)} providers: {', '.join(f'{p} ({c})' for p, c in provider_counts.items())}",
-        file=sys.stderr,
+    # Log which providers are available (debug level)
+    provider_counts = {
+        provider: len(models) for provider, models in available_models.items()
+    }
+    # Debug output - only show if debug logging is enabled
+    logger.debug(
+        f"Exposing models from {len(available_models)} providers: {', '.join(f'{p} ({c})' for p, c in provider_counts.items())}"
     )
 
     # Create tools for each available model
@@ -205,7 +213,7 @@ def create_model_server() -> FastMCP:
                     file=sys.stderr,
                 )
 
-    print(f"Created MCP server with {total_tools} model tools", file=sys.stderr)
+    logger.debug(f"Created MCP server with {total_tools} model tools")
     return app
 
 
@@ -379,5 +387,5 @@ if __name__ == "__main__":
     if "--stdio" in sys.argv:
         asyncio.run(server.run_stdio_async())
     else:
-        print("Starting MCP model server on stdio transport", file=sys.stderr)
+        logger.debug("Starting MCP model server on stdio transport")
         asyncio.run(server.run_stdio_async())

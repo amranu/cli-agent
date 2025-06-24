@@ -9,9 +9,16 @@ Usage:
     python mcp_server.py --tcp --port 3000 # Use TCP transport
 """
 
-import asyncio
-import sys
 import argparse
+import asyncio
+import logging
+import sys
+
+# Suppress noisy logging from FastMCP and other libraries
+logging.getLogger("FastMCP.fastmcp.server.server").setLevel(logging.WARNING)
+logging.getLogger("fastmcp").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def main():

@@ -116,6 +116,22 @@ class FormattingUtils:
             flush=True,
         )
 
+    def truncate_tool_result(self, result: str, max_length: int = None) -> str:
+        """Truncate tool result for display if configured to do so."""
+        if (
+            not hasattr(self.agent, "config")
+            or not self.agent.config.truncate_tool_results
+        ):
+            return result
+
+        max_len = max_length or self.agent.config.tool_result_max_length
+        if len(result) <= max_len:
+            return result
+
+        # Truncate and add indicator
+        truncated = result[:max_len]
+        return f"{truncated}... [output truncated - {len(result)} total chars]"
+
     def display_tool_execution_result(
         self,
         tool_name: str,
@@ -127,8 +143,10 @@ class FormattingUtils:
         if not interactive:
             return
 
+        # Truncate result for display only (not for the model)
+        display_result = self.truncate_tool_result(result)
         status = "✅" if success else "❌"
-        print(f"\n{status} {tool_name}: {result}", flush=True)
+        print(f"\n{status} {tool_name}: {display_result}", flush=True)
 
     def display_tool_processing(self, message: str, interactive: bool = True):
         """Display tool processing status."""

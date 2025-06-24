@@ -1140,6 +1140,8 @@ async def handle_text_chat(
                             provider_model = reload_type
 
                         host = create_host(config, provider_model=provider_model)
+                        # Preserve session ID for session-specific todo files
+                        host._session_id = session_id
                         provider_name, model_name = config.parse_provider_model_string(
                             provider_model
                         )
@@ -1155,6 +1157,8 @@ async def handle_text_chat(
                             host = create_host(
                                 config, provider_model="google:gemini-2.5-flash"
                             )
+                            # Preserve session ID for session-specific todo files
+                            host._session_id = session_id
                             click.echo(f"Switched to legacy Gemini")
                         except Exception as e:
                             click.echo(f"Error switching to Gemini: {e}")
@@ -1164,6 +1168,8 @@ async def handle_text_chat(
                             host = create_host(
                                 config, provider_model="deepseek:deepseek-chat"
                             )
+                            # Preserve session ID for session-specific todo files
+                            host._session_id = session_id
                             click.echo(f"Switched to legacy DeepSeek")
                         except Exception as e:
                             click.echo(f"Error switching to DeepSeek: {e}")

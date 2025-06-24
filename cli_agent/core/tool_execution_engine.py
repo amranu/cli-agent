@@ -102,7 +102,9 @@ class ToolExecutionEngine:
 
             # Check if it's a built-in tool
             if tool_info["server"] == "builtin":
-                logger.info(f"Executing built-in tool: {tool_name} with arguments: {arguments}")
+                logger.info(
+                    f"Executing built-in tool: {tool_name} with arguments: {arguments}"
+                )
                 return await self.agent._execute_builtin_tool(tool_name, arguments)
 
             # Handle external MCP tools with FastMCP

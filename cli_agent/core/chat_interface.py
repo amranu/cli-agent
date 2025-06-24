@@ -6,6 +6,8 @@ import signal
 import sys
 from typing import Any, Dict, List, Optional
 
+from cli_agent.core.global_interrupt import get_global_interrupt_manager
+
 logger = logging.getLogger(__name__)
 
 
@@ -17,6 +19,7 @@ class ChatInterface:
         self.agent = agent
         self.conversation_active = False
         self.interrupt_received = False
+        self.global_interrupt_manager = get_global_interrupt_manager()
 
     async def interactive_chat(
         self, input_handler, existing_messages: Optional[List[Dict[str, Any]]] = None
@@ -42,6 +45,22 @@ class ChatInterface:
 
         while self.is_conversation_active():
             try:
+                # Check for global interrupt first - this should ALWAYS return to prompt
+                if self.global_interrupt_manager.is_interrupted():
+                    if current_task and not current_task.done():
+                        current_task.cancel()
+                        try:
+                            await current_task
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception:
+                            pass
+                    print("🛑 Operation cancelled, returning to prompt")
+                    self.global_interrupt_manager.clear_interrupt()
+                    input_handler.interrupted = False
+                    current_task = None
+                    continue
+
                 # Check if we were interrupted during a previous operation
                 if input_handler.interrupted:
                     if current_task and not current_task.done():
@@ -211,9 +230,14 @@ class ChatInterface:
                         for task in pending:
                             task.cancel()
 
-                        if input_handler.interrupted:
+                        # Check for any kind of interruption (global or local)
+                        if (
+                            input_handler.interrupted
+                            or self.global_interrupt_manager.is_interrupted()
+                        ):
                             print("\n🛑 Request cancelled by user")
                             input_handler.interrupted = False
+                            self.global_interrupt_manager.clear_interrupt()
                             current_task = None
                             continue
 
@@ -245,6 +269,13 @@ class ChatInterface:
                                 messages.append(
                                     {"role": "assistant", "content": response_content}
                                 )
+
+                            # Reset interrupt count after successful operation
+                            from cli_agent.core.global_interrupt import (
+                                reset_interrupt_count,
+                            )
+
+                            reset_interrupt_count()
 
                         elif isinstance(response, str):
                             # Non-streaming text response
@@ -400,6 +431,11 @@ class ChatInterface:
         if hasattr(response_generator, "__aiter__"):
             content = ""
             async for chunk in response_generator:
+                # Check for global interrupt during streaming
+                if self.global_interrupt_manager.is_interrupted():
+                    print("\n🛑 Streaming interrupted by user")
+                    break
+
                 chunk_text = str(chunk)
                 content += chunk_text
                 if interactive:

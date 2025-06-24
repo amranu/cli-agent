@@ -10,6 +10,8 @@ mechanisms for environments where prompt_toolkit is not available.
 import logging
 from typing import Optional
 
+from cli_agent.core.global_interrupt import get_global_interrupt_manager
+
 # Configure logging
 logging.basicConfig(
     level=logging.ERROR,  # Suppress WARNING messages during interactive chat
@@ -27,6 +29,7 @@ class InterruptibleInput:
     - Graceful fallback when prompt_toolkit is unavailable
     - Asyncio event loop compatibility
     - Professional terminal interaction patterns
+    - Non-blocking interrupt detection for tool execution loops
 
     Attributes:
         interrupted (bool): Flag indicating if input was interrupted
@@ -35,6 +38,11 @@ class InterruptibleInput:
         _patch_stdout: Reference to prompt_toolkit patch_stdout
         _bindings: Key bindings for custom keyboard shortcuts
         _allow_escape_interrupt (bool): Whether ESC key should trigger interruption
+
+    Key Features:
+        - check_for_interrupt(): Non-blocking check for ESC/Ctrl+C during operations
+        - Used by tool execution loops to allow user interruption between tool calls
+        - Prevents getting stuck in long tool execution sequences
     """
 
     def __init__(self):
@@ -44,6 +52,7 @@ class InterruptibleInput:
         for fallback to basic input() function.
         """
         self.interrupted = False
+        self.global_interrupt_manager = get_global_interrupt_manager()
         self._setup_prompt_toolkit()
 
     def _setup_prompt_toolkit(self):
@@ -175,6 +184,67 @@ class InterruptibleInput:
             except KeyboardInterrupt:
                 self.interrupted = True
                 return None
+
+    def check_for_interrupt(self) -> bool:
+        """Check if an interrupt signal is pending without blocking.
+
+        This method checks for keyboard input (ESC or Ctrl+C) without waiting
+        for user input. It's useful for checking interrupts during long operations
+        like tool execution loops.
+
+        Returns:
+            bool: True if an interrupt is detected, False otherwise
+        """
+        # Check global interrupt state first
+        if self.global_interrupt_manager.is_interrupted():
+            self.interrupted = True
+            return True
+
+        # Check local interrupted state
+        if self.interrupted:
+            return True
+
+        if not self._available:
+            # Without prompt_toolkit, we can't easily check for pending input
+            # Return current interrupted state
+            return self.interrupted
+
+        try:
+            import select
+            import sys
+
+            # Check if there's pending input on stdin (Unix-like systems)
+            if hasattr(select, "select"):
+                # Check for pending input with 0 timeout (non-blocking)
+                ready, _, _ = select.select([sys.stdin], [], [], 0)
+                if ready:
+                    # Read the character to check what it is
+                    import termios
+                    import tty
+
+                    # Save terminal settings
+                    old_settings = termios.tcgetattr(sys.stdin)
+                    try:
+                        # Set terminal to raw mode to read single characters
+                        tty.setraw(sys.stdin.fileno())
+                        char = sys.stdin.read(1)
+
+                        # Check for ESC (27) or Ctrl+C (3)
+                        if ord(char) == 27 or ord(char) == 3:  # ESC or Ctrl+C
+                            self.interrupted = True
+                            # Also set global interrupt
+                            self.global_interrupt_manager.set_interrupted(True)
+                            return True
+
+                    finally:
+                        # Restore terminal settings
+                        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+
+        except (ImportError, OSError, Exception):
+            # Fall back to just checking the current state
+            pass
+
+        return self.interrupted
 
     def get_multiline_input(
         self, initial_prompt: str, allow_escape_interrupt: bool = False

@@ -34,6 +34,15 @@ class BaseLLMProvider(BaseMCPAgent):
             f"_generate_completion called with {len(messages)} messages, tools: {tools is not None}, stream: {stream}, interactive: {interactive}"
         )
 
+        # Check for global interrupt before making API request
+        from cli_agent.core.global_interrupt import check_interrupt
+
+        try:
+            check_interrupt("LLM request interrupted")
+        except KeyboardInterrupt:
+            logger.info("LLM request interrupted by user")
+            raise
+
         # Check if we should use buffering for streaming JSON
         use_buffering = (
             hasattr(self, "streaming_json_callback")
@@ -44,14 +53,20 @@ class BaseLLMProvider(BaseMCPAgent):
             if stream:
                 # Make API request with streaming requested
                 response = await self._make_api_request(messages, tools, stream=True)
-                
+
                 # Check if provider actually disabled streaming (e.g., for o1 models)
-                streaming_disabled = getattr(response, "_actual_streaming_disabled", False)
-                logger.info(f"Response type: {type(response)}, streaming_disabled: {streaming_disabled}")
-                
+                streaming_disabled = getattr(
+                    response, "_actual_streaming_disabled", False
+                )
+                logger.info(
+                    f"Response type: {type(response)}, streaming_disabled: {streaming_disabled}"
+                )
+
                 if streaming_disabled:
                     # Provider disabled streaming, handle as non-streaming response
-                    logger.info(f"Streaming was disabled by provider, handling as non-streaming response")
+                    logger.info(
+                        f"Streaming was disabled by provider, handling as non-streaming response"
+                    )
                     result = await self._handle_complete_response_generic(
                         response, messages, interactive=interactive
                     )

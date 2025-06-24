@@ -179,7 +179,7 @@ class MCPHost(BaseLLMProvider):
         """Make an API request to the provider."""
         # First enhance messages with system prompts and model-specific formatting
         enhanced_messages = self._enhance_messages_for_model(messages)
-        
+
         # Then format messages for the specific model
         formatted_messages = self.model.format_messages_for_model(enhanced_messages)
 
@@ -308,7 +308,11 @@ class MCPHost(BaseLLMProvider):
         # Enhance first message with AGENT.md content if available
         is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
         if is_first_message and not self.is_subagent:
-            enhanced_messages = self.system_prompt_builder.enhance_first_message_with_agent_md(enhanced_messages)
+            enhanced_messages = (
+                self.system_prompt_builder.enhance_first_message_with_agent_md(
+                    enhanced_messages
+                )
+            )
 
         # Add system prompt based on model's style
         system_style = self.model.get_system_prompt_style()
