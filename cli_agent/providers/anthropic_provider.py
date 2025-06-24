@@ -4,6 +4,8 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
+
 from cli_agent.core.base_provider import BaseProvider
 
 logger = logging.getLogger(__name__)
@@ -20,26 +22,21 @@ class AnthropicProvider(BaseProvider):
         return "https://api.anthropic.com"
 
     def _create_client(self, **kwargs) -> Any:
-        """Create Anthropic client."""
-        try:
-            import anthropic
+        """Create HTTP client for Anthropic API."""
+        timeout = kwargs.get("timeout", 120.0)
 
-            timeout = kwargs.get("timeout", 120.0)
+        client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=timeout,
+            headers={
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+        )
 
-            client = anthropic.AsyncAnthropic(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                timeout=timeout,
-                **{k: v for k, v in kwargs.items() if k != "timeout"},
-            )
-
-            logger.debug(f"Created Anthropic client with timeout: {timeout}s")
-            return client
-
-        except ImportError:
-            raise ImportError(
-                "anthropic package is required for AnthropicProvider. Install with: pip install anthropic"
-            )
+        logger.debug(f"Created Anthropic HTTP client with timeout: {timeout}s")
+        return client
 
     def supports_streaming(self) -> bool:
         return True
@@ -67,9 +64,14 @@ class AnthropicProvider(BaseProvider):
         request_params = {
             "model": model_name,
             "messages": anthropic_messages,
+            "max_tokens": model_params.get("max_tokens", 4096),
             "stream": stream,
-            **model_params,
         }
+
+        # Add other model parameters
+        for key, value in model_params.items():
+            if key not in ["max_tokens"]:
+                request_params[key] = value
 
         # Add system content if present
         if system_content:
@@ -84,8 +86,22 @@ class AnthropicProvider(BaseProvider):
         )
 
         try:
-            response = await self.client.messages.create(**request_params)
-            return response
+            if stream:
+                response = await self.client.post(
+                    "/v1/messages",
+                    json=request_params,
+                    headers={"accept": "text/event-stream"},
+                )
+            else:
+                response = await self.client.post("/v1/messages", json=request_params)
+
+            response.raise_for_status()
+
+            if stream:
+                return response
+            else:
+                return response.json()
+
         except Exception as e:
             logger.error(f"Anthropic API request failed: {e}")
             raise
@@ -94,7 +110,7 @@ class AnthropicProvider(BaseProvider):
         self, response: Any
     ) -> Tuple[str, List[Any], Dict[str, Any]]:
         """Extract content from Anthropic response."""
-        if not hasattr(response, "content") or not response.content:
+        if not isinstance(response, dict) or "content" not in response:
             return "", [], {}
 
         text_parts = []
@@ -102,19 +118,29 @@ class AnthropicProvider(BaseProvider):
         metadata = {}
 
         # Extract usage information
-        if hasattr(response, "usage"):
+        if "usage" in response:
             metadata["usage"] = {
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
+                "input_tokens": response["usage"].get("input_tokens", 0),
+                "output_tokens": response["usage"].get("output_tokens", 0),
             }
 
         # Process content blocks
-        for content_block in response.content:
-            if hasattr(content_block, "type"):
-                if content_block.type == "text":
-                    text_parts.append(content_block.text)
-                elif content_block.type == "tool_use":
-                    tool_calls.append(content_block)
+        for content_block in response["content"]:
+            if content_block.get("type") == "text":
+                text_parts.append(content_block.get("text", ""))
+            elif content_block.get("type") == "tool_use":
+                # Create tool call object compatible with the expected format
+                tool_call = type(
+                    "ToolUse",
+                    (),
+                    {
+                        "id": content_block.get("id"),
+                        "name": content_block.get("name"),
+                        "input": content_block.get("input", {}),
+                        "type": "tool_use",
+                    },
+                )()
+                tool_calls.append(tool_call)
 
         text_content = "".join(text_parts)
 
@@ -132,32 +158,44 @@ class AnthropicProvider(BaseProvider):
         metadata = {}
         current_tool_use = None
 
-        async for event in response:
-            if hasattr(event, "type"):
-                if event.type == "content_block_start":
-                    if (
-                        hasattr(event, "content_block")
-                        and event.content_block.type == "tool_use"
-                    ):
+        # Process server-sent events
+        async for line in response.aiter_lines():
+            if not line.strip():
+                continue
+
+            if line.startswith("data: "):
+                data_str = line[6:]  # Remove "data: " prefix
+
+                if data_str.strip() == "[DONE]":
+                    break
+
+                try:
+                    event = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = event.get("type")
+
+                if event_type == "content_block_start":
+                    content_block = event.get("content_block", {})
+                    if content_block.get("type") == "tool_use":
                         current_tool_use = {
-                            "id": event.content_block.id,
-                            "name": event.content_block.name,
+                            "id": content_block.get("id"),
+                            "name": content_block.get("name"),
                             "input": {},
+                            "partial_json": "",
                         }
 
-                elif event.type == "content_block_delta":
-                    if hasattr(event, "delta"):
-                        if event.delta.type == "text_delta":
-                            accumulated_content += event.delta.text
-                        elif (
-                            event.delta.type == "input_json_delta" and current_tool_use
-                        ):
-                            # Accumulate tool input JSON
-                            if "partial_json" not in current_tool_use:
-                                current_tool_use["partial_json"] = ""
-                            current_tool_use["partial_json"] += event.delta.partial_json
+                elif event_type == "content_block_delta":
+                    delta = event.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        accumulated_content += delta.get("text", "")
+                    elif delta.get("type") == "input_json_delta" and current_tool_use:
+                        current_tool_use["partial_json"] += delta.get(
+                            "partial_json", ""
+                        )
 
-                elif event.type == "content_block_stop":
+                elif event_type == "content_block_stop":
                     if current_tool_use:
                         # Parse accumulated JSON
                         try:
@@ -185,11 +223,13 @@ class AnthropicProvider(BaseProvider):
                         tool_calls.append(tool_call)
                         current_tool_use = None
 
-                elif event.type == "message_start":
-                    if hasattr(event, "message") and hasattr(event.message, "usage"):
+                elif event_type == "message_start":
+                    message = event.get("message", {})
+                    usage = message.get("usage", {})
+                    if usage:
                         metadata["usage"] = {
-                            "input_tokens": event.message.usage.input_tokens,
-                            "output_tokens": event.message.usage.output_tokens,
+                            "input_tokens": usage.get("input_tokens", 0),
+                            "output_tokens": usage.get("output_tokens", 0),
                         }
 
         logger.debug(
@@ -218,8 +258,8 @@ class AnthropicProvider(BaseProvider):
 
     def get_error_message(self, error: Exception) -> str:
         """Extract meaningful error message from Anthropic error."""
-        # Try to extract structured error message
-        if hasattr(error, "response") and hasattr(error.response, "json"):
+        # Try to extract structured error message from HTTP error
+        if hasattr(error, "response"):
             try:
                 error_data = error.response.json()
                 if "error" in error_data:
@@ -231,9 +271,16 @@ class AnthropicProvider(BaseProvider):
 
     def get_rate_limit_info(self, response: Any) -> Dict[str, Any]:
         """Extract rate limit info from Anthropic response."""
-        headers = self._extract_headers(response)
-
         rate_limit_info = {}
+
+        # Handle both dict response and httpx response
+        if hasattr(response, "headers"):
+            headers = response.headers
+        elif isinstance(response, dict):
+            # No headers in JSON response
+            return rate_limit_info
+        else:
+            return rate_limit_info
 
         # Anthropic rate limit headers
         if "anthropic-ratelimit-requests-remaining" in headers:
