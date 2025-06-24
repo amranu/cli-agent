@@ -19,13 +19,19 @@ from typing import Any, Dict, List, Optional, Union
 from fastmcp.client import Client as FastMCPClient
 from fastmcp.client import StdioTransport
 
+from cli_agent.core.api_client_manager import APIClientManager
 from cli_agent.core.builtin_tool_executor import BuiltinToolExecutor
+from cli_agent.core.chat_interface import ChatInterface
 from cli_agent.core.formatting import ResponseFormatter
 from cli_agent.core.formatting_utils import FormattingUtils
+from cli_agent.core.message_processor import MessageProcessor
+from cli_agent.core.response_handler import ResponseHandler
 from cli_agent.core.slash_commands import SlashCommandManager
 from cli_agent.core.subagent_coordinator import SubagentCoordinator
 from cli_agent.core.system_prompt_builder import SystemPromptBuilder
 from cli_agent.core.token_manager import TokenManager
+from cli_agent.core.tool_call_processor import ToolCallProcessor
+from cli_agent.core.tool_execution_engine import ToolExecutionEngine
 from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 from cli_agent.core.tool_schema import ToolSchemaManager
 from cli_agent.tools.builtin_tools import get_all_builtin_tools
@@ -131,6 +137,15 @@ class BaseMCPAgent(ABC):
         # Initialize utility classes
         self.builtin_executor = BuiltinToolExecutor(self)
         self.subagent_coordinator = SubagentCoordinator(self)
+
+        # Initialize modular components
+        self.message_processor = MessageProcessor(self)
+        self.tool_call_processor = ToolCallProcessor(self)
+        self.api_client_manager = APIClientManager(self)
+        self.response_handler = ResponseHandler(self)
+        self.tool_execution_engine = ToolExecutionEngine(self)
+        self.chat_interface = ChatInterface(self)
+        logger.debug("Initialized modular components")
         self.system_prompt_builder = SystemPromptBuilder(self)
         self.formatting_utils = FormattingUtils(self)
         logger.debug("Initialized utility classes")
@@ -358,7 +373,7 @@ class BaseMCPAgent(ABC):
                 )
             else:
                 # No active subagents - just log for now (main agent controls display)
-                logger.info(
+                logger.debug(
                     f"Subagent message logged: {message.type} - {message.content[:50]}"
                 )
 
@@ -546,110 +561,8 @@ class BaseMCPAgent(ABC):
         return function_results, all_tool_output
 
     async def _execute_mcp_tool(self, tool_key: str, arguments: Dict[str, Any]) -> str:
-        """Execute an MCP tool (built-in or external) and return the result."""
-        try:
-            if tool_key not in self.available_tools:
-                # Debug: show available tools when tool not found
-                available_list = list(self.available_tools.keys())[
-                    :10
-                ]  # First 10 tools
-                return f"Error: Tool {tool_key} not found. Available tools: {available_list}"
-
-            tool_info = self.available_tools[tool_key]
-            tool_name = tool_info["name"]
-
-            # Show diff preview for replace_in_file before permission check
-            if tool_name == "replace_in_file" and not self.is_subagent:
-                try:
-                    from cli_agent.utils.diff_display import ColoredDiffDisplay
-
-                    file_path = arguments.get("file_path", "")
-                    old_text = arguments.get("old_text", "")
-                    new_text = arguments.get("new_text", "")
-
-                    if file_path and old_text:
-                        # Show colored diff preview
-                        ColoredDiffDisplay.show_replace_diff(
-                            file_path=file_path, old_text=old_text, new_text=new_text
-                        )
-                except Exception as e:
-                    # Don't fail tool execution if diff display fails
-                    logger.warning(f"Failed to display diff preview: {e}")
-
-            # Check tool permissions (both main agent and subagents)
-            if hasattr(self, "permission_manager") and self.permission_manager:
-                from cli_agent.core.tool_permissions import (
-                    ToolDeniedReturnToPrompt,
-                    ToolPermissionResult,
-                )
-
-                input_handler = getattr(self, "_input_handler", None)
-                permission_result = await self.permission_manager.check_tool_permission(
-                    tool_name, arguments, input_handler
-                )
-
-                if not permission_result.allowed:
-                    if permission_result.return_to_prompt and not self.is_subagent:
-                        # Only return to prompt for main agent, not subagents
-                        raise ToolDeniedReturnToPrompt(permission_result.reason)
-                    else:
-                        # For subagents or config-based denials, return error message
-                        return f"Tool execution denied: {permission_result.reason}"
-
-            # Forward to parent if this is a subagent (except for subagent management tools)
-            if self.is_subagent and self.comm_socket:
-                excluded_tools = ["task", "task_status", "task_results"]
-                if tool_name not in excluded_tools:
-                    # Tool forwarding happens silently
-                    return await self._forward_tool_to_parent(
-                        tool_key, tool_name, arguments
-                    )
-            elif self.is_subagent:
-                sys.stderr.write(
-                    f"🤖 [SUBAGENT] WARNING: is_subagent=True but no comm_socket for tool {tool_name}\n"
-                )
-                sys.stderr.flush()
-
-            # Check if it's a built-in tool
-            if tool_info["server"] == "builtin":
-                logger.info(f"Executing built-in tool: {tool_name}")
-                return await self._execute_builtin_tool(tool_name, arguments)
-
-            # Handle external MCP tools with FastMCP
-            client = tool_info["client"]
-            if client is None:
-                return f"Error: No client session for tool {tool_key}"
-
-            logger.info(f"Executing MCP tool: {tool_name}")
-            result = await client.call_tool(tool_name, arguments)
-
-            # Format the result for FastMCP
-            if hasattr(result, "content") and result.content:
-                content_parts = []
-                for content in result.content:
-                    if hasattr(content, "text"):
-                        content_parts.append(content.text)
-                    elif hasattr(content, "data"):
-                        content_parts.append(str(content.data))
-                    else:
-                        content_parts.append(str(content))
-                return "\n".join(content_parts)
-            elif isinstance(result, str):
-                return result
-            elif isinstance(result, dict):
-                return json.dumps(result, indent=2)
-            else:
-                return f"Tool executed successfully. Result type: {type(result)}, Content: {result}"
-
-        except Exception as e:
-            # Re-raise tool permission denials so they can be handled at the chat level
-            from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
-
-            if isinstance(e, ToolDeniedReturnToPrompt):
-                raise  # Re-raise the exception to bubble up to interactive chat
-
-            logger.error(f"Error executing tool {tool_key}: {e}")
-            return f"Error executing tool {tool_key}: {str(e)}"
+        """Execute an MCP tool - delegates to ToolExecutionEngine."""
+        return await self.tool_execution_engine.execute_mcp_tool(tool_key, arguments)
 
     async def _forward_tool_to_parent(
         self, tool_key: str, tool_name: str, arguments: Dict[str, Any]
@@ -1176,6 +1089,152 @@ class BaseMCPAgent(ABC):
         """Get the actual model being used at runtime. Must be implemented by subclasses."""
         pass
 
+    # ============================================================================
+    # CENTRALIZED MESSAGE PROCESSING FRAMEWORK
+    # ============================================================================
+
+    def _preprocess_messages(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Centralized message preprocessing pipeline - delegates to MessageProcessor."""
+        return self.message_processor.preprocess_messages(messages)
+
+    def _clean_message_format(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Clean messages - override in subclass for provider-specific cleaning."""
+        # Default implementation: minimal cleaning
+        cleaned_messages = []
+        for message in messages:
+            # Ensure content is always a string
+            content = message.get("content", "")
+            if not isinstance(content, str):
+                content = str(content)
+
+            cleaned_msg = {"role": message.get("role", "user"), "content": content}
+
+            # Preserve tool calls if present
+            if message.get("tool_calls"):
+                cleaned_msg["tool_calls"] = message["tool_calls"]
+            if message.get("tool_call_id"):
+                cleaned_msg["tool_call_id"] = message["tool_call_id"]
+
+            cleaned_messages.append(cleaned_msg)
+
+        return cleaned_messages
+
+    def _enhance_messages_for_model(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Enhance messages for model-specific requirements - override in subclass."""
+        # Default implementation: no enhancement
+        return messages
+
+    def _convert_to_provider_format(self, messages: List[Dict[str, Any]]) -> Any:
+        """Convert messages to provider format - override in subclass if needed."""
+        # Default implementation: return as-is
+        return messages
+
+    # ============================================================================
+    # CENTRALIZED TOOL CALL PARSING FRAMEWORK
+    # ============================================================================
+
+    def _parse_tool_calls_generic(
+        self, response: Any, text_content: str = ""
+    ) -> List[Dict[str, Any]]:
+        """Unified tool call parsing pipeline - delegates to ToolCallProcessor."""
+        return self.tool_call_processor.parse_tool_calls_generic(response, text_content)
+
+    def _extract_structured_calls(self, response: Any) -> List[Any]:
+        """Extract structured tool calls from response - override in subclass."""
+        # Default implementation: empty list
+        return []
+
+    def _parse_text_based_calls(self, text_content: str) -> List[Any]:
+        """Parse text-based tool calls using provider patterns - override in subclass."""
+        # Default implementation: empty list
+        return []
+
+    def _normalize_tool_calls_unified(
+        self, tool_calls: List[Any]
+    ) -> List[Dict[str, Any]]:
+        """Unified tool call normalization."""
+        normalized_calls = []
+
+        for i, tool_call in enumerate(tool_calls):
+            if hasattr(tool_call, "name") and hasattr(tool_call, "args"):
+                # SimpleNamespace or object format
+                normalized_calls.append(
+                    {
+                        "id": getattr(tool_call, "id", f"call_{i}"),
+                        "name": tool_call.name,
+                        "arguments": tool_call.args,
+                    }
+                )
+            elif isinstance(tool_call, dict):
+                if "function" in tool_call:
+                    # OpenAI-style format
+                    normalized_calls.append(
+                        {
+                            "id": tool_call.get("id", f"call_{i}"),
+                            "name": tool_call["function"].get("name", "unknown"),
+                            "arguments": tool_call["function"].get("arguments", {}),
+                        }
+                    )
+                else:
+                    # Simple dict format
+                    normalized_calls.append(
+                        {
+                            "id": tool_call.get("id", f"call_{i}"),
+                            "name": tool_call.get("name", "unknown"),
+                            "arguments": tool_call.get("arguments", {}),
+                        }
+                    )
+            else:
+                # Fallback
+                normalized_calls.append(
+                    {
+                        "id": f"call_{i}",
+                        "name": str(tool_call),
+                        "arguments": {},
+                    }
+                )
+
+        return normalized_calls
+
+    # ============================================================================
+    # CENTRALIZED RETRY LOGIC FRAMEWORK
+    # ============================================================================
+
+    async def _make_api_request_with_retry(
+        self, request_func, max_retries: int = 3, base_delay: float = 1.0
+    ):
+        """Generic API request with exponential backoff retry logic - delegates to APIClientManager."""
+        return await self.api_client_manager.make_api_request_with_retry(
+            request_func, max_retries, base_delay
+        )
+
+    def _is_retryable_error(self, error: Exception) -> bool:
+        """Determine if an error is retryable - override in subclass for provider specifics."""
+        error_str = str(error).lower()
+        # Generic retryable conditions
+        return (
+            "timeout" in error_str
+            or "network" in error_str
+            or "connection" in error_str
+            or "rate limit" in error_str
+            or "429" in error_str
+            or "502" in error_str
+            or "503" in error_str
+            or "504" in error_str
+        )
+
+    def _calculate_retry_delay(self, attempt: int, base_delay: float) -> float:
+        """Calculate retry delay - can be overridden for custom strategies."""
+        import random
+
+        return base_delay * (2**attempt) + random.uniform(0, 1)
+
     async def handle_tool_execution(
         self,
         tool_calls: List[Any],
@@ -1472,453 +1531,10 @@ class BaseMCPAgent(ABC):
     async def interactive_chat(
         self, input_handler, existing_messages: List[Dict[str, Any]] = None
     ):
-        """Interactive chat session with shared functionality."""
-        from cli_agent.core.input_handler import InterruptibleInput
-
-        # Store input handler for tool permission prompts
-        self._input_handler = input_handler
-
-        messages = existing_messages or []
-        current_task = None
-
-        print(
-            "Starting interactive chat. Type /quit or /exit to end, /tools to list available tools."
+        """Interactive chat session - delegates to ChatInterface."""
+        return await self.chat_interface.interactive_chat(
+            input_handler, existing_messages
         )
-        print(
-            "Use /help for slash commands. Press ESC at any time to interrupt operations.\n"
-        )
-
-        while True:
-            try:
-                # Cancel any pending task if interrupted
-                if (
-                    input_handler.interrupted
-                    and current_task
-                    and not current_task.done()
-                ):
-                    current_task.cancel()
-                    try:
-                        await current_task
-                    except asyncio.CancelledError:
-                        pass
-                    input_handler.interrupted = False
-                    current_task = None
-                    continue
-
-                # Check for subagent interruption before getting input
-                if input_handler.interrupted and self.subagent_manager:
-                    active_count = self.subagent_manager.get_active_count()
-                    if active_count > 0:
-                        print(f"\n🛑 Interrupting {active_count} active subagent(s)...")
-                        await self.subagent_manager.terminate_all()
-                        print("✅ All subagents terminated. Returning to prompt.")
-                        input_handler.interrupted = False
-                        continue
-
-                # Get user input with smart multiline detection, but check for subagents first
-                prompt_text = "You: "
-                if (
-                    self.subagent_manager
-                    and self.subagent_manager.get_active_count() > 0
-                ):
-                    active_tasks = self.subagent_manager.get_active_task_ids()
-                    prompt_text = f"You (🤖 {len(active_tasks)} subagents active - ESC to cancel): "
-
-                user_input = input_handler.get_multiline_input(prompt_text)
-
-                if user_input is None:  # Interrupted
-                    # Check if we should terminate subagents
-                    if (
-                        self.subagent_manager
-                        and self.subagent_manager.get_active_count() > 0
-                    ):
-                        active_count = self.subagent_manager.get_active_count()
-                        print(f"\n🛑 Interrupting {active_count} active subagent(s)...")
-                        await self.subagent_manager.terminate_all()
-                        print("✅ All subagents terminated. Returning to prompt.")
-                    elif current_task and not current_task.done():
-                        current_task.cancel()
-                        print("🛑 Operation cancelled by user")
-
-                    input_handler.interrupted = False
-                    current_task = None
-                    continue
-
-                # Handle slash commands
-                if user_input.strip().startswith("/"):
-                    try:
-                        slash_response = await self.slash_commands.handle_slash_command(
-                            user_input.strip(), messages
-                        )
-                        if slash_response:
-                            # Handle special command responses
-                            if isinstance(slash_response, dict):
-                                if "compacted_messages" in slash_response:
-                                    print(f"\n{slash_response['status']}\n")
-                                    messages[:] = slash_response[
-                                        "compacted_messages"
-                                    ]  # Update messages in place
-                                elif "clear_messages" in slash_response:
-                                    print(f"\n{slash_response['status']}\n")
-                                    messages.clear()  # Clear the local messages list
-                                elif "quit" in slash_response:
-                                    print(f"\n{slash_response['status']}")
-                                    break  # Exit the chat loop
-                                elif "reload_host" in slash_response:
-                                    print(f"\n{slash_response['status']}")
-                                    return {
-                                        "reload_host": slash_response["reload_host"],
-                                        "messages": messages,
-                                    }
-                                elif "send_to_llm" in slash_response:
-                                    # Special case: send the content to LLM for processing
-                                    if "status" in slash_response:
-                                        print(f"\n{slash_response['status']}\n")
-                                    user_input = slash_response["send_to_llm"]
-                                    # Don't continue - fall through to normal LLM processing
-                                else:
-                                    print(
-                                        f"\n{slash_response.get('status', str(slash_response))}\n"
-                                    )
-                            else:
-                                print(f"\n{slash_response}\n")
-                            # Only continue if we're not sending to LLM
-                            if not (
-                                isinstance(slash_response, dict)
-                                and "send_to_llm" in slash_response
-                            ):
-                                continue
-                    except Exception as e:
-                        print(f"\nError handling slash command: {e}\n")
-                        continue
-
-                if not user_input.strip():
-                    # Empty input, just continue
-                    continue
-
-                # Add user message
-                messages.append({"role": "user", "content": user_input})
-
-                # Check if this is the first message and enhance with AGENT.md if so
-                is_first_message = len(messages) == 1
-                if is_first_message:
-                    enhanced_messages = self.system_prompt_builder.enhance_first_message_with_agent_md(
-                        messages.copy()  # Use a copy so original messages list can be modified in-place
-                    )
-                    # For first message, we need to use the enhanced version for LLM but ensure
-                    # tool execution results are added to the original messages list
-                    working_messages = (
-                        messages  # The list that will receive tool execution results
-                    )
-                else:
-                    enhanced_messages = messages
-                    working_messages = messages
-
-                # Reset tool execution state for new message
-                self._tool_execution_started = False
-                self._post_tool_buffer = ""
-                self._text_buffer = ""
-
-                # Show thinking message
-                print("\nThinking...")
-
-                # Create response task - enable in-place message modification for session persistence
-                tools_list = self.convert_tools_to_llm_format()
-                current_task = asyncio.create_task(
-                    self.generate_response(
-                        working_messages, tools_list, modify_messages_in_place=True
-                    )
-                )
-
-                # Wait for response with simple interruption handling
-                try:
-                    await current_task
-                except asyncio.CancelledError:
-                    print("\n🛑 Request cancelled")
-                    input_handler.interrupted = False
-                    current_task = None
-                    continue
-                except Exception as e:
-                    # Check if this is a tool permission denial that should return to prompt
-                    from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
-
-                    if isinstance(e, ToolDeniedReturnToPrompt):
-                        # Tool denial message already printed by permission manager
-                        # Clear any partial output that might have been displayed
-                        print("\r\x1b[K", end="", flush=True)  # Clear current line
-                        # Remove the last user message since we're not processing it
-                        if messages and messages[-1]["role"] == "user":
-                            messages.pop()
-                        # Clear any buffered text
-                        self._text_buffer = ""
-                        current_task = None
-                        # Show clean prompt on next line
-                        print()  # New line for clean prompt
-                        continue
-                    else:
-                        print(f"\nError generating response: {e}")
-                        current_task = None
-                        continue
-
-                # Get the response
-                response = current_task.result()
-                current_task = None
-
-                if hasattr(response, "__aiter__"):
-                    # Streaming response
-                    print("\nAssistant (press ESC to interrupt):")
-                    sys.stdout.flush()
-                    full_response = ""
-                    # Use instance variables that are reset per message
-                    tool_execution_started = getattr(
-                        self, "_tool_execution_started", False
-                    )
-                    post_tool_buffer = getattr(self, "_post_tool_buffer", "")
-
-                    # Set up non-blocking input monitoring
-                    stdin_fd = sys.stdin.fileno()
-                    old_settings = termios.tcgetattr(stdin_fd)
-                    tty.setraw(stdin_fd)
-
-                    interrupted = False
-                    try:
-                        async for chunk in response:
-                            # Check for escape key on each chunk
-                            if select.select([sys.stdin], [], [], 0)[
-                                0
-                            ]:  # Non-blocking check
-                                char = sys.stdin.read(1)
-                                if char == "\x1b":  # Escape key
-                                    interrupted = True
-                                    break
-
-                            # Check for interruption flag
-                            if input_handler.interrupted:
-                                interrupted = True
-                                input_handler.interrupted = False
-                                break
-
-                            if isinstance(chunk, str):
-                                # Check if this chunk indicates tool calls are starting
-                                tool_start = (
-                                    "🔧 Using" in chunk
-                                    or "🔧 Executing" in chunk
-                                    or "Tool 1" in chunk
-                                    or "tool_calls" in chunk
-                                    or 'function":' in chunk
-                                    or "Executing " in chunk
-                                )
-
-                                # Check if this chunk indicates tool processing is complete
-                                tool_processing_end = (
-                                    "⚙️ Processing tool results..." in chunk
-                                    or "✅ Result:" in chunk
-                                    or "❌ Error:" in chunk
-                                    or ("Tool " in chunk and "SUCCESS:" in chunk)
-                                    or ("Tool " in chunk and "FAILED:" in chunk)
-                                    or chunk.strip().endswith(
-                                        "FAILED: Tool execution cancelled"
-                                    )
-                                )
-
-                                if tool_start and not tool_execution_started:
-                                    # Tool execution starting - format and display any buffered content first
-                                    tool_execution_started = True
-                                    self._tool_execution_started = True
-
-                                    # Get the most current buffer content
-                                    current_buffer = getattr(self, "_text_buffer", "")
-
-                                    # Display buffered pre-tool text if any
-                                    if current_buffer.strip():
-                                        # Emit streaming JSON event before formatting
-                                        if (
-                                            hasattr(self, "streaming_json_callback")
-                                            and self.streaming_json_callback
-                                        ):
-                                            self.streaming_json_callback(current_buffer)
-
-                                        formatted_response = (
-                                            self.formatter.format_markdown(
-                                                current_buffer
-                                            )
-                                        )
-                                        display_response = formatted_response.replace(
-                                            "\n", "\r\n"
-                                        )
-                                        print(display_response, end="", flush=True)
-                                        print("\r\n", end="", flush=True)  # Separator
-
-                                    # Clear the text buffer since we displayed it
-                                    self._text_buffer = ""
-
-                                # Handle tool processing completion
-                                if tool_processing_end and tool_execution_started:
-                                    # Tool processing complete - stream this chunk then switch back to buffering mode
-                                    display_chunk = chunk.replace("\n", "\r\n")
-                                    print(display_chunk, end="", flush=True)
-                                    full_response += chunk
-
-                                    # Reset for post-tool text buffering
-                                    tool_execution_started = False
-                                    self._tool_execution_started = False
-                                    self._text_buffer = ""
-                                    continue  # Don't process this chunk again below
-
-                                # Fallback: if we're in tool execution mode but see regular text patterns,
-                                # assume tool execution is complete and reset to buffering mode
-                                if (
-                                    tool_execution_started
-                                    and not tool_start
-                                    and not tool_processing_end
-                                ):
-                                    # Check if this looks like regular response text (not tool-related)
-                                    regular_text_patterns = [
-                                        chunk.strip().startswith(
-                                            (
-                                                "I'll",
-                                                "I will",
-                                                "I can",
-                                                "I need",
-                                                "Let me",
-                                                "Now",
-                                                "The",
-                                                "This",
-                                                "Based on",
-                                            )
-                                        ),
-                                        len(chunk.strip()) > 20
-                                        and not any(
-                                            pattern in chunk
-                                            for pattern in [
-                                                "Tool",
-                                                "Executing",
-                                                "🔧",
-                                                "✅",
-                                                "❌",
-                                                "function",
-                                                "arguments",
-                                            ]
-                                        ),
-                                        chunk.count(".") > 0
-                                        and chunk.count(" ")
-                                        > 5,  # Likely sentence structure
-                                    ]
-
-                                    if any(regular_text_patterns):
-                                        # We're seeing regular text, reset tool execution state
-                                        tool_execution_started = False
-                                        self._tool_execution_started = False
-                                        self._text_buffer = ""
-
-                                # Output behavior based on current mode
-                                force_buffering = getattr(
-                                    self, "_force_buffering_for_streaming_json", False
-                                )
-
-                                if tool_execution_started and not force_buffering:
-                                    # In tool execution mode - stream directly (unless forcing buffer)
-                                    display_chunk = chunk.replace("\n", "\r\n")
-                                    print(display_chunk, end="", flush=True)
-                                    full_response += chunk
-                                else:
-                                    # In text mode (pre-tool or post-tool) - buffer for markdown formatting
-                                    # OR when streaming JSON (to hit buffer emission callbacks)
-                                    self._text_buffer = (
-                                        getattr(self, "_text_buffer", "") + chunk
-                                    )
-                                    full_response += chunk
-                            else:
-                                # Handle any non-string chunks if needed
-                                chunk_str = str(chunk)
-                                formatted_chunk = (
-                                    self.formatting_utils.format_chunk_safely(chunk_str)
-                                )
-                                display_chunk = formatted_chunk.replace("\n", "\r\n")
-                                print(display_chunk, end="", flush=True)
-                                full_response += chunk_str
-                    finally:
-                        # Always restore terminal settings first
-                        termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
-
-                        # Handle any remaining buffered text and final formatting
-                        if not interrupted:
-                            # Check if there's buffered text that needs to be displayed
-                            remaining_text_buffer = getattr(self, "_text_buffer", "")
-                            if remaining_text_buffer.strip():
-                                # Emit streaming JSON event before formatting
-                                if (
-                                    hasattr(self, "streaming_json_callback")
-                                    and self.streaming_json_callback
-                                ):
-                                    print(
-                                        f"DEBUG: Buffer callback with: {repr(remaining_text_buffer[:50])}",
-                                        file=sys.stderr,
-                                    )
-                                    self.streaming_json_callback(remaining_text_buffer)
-
-                                # Format and display the remaining buffered text
-                                formatted_response = self.formatter.format_markdown(
-                                    remaining_text_buffer
-                                )
-                                display_response = formatted_response.replace(
-                                    "\n", "\r\n"
-                                )
-                                print(display_response, end="", flush=True)
-                                print()  # Final newline
-                            elif full_response and not tool_execution_started:
-                                # No tools were executed and no separate buffer - format the entire response
-                                # Emit streaming JSON event before formatting the complete response
-                                if (
-                                    hasattr(self, "streaming_json_callback")
-                                    and self.streaming_json_callback
-                                ):
-                                    print(
-                                        f"DEBUG: Full response callback with: {repr(full_response[:50])}",
-                                        file=sys.stderr,
-                                    )
-                                    self.streaming_json_callback(full_response)
-
-                                print()  # New line after streaming
-                                print(
-                                    f"\033[1A\033[KAssistant: ", end=""
-                                )  # Move up one line, clear it, write "Assistant: "
-                                formatted_response = self.formatter.format_markdown(
-                                    full_response
-                                )
-                                print(formatted_response)
-                                sys.stdout.flush()
-                            else:
-                                # Tools were executed - just add a newline (content already displayed)
-                                print()
-                        elif interrupted:
-                            print("\n🛑 Streaming interrupted by user")
-                            sys.stdout.flush()
-                        else:
-                            print()  # Just a newline if no response
-
-                    # Add assistant response to messages
-                    if full_response:  # Only add if not interrupted
-                        messages.append({"role": "assistant", "content": full_response})
-                else:
-                    # Non-streaming response with markdown formatting
-                    formatted_response = self.formatter.format_markdown(str(response))
-                    print(f"\nAssistant: {formatted_response}")
-                    messages.append({"role": "assistant", "content": str(response)})
-
-            except KeyboardInterrupt:
-                # Move to beginning of line and clear, then print exit message
-                sys.stdout.write("\r\x1b[KExiting...\n")
-                sys.stdout.flush()
-                break
-            except Exception as e:
-                print(f"\nError: {e}")
-
-        # Return the updated messages list for session saving
-        return messages
-
-    # Centralized Tool Call Processing Methods
-    # ========================================
 
     def _extract_and_normalize_tool_calls(
         self, response: Any, accumulated_content: str = ""
@@ -2256,3 +1872,91 @@ class BaseMCPAgent(ABC):
             current_messages.extend(tool_result_messages)
 
         return current_messages, None, True
+
+    # ============================================================================
+    # CENTRALIZED RESPONSE HANDLING METHODS
+    # ============================================================================
+
+    async def _handle_complete_response_generic(
+        self,
+        response: Any,
+        original_messages: List[Dict[str, str]],
+        interactive: bool = True,
+    ) -> Union[str, Any]:
+        """Generic handler for non-streaming responses - delegates to ResponseHandler."""
+        return await self.response_handler.handle_complete_response_generic(
+            response, original_messages, interactive
+        )
+
+    def _handle_streaming_response_generic(
+        self,
+        response,
+        original_messages: List[Dict[str, str]] = None,
+        interactive: bool = True,
+    ):
+        """Generic handler for streaming responses - delegates to ResponseHandler."""
+        return self.response_handler.handle_streaming_response_generic(
+            response, original_messages, interactive
+        )
+
+    @abstractmethod
+    def _extract_response_content(
+        self, response: Any
+    ) -> tuple[str, List[Any], Dict[str, Any]]:
+        """Extract text content, tool calls, and provider-specific data from response.
+
+        Returns:
+            tuple: (text_content, tool_calls, provider_specific_data)
+        """
+        pass
+
+    @abstractmethod
+    async def _process_streaming_chunks(
+        self, response
+    ) -> tuple[str, List[Any], Dict[str, Any]]:
+        """Process streaming response chunks.
+
+        Returns:
+            tuple: (accumulated_content, tool_calls, provider_specific_data)
+        """
+        pass
+
+    @abstractmethod
+    async def _make_api_request(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List] = None,
+        stream: bool = True,
+    ) -> Any:
+        """Make an API request to the provider.
+
+        Returns:
+            Provider-specific response object
+        """
+        pass
+
+    @abstractmethod
+    def _create_mock_response(self, content: str, tool_calls: List[Any]) -> Any:
+        """Create a mock response object for centralized processing."""
+        pass
+
+    # ============================================================================
+    # PROVIDER-SPECIFIC FEATURE HANDLERS (with default implementations)
+    # ============================================================================
+
+    def _handle_provider_specific_features(self, provider_data: Dict[str, Any]) -> None:
+        """Handle provider-specific features like reasoning content. Override in subclasses."""
+        pass
+
+    def _format_provider_specific_content(self, provider_data: Dict[str, Any]) -> str:
+        """Format provider-specific content for output. Override in subclasses."""
+        return ""
+
+    def _extract_continuation_message(self, continuation_message) -> Dict[str, Any]:
+        """Extract the actual continuation message from structured response."""
+        if (
+            isinstance(continuation_message, dict)
+            and "continuation_message" in continuation_message
+        ):
+            return continuation_message["continuation_message"]
+        return continuation_message

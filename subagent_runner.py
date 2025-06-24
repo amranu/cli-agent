@@ -57,8 +57,7 @@ async def run_subagent_task(task_file_path: str):
 
         task_id = task_data["task_id"]
 
-        # Set global task_id for emit functions
-        global current_task_id
+        # Set global task_id for emit functions IMMEDIATELY after getting task_id
         current_task_id = task_id
         description = task_data["description"]
         prompt = task_data["prompt"]
@@ -270,76 +269,81 @@ CRITICAL INSTRUCTIONS:
                 emit_output_with_id(tool_error_msg)
                 raise
 
-        host._execute_mcp_tool = emit_tool_execution
+        # NOTE: Don't override _execute_mcp_tool - let normal tool call handling work
+        # host._execute_mcp_tool = emit_tool_execution
 
-        # Run the subagent in a conversation loop until it calls emit_result
-        conversation_round = 0
-        max_rounds = 20  # Prevent infinite loops
-
+        # Approach: Override tool execution to capture results
         try:
-            while conversation_round < max_rounds:
-                conversation_round += 1
-                emit_output_with_id(f"💭 Conversation round {conversation_round}")
+            # Capture tool execution results
+            captured_tool_results = []
 
-                response = await host.generate_response(messages)
+            # Override the tool execution to capture results
+            original_execute_mcp_tool = host._execute_mcp_tool
 
-                # Handle the response
-                if isinstance(response, str):
-                    response_content = response
+            async def capture_tool_execution(tool_key, arguments):
+                result = await original_execute_mcp_tool(tool_key, arguments)
+                captured_tool_results.append({"tool": tool_key, "result": result})
+                return result
+
+            host._execute_mcp_tool = capture_tool_execution
+
+            try:
+                # Generate response with tool capture
+                response = await host.generate_response(messages, stream=False)
+
+                # Build result from captured tool outputs
+                if captured_tool_results:
+                    result_parts = []
+                    for tool_result in captured_tool_results:
+                        tool_name = tool_result["tool"].split(":")[
+                            -1
+                        ]  # Get tool name without prefix
+                        result_content = str(tool_result["result"]).strip()
+
+                        # For bash commands, extract just the output
+                        if tool_name == "bash_execute" and result_content:
+                            # Look for actual command output
+                            lines = result_content.split("\n")
+                            for line in lines:
+                                if line.strip() and not line.startswith(
+                                    ("Executing", "Command completed", "Exit code")
+                                ):
+                                    result_parts.append(line.strip())
+                        else:
+                            result_parts.append(result_content)
+
+                    if result_parts:
+                        result_text = "\n".join(result_parts)
+                    else:
+                        result_text = f"Task '{description}' executed successfully"
                 else:
-                    response_content = str(response)
-
-                # Add assistant response to conversation
-                messages.append({"role": "assistant", "content": response_content})
-
-                # Emit the assistant's response
-                if response_content.strip():
-                    emit_output_with_id(f"🤖 Response: {response_content}")
-
-                # The emit_result tool will call sys.exit(0) when called, so if we reach here,
-                # the subagent hasn't finished yet. We continue the conversation by asking
-                # it to continue or complete the task.
-
-                # Add a follow-up message to encourage completion if we've had multiple rounds
-                # and the last response didn't contain tool calls
-                if (
-                    conversation_round > 2
-                    and "🔧 Executing tool:" not in response_content
-                ):
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": "Please continue working on the task. Use the available tools if needed. When you have completed the task, use the emit_result tool to provide your final results and terminate.",
-                        }
+                    result_text = (
+                        str(response).strip()
+                        if response
+                        else f"Task '{description}' completed successfully"
                     )
+
+            finally:
+                # Restore original method
+                host._execute_mcp_tool = original_execute_mcp_tool
+
+            # Use emit_result to return the captured output
+            from subagent import emit_result
+
+            emit_result(result_text)
+            return  # Exit successfully
 
         except SystemExit:
             # This is expected when emit_result calls sys.exit(0)
-            # The subagent has completed successfully
             return
         except Exception as e:
             emit_error_with_id(f"Task execution error: {str(e)}", str(e))
             raise
-        finally:
-            # Restore original method
-            host._execute_mcp_tool = original_execute_mcp_tool
 
-        # If we reach here without SystemExit, the subagent didn't call emit_result
-        if conversation_round >= max_rounds:
-            emit_error_with_id(
-                f"Task did not complete after {max_rounds} rounds. Subagent should call emit_result to terminate.",
-                "Max rounds exceeded",
-            )
-            emit_status_with_id(
-                "failed",
-                f"Task exceeded maximum {max_rounds} conversation rounds without calling emit_result",
-            )
-        else:
-            # This shouldn't happen if emit_result was called (it should cause SystemExit)
-            emit_error_with_id(
-                "Task completed without calling emit_result", "Missing emit_result call"
-            )
-            emit_status_with_id("failed", "Task completed without calling emit_result")
+        # Fallback: If the main approach fails, this shouldn't be reached
+        emit_error_with_id(
+            "Unexpected: Reached fallback section", "Main execution path failed"
+        )
 
     except Exception as e:
         emit_error_with_id(f"Task failed: {str(e)}", str(e))

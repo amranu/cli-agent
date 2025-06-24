@@ -66,9 +66,21 @@ class MCPDeepseekHost(BaseMCPAgent):
         return converter.convert_tools(self.available_tools)
 
     def parse_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
-        """Parse tool calls from Deepseek response using shared utilities."""
+        """Parse tool calls using centralized framework with DeepSeek-specific extraction."""
         logger.debug(f"parse_tool_calls received response type: {type(response)}")
         logger.debug(f"parse_tool_calls response content: {response}")
+
+        # Extract text content for text-based parsing
+        text_content = ""
+        if isinstance(response, str):
+            text_content = response
+
+        # Use centralized parsing framework
+        return self._parse_tool_calls_generic(response, text_content)
+
+    def _extract_structured_calls(self, response: Any) -> List[Any]:
+        """Extract structured tool calls from DeepSeek response."""
+        structured_calls = []
 
         # Handle standard OpenAI-style response objects with tool_calls attribute
         if hasattr(response, "choices") and response.choices:
@@ -77,7 +89,6 @@ class MCPDeepseekHost(BaseMCPAgent):
                 logger.debug(
                     f"Found {len(message.tool_calls)} tool calls in response object"
                 )
-                result = []
                 for tc in message.tool_calls:
                     try:
                         # Handle both dict and object arguments
@@ -90,30 +101,41 @@ class MCPDeepseekHost(BaseMCPAgent):
                         else:
                             args = {}
 
-                        result.append({"name": tc.function.name, "args": args})
+                        # Convert to SimpleNamespace format for compatibility
+                        from types import SimpleNamespace
+
+                        call = SimpleNamespace()
+                        call.name = tc.function.name
+                        call.args = args
+                        call.id = getattr(tc, "id", None)
+                        structured_calls.append(call)
                     except Exception as e:
                         logger.warning(
                             f"Failed to parse tool call {tc.function.name}: {e}"
                         )
 
-                logger.debug(f"Parsed tool calls from response object: {result}")
-                return result
+        return structured_calls
 
-        # Handle string responses (custom DeepSeek format)
-        elif isinstance(response, str):
+    def _parse_text_based_calls(self, text_content: str) -> List[Any]:
+        """Parse text-based tool calls using DeepSeek-specific patterns."""
+        text_calls = []
+
+        if text_content:
             logger.debug("Parsing string response for tool calls")
-            tool_calls = DeepSeekToolCallParser.parse_tool_calls(response)
+            tool_calls = DeepSeekToolCallParser.parse_tool_calls(text_content)
             logger.debug(f"DeepSeekToolCallParser found {len(tool_calls)} tool calls")
-            # Convert to dict format for compatibility
-            result = [
-                {"name": tc.function.name, "args": tc.function.arguments}
-                for tc in tool_calls
-            ]
-            logger.debug(f"Converted tool calls: {result}")
-            return result
-        else:
-            logger.debug(f"Response type not handled, returning empty list")
-        return []
+
+            # Convert to SimpleNamespace format for consistency
+            from types import SimpleNamespace
+
+            for tc in tool_calls:
+                call = SimpleNamespace()
+                call.name = tc.function.name
+                call.args = tc.function.arguments
+                call.id = getattr(tc, "id", None)
+                text_calls.append(call)
+
+        return text_calls
 
     def _extract_text_before_tool_calls(self, content: str) -> str:
         """Extract text that appears before DeepSeek tool calls."""
@@ -164,13 +186,13 @@ class MCPDeepseekHost(BaseMCPAgent):
         stream: Optional[bool] = None,
         modify_messages_in_place: bool = False,
     ) -> Union[str, Any]:
-        """DeepSeek-specific response generation with message cleaning."""
-        # Clean messages first to prevent JSON deserialization errors
-        cleaned_messages = self._clean_messages_for_deepseek(messages)
+        """DeepSeek-specific response generation using centralized preprocessing."""
+        # Use centralized message preprocessing
+        processed_messages = self._preprocess_messages(messages)
 
-        # Call parent's generate_response with cleaned messages and all parameters
+        # Call parent's generate_response with processed messages
         return await super().generate_response(
-            cleaned_messages, tools, stream, modify_messages_in_place
+            processed_messages, tools, stream, modify_messages_in_place
         )
 
     async def _generate_completion(
@@ -180,44 +202,33 @@ class MCPDeepseekHost(BaseMCPAgent):
         stream: bool = True,
         interactive: bool = True,
     ) -> Any:
-        """Generate completion using DeepSeek API."""
+        """Generate completion using DeepSeek API - delegate to centralized handlers."""
         # Check if we should use buffering for streaming JSON
         use_buffering = (
             hasattr(self, "streaming_json_callback")
             and self.streaming_json_callback is not None
         )
 
-        # Use the stream parameter passed in (centralized logic decides streaming behavior)
-
-        # Clean messages again as a safety net in case they bypassed generate_response
-        cleaned_messages = self._clean_messages_for_deepseek(messages)
-
-        # Handle deepseek-reasoner specific message formatting
-        enhanced_messages = self._format_messages_for_reasoner(cleaned_messages)
-
         try:
-            response = self.deepseek_client.chat.completions.create(
-                model=self.deepseek_config.model,
-                messages=enhanced_messages,
-                tools=tools,
-                temperature=self.deepseek_config.temperature,
-                max_tokens=self.deepseek_config.max_tokens,
-                stream=stream,
-            )
-
             if stream:
                 if use_buffering:
                     # Use buffering for streaming JSON mode
                     return await self._handle_buffered_streaming_response(
-                        response, enhanced_messages, interactive=interactive
+                        await self._make_api_request(messages, tools, stream=True),
+                        messages,
+                        interactive=interactive,
                     )
                 else:
-                    return self._handle_streaming_response(
-                        response, enhanced_messages, interactive=interactive
+                    return self._handle_streaming_response_generic(
+                        await self._make_api_request(messages, tools, stream=True),
+                        messages,
+                        interactive=interactive,
                     )
             else:
-                return await self._handle_complete_response(
-                    response, enhanced_messages, interactive=interactive
+                # Non-streaming response
+                response = await self._make_api_request(messages, tools, stream=False)
+                return await self._handle_complete_response_generic(
+                    response, messages, interactive=interactive
                 )
 
         except Exception as e:
@@ -265,10 +276,10 @@ class MCPDeepseekHost(BaseMCPAgent):
 
         return enhanced_messages
 
-    def _clean_messages_for_deepseek(
+    def _clean_message_format(
         self, messages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """Clean messages to remove non-standard fields that cause DeepSeek JSON deserialization errors."""
+        """DeepSeek-specific message cleaning to prevent JSON deserialization errors."""
         logger.debug(f"Cleaning {len(messages)} messages for DeepSeek")
         cleaned_messages = []
 
@@ -344,6 +355,26 @@ class MCPDeepseekHost(BaseMCPAgent):
 
         return cleaned_messages
 
+    def _enhance_messages_for_model(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """DeepSeek-specific message enhancement for deepseek-reasoner."""
+        return self._format_messages_for_reasoner(messages)
+
+    def _is_retryable_error(self, error: Exception) -> bool:
+        """DeepSeek-specific retryable error detection."""
+        error_str = str(error).lower()
+        # DeepSeek-specific retryable conditions plus generic ones
+        return (
+            super()._is_retryable_error(error)
+            or "deepseek" in error_str
+            or "model overloaded" in error_str
+        )
+
+    def _get_current_runtime_model(self) -> str:
+        """Get the actual DeepSeek model being used at runtime."""
+        return self.deepseek_config.model
+
     def _normalize_tool_calls_to_standard_format(
         self, tool_calls: List[Any]
     ) -> List[Dict[str, Any]]:
@@ -383,9 +414,147 @@ class MCPDeepseekHost(BaseMCPAgent):
 
         return normalized_calls
 
-    def _get_current_runtime_model(self) -> str:
-        """Get the actual DeepSeek model being used at runtime."""
-        return self.deepseek_config.model
+    # ============================================================================
+    # PROVIDER-SPECIFIC ADAPTER METHODS
+    # ============================================================================
+
+    def _extract_response_content(
+        self, response: Any
+    ) -> tuple[str, List[Any], Dict[str, Any]]:
+        """Extract content from DeepSeek response."""
+        if not hasattr(response, "choices") or not response.choices:
+            return "", [], {}
+
+        message = response.choices[0].message
+        text_content = message.content or ""
+        tool_calls = message.tool_calls if hasattr(message, "tool_calls") else []
+
+        # Handle DeepSeek-specific reasoning content
+        provider_data = {}
+        if hasattr(message, "reasoning_content") and message.reasoning_content:
+            provider_data["reasoning_content"] = message.reasoning_content
+
+        return text_content, tool_calls, provider_data
+
+    async def _process_streaming_chunks(
+        self, response
+    ) -> tuple[str, List[Any], Dict[str, Any]]:
+        """Process DeepSeek streaming chunks."""
+        accumulated_content = ""
+        accumulated_reasoning_content = ""
+        accumulated_tool_calls = []
+
+        for chunk in response:
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+
+                # Handle reasoning content (deepseek-reasoner)
+                if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                    accumulated_reasoning_content += delta.reasoning_content
+
+                # Handle regular content
+                if delta.content:
+                    accumulated_content += delta.content
+
+                # Handle tool calls in streaming
+                if hasattr(delta, "tool_calls") and delta.tool_calls:
+                    for tool_call_delta in delta.tool_calls:
+                        if tool_call_delta.index is not None:
+                            # Ensure we have enough space in our list
+                            while len(accumulated_tool_calls) <= tool_call_delta.index:
+                                accumulated_tool_calls.append(
+                                    {
+                                        "id": None,
+                                        "type": "function",
+                                        "function": {"name": None, "arguments": ""},
+                                    }
+                                )
+
+                            current_tool_call = accumulated_tool_calls[
+                                tool_call_delta.index
+                            ]
+
+                            # Update tool call data
+                            if tool_call_delta.id:
+                                current_tool_call["id"] = tool_call_delta.id
+                            if tool_call_delta.type:
+                                current_tool_call["type"] = tool_call_delta.type
+                            if tool_call_delta.function:
+                                if tool_call_delta.function.name:
+                                    current_tool_call["function"][
+                                        "name"
+                                    ] = tool_call_delta.function.name
+                                if tool_call_delta.function.arguments:
+                                    current_tool_call["function"][
+                                        "arguments"
+                                    ] += tool_call_delta.function.arguments
+
+        # Filter out incomplete tool calls
+        complete_tool_calls = [
+            tc for tc in accumulated_tool_calls if tc["function"]["name"] is not None
+        ]
+
+        # Convert to SimpleNamespace format for compatibility
+        from types import SimpleNamespace
+
+        tool_calls_objs = []
+        for tc in complete_tool_calls:
+            tool_call = SimpleNamespace()
+            tool_call.id = tc["id"] or f"stream_call_{len(tool_calls_objs)}"
+            tool_call.type = tc["type"]
+            tool_call.function = SimpleNamespace()
+            tool_call.function.name = tc["function"]["name"]
+            tool_call.function.arguments = tc["function"]["arguments"]
+            tool_calls_objs.append(tool_call)
+
+        provider_data = {}
+        if accumulated_reasoning_content:
+            provider_data["reasoning_content"] = accumulated_reasoning_content
+
+        return accumulated_content, tool_calls_objs, provider_data
+
+    async def _make_api_request(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List] = None,
+        stream: bool = True,
+    ) -> Any:
+        """Make DeepSeek API request using centralized retry logic."""
+        # Use centralized retry logic
+        return await self._make_api_request_with_retry(
+            lambda: self.deepseek_client.chat.completions.create(
+                model=self.deepseek_config.model,
+                messages=messages,  # Messages already processed by centralized pipeline
+                tools=tools,
+                temperature=self.deepseek_config.temperature,
+                max_tokens=self.deepseek_config.max_tokens,
+                stream=stream,
+            )
+        )
+
+    def _create_mock_response(self, content: str, tool_calls: List[Any]) -> Any:
+        """Create mock DeepSeek response for centralized processing."""
+        mock_response = type("MockResponse", (), {})()
+        mock_response.choices = [type("MockChoice", (), {})()]
+        mock_response.choices[0].message = type("MockMessage", (), {})()
+        mock_response.choices[0].message.content = content
+        mock_response.choices[0].message.tool_calls = tool_calls
+        return mock_response
+
+    def _handle_provider_specific_features(self, provider_data: Dict[str, Any]) -> None:
+        """Handle DeepSeek-specific features like reasoning content."""
+        if "reasoning_content" in provider_data:
+            reasoning_content = provider_data["reasoning_content"]
+            # Store reasoning content for next message if using reasoner
+            if self.deepseek_config.model == "deepseek-reasoner":
+                self.last_reasoning_content = reasoning_content
+            print(f"\n<reasoning>{reasoning_content}</reasoning>", flush=True)
+
+    def _format_provider_specific_content(self, provider_data: Dict[str, Any]) -> str:
+        """Format DeepSeek-specific content for output."""
+        if "reasoning_content" in provider_data:
+            return f"<reasoning>{provider_data['reasoning_content']}</reasoning>\n\n"
+        return ""
 
     async def _handle_complete_response(
         self,
@@ -393,163 +562,10 @@ class MCPDeepseekHost(BaseMCPAgent):
         original_messages: List[Dict[str, str]],
         interactive: bool = True,
     ) -> Union[str, Any]:
-        """Handle non-streaming response from Deepseek."""
-        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
-
-        # Use original messages list if modify_messages_in_place is enabled for session persistence
-        if getattr(self, "_modify_messages_in_place", False):
-            current_messages = original_messages
-        else:
-            current_messages = original_messages.copy()
-
-        # Debug log the raw response
-        logger.debug(f"Raw LLM response: {response}")
-        logger.debug(f"Raw LLM message content: {response.choices[0].message.content}")
-        if (
-            hasattr(response.choices[0].message, "reasoning_content")
-            and response.choices[0].message.reasoning_content
-        ):
-            logger.debug(
-                f"Raw LLM reasoning content: {response.choices[0].message.reasoning_content}"
-            )
-
-        round_num = 0
-        while True:
-            round_num += 1
-            choice = response.choices[0]
-            message = choice.message
-
-            # Debug: log the actual response
-            logger.debug(f"Processing response round {round_num}")
-            logger.debug(f"Message content: {repr(message.content)}")
-            logger.debug(f"Message has tool_calls: {bool(message.tool_calls)}")
-            if message.tool_calls:
-                logger.debug(
-                    f"Tool calls: {[tc.function.name for tc in message.tool_calls]}"
-                )
-
-            # Handle reasoning content if present (deepseek-reasoner)
-            reasoning_content = ""
-            if hasattr(message, "reasoning_content") and message.reasoning_content:
-                reasoning_content = message.reasoning_content
-                logger.debug(f"Found reasoning content: {len(reasoning_content)} chars")
-                # Store reasoning content for next message if using reasoner
-                if self.deepseek_config.model == "deepseek-reasoner":
-                    self.last_reasoning_content = reasoning_content
-                if interactive:
-                    print(f"\n<reasoning>{reasoning_content}</reasoning>", flush=True)
-
-            # Display regular message content if present and not tool-only
-            if message.content and interactive:
-                # Check if this is just tool calls or has actual text content
-                has_only_tool_calls = (
-                    message.tool_calls
-                    or ("<｜tool▁calls▁begin｜>" in message.content)
-                    or ("<｜tool▁call▁begin｜>" in message.content)
-                    or (
-                        '{"function":' in message.content
-                        and message.content.strip().startswith('{"function"')
-                    )
-                )
-
-                if not has_only_tool_calls:
-                    # Extract text that appears before any tool calls
-                    text_before_tools = self._extract_text_before_tool_calls(
-                        message.content
-                    )
-                    if text_before_tools:
-                        formatted_text = self.format_markdown(text_before_tools)
-                        print(f"\n{formatted_text}", flush=True)
-
-            # Use centralized tool call processing
-            updated_messages, continuation_message, has_tool_calls = (
-                await self._process_tool_calls_centralized(
-                    response,
-                    current_messages,
-                    original_messages,
-                    interactive=interactive,
-                    streaming_mode=False,
-                )
-            )
-
-            if has_tool_calls:
-                current_messages = updated_messages
-
-                if continuation_message:
-                    # Handle subagent coordination result
-                    if (
-                        isinstance(continuation_message, dict)
-                        and "continuation_message" in continuation_message
-                    ):
-                        # New structured format from centralized coordinator - messages already handled by base agent
-                        actual_continuation = continuation_message[
-                            "continuation_message"
-                        ]
-                    else:
-                        # Legacy format - just the continuation message
-                        actual_continuation = continuation_message
-
-                    # Restart with subagent results (non-streaming for subagents)
-                    new_messages = [actual_continuation]
-                    # Clean messages before API call to prevent JSON deserialization errors
-                    cleaned_new_messages = self._clean_messages_for_deepseek(
-                        new_messages
-                    )
-                    response = self.deepseek_client.chat.completions.create(
-                        model=self.deepseek_config.model,
-                        messages=cleaned_new_messages,
-                        temperature=self.deepseek_config.temperature,
-                        max_tokens=self.deepseek_config.max_tokens,
-                        stream=False,
-                        tools=self.convert_tools_to_llm_format(),
-                    )
-
-                    # Replace the old response and messages with the new context
-                    # and continue the loop to process this new response.
-                    current_messages = new_messages
-                    continue
-
-                # Make another request with tool results
-                # Clean messages before API call to prevent JSON deserialization errors
-                cleaned_current_messages = self._clean_messages_for_deepseek(
-                    current_messages
-                )
-                response = self.deepseek_client.chat.completions.create(
-                    model=self.deepseek_config.model,
-                    messages=cleaned_current_messages,
-                    temperature=self.deepseek_config.temperature,
-                    max_tokens=self.deepseek_config.max_tokens,
-                    stream=interactive,  # Stream if in interactive mode
-                    tools=self.convert_tools_to_llm_format(),
-                )
-
-                # If interactive, we need to handle the new streaming response
-                if interactive:
-                    return self._handle_streaming_response(
-                        response, current_messages, interactive=True
-                    )
-
-                # Continue the loop to check if the new response has more tool calls
-                continue
-            elif message.content:
-                logger.debug(f"Final response content: {message.content}")
-                # Include reasoning content if present
-                final_response = ""
-                if reasoning_content:
-                    final_response += f"<reasoning>{reasoning_content}</reasoning>\n\n"
-                final_response += message.content
-                return final_response
-            else:
-                # No more tool calls, return the final content
-                final_response = ""
-                if reasoning_content:
-                    final_response += f"<reasoning>{reasoning_content}</reasoning>\n\n"
-                if message.content:
-                    final_response += message.content
-                return final_response or ""
-
-        # If we hit the max rounds, return what we have
-        return response.choices[0].message.content or ""
+        """Handle non-streaming response - delegate to centralized handler."""
+        return await self._handle_complete_response_generic(
+            response, original_messages, interactive
+        )
 
     def _handle_streaming_response(
         self,
@@ -557,284 +573,10 @@ class MCPDeepseekHost(BaseMCPAgent):
         original_messages: List[Dict[str, str]] = None,
         interactive: bool = True,
     ):
-        """Handle streaming response from Deepseek with tool call support."""
-        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
-
-        class StreamingContext:
-            """Context to store exceptions that need to be raised after streaming."""
-
-            def __init__(self):
-                self.tool_denial_exception = None
-
-        context = StreamingContext()
-
-        async def async_stream_generator():
-            # Use original messages list if modify_messages_in_place is enabled for session persistence
-            if getattr(self, "_modify_messages_in_place", False):
-                current_messages = original_messages if original_messages else []
-            else:
-                current_messages = original_messages.copy() if original_messages else []
-            current_response = response  # Store the initial response
-
-            round_num = 0
-            while True:
-                round_num += 1
-                accumulated_content = ""
-                accumulated_reasoning_content = ""
-                accumulated_tool_calls = []
-                current_tool_call = None
-
-                # Process the current streaming response
-                for chunk in current_response:
-                    logger.debug(f"Streaming chunk: {chunk}")
-
-                    if chunk.choices:
-                        delta = chunk.choices[0].delta
-                        logger.debug(f"Delta content: {delta.content}")
-                        logger.debug(
-                            f"Delta has tool_calls: {hasattr(delta, 'tool_calls') and delta.tool_calls}"
-                        )
-
-                        # Handle reasoning content (deepseek-reasoner)
-                        if (
-                            hasattr(delta, "reasoning_content")
-                            and delta.reasoning_content
-                        ):
-                            accumulated_reasoning_content += delta.reasoning_content
-                            yield delta.reasoning_content
-
-                        # Handle regular content
-                        if delta.content:
-                            accumulated_content += delta.content
-                            yield delta.content
-
-                        # Handle tool calls in streaming
-                        if hasattr(delta, "tool_calls") and delta.tool_calls:
-                            for tool_call_delta in delta.tool_calls:
-                                # Handle new tool call
-                                if tool_call_delta.index is not None:
-                                    # Ensure we have enough space in our list
-                                    while (
-                                        len(accumulated_tool_calls)
-                                        <= tool_call_delta.index
-                                    ):
-                                        accumulated_tool_calls.append(
-                                            {
-                                                "id": None,
-                                                "type": "function",
-                                                "function": {
-                                                    "name": None,
-                                                    "arguments": "",
-                                                },
-                                            }
-                                        )
-
-                                    current_tool_call = accumulated_tool_calls[
-                                        tool_call_delta.index
-                                    ]
-
-                                    # Update tool call data
-                                    if tool_call_delta.id:
-                                        current_tool_call["id"] = tool_call_delta.id
-                                    if tool_call_delta.type:
-                                        current_tool_call["type"] = tool_call_delta.type
-                                    if tool_call_delta.function:
-                                        if tool_call_delta.function.name:
-                                            current_tool_call["function"][
-                                                "name"
-                                            ] = tool_call_delta.function.name
-                                        if tool_call_delta.function.arguments:
-                                            current_tool_call["function"][
-                                                "arguments"
-                                            ] += tool_call_delta.function.arguments
-
-                # Create a mock response for centralized processing
-                # Build response object that includes both standard and custom tool calls
-                logger.debug(
-                    f"Accumulated content before tool parsing: {repr(accumulated_content)}"
-                )
-                logger.debug(f"Accumulated tool calls: {accumulated_tool_calls}")
-
-                mock_response = type("MockResponse", (), {})()
-                mock_response.choices = [type("MockChoice", (), {})()]
-                mock_response.choices[0].message = type("MockMessage", (), {})()
-                mock_response.choices[0].message.content = accumulated_content
-
-                # Set tool_calls for standard format detection
-                if accumulated_tool_calls and any(
-                    tc["function"]["name"] for tc in accumulated_tool_calls
-                ):
-                    # Convert accumulated tool calls to SimpleNamespace format for parse_tool_calls
-                    from types import SimpleNamespace
-
-                    tool_calls_objs = []
-                    for tc in accumulated_tool_calls:
-                        if tc["function"]["name"]:
-                            tool_call = SimpleNamespace()
-                            tool_call.id = (
-                                tc["id"] or f"stream_call_{len(tool_calls_objs)}"
-                            )
-                            tool_call.type = tc["type"]
-                            tool_call.function = SimpleNamespace()
-                            tool_call.function.name = tc["function"]["name"]
-                            tool_call.function.arguments = tc["function"]["arguments"]
-                            tool_calls_objs.append(tool_call)
-                    mock_response.choices[0].message.tool_calls = tool_calls_objs
-                else:
-                    mock_response.choices[0].message.tool_calls = None
-
-                # Use centralized tool call processing for streaming
-                try:
-                    updated_messages, continuation_message, has_tool_calls = (
-                        await self._process_tool_calls_centralized(
-                            mock_response,
-                            current_messages,
-                            original_messages,
-                            interactive=interactive,
-                            streaming_mode=True,
-                            accumulated_content=accumulated_content,
-                        )
-                    )
-
-                    if has_tool_calls:
-                        current_messages = updated_messages
-
-                        if continuation_message:
-                            # Handle subagent coordination result
-                            if (
-                                isinstance(continuation_message, dict)
-                                and "continuation_message" in continuation_message
-                            ):
-                                # New structured format from centralized coordinator
-                                if continuation_message.get(
-                                    "_should_yield_messages"
-                                ) and not (
-                                    hasattr(self, "streaming_json_callback")
-                                    and self.streaming_json_callback
-                                ):
-                                    # Yield status messages for streaming mode
-                                    print(
-                                        continuation_message["interrupt_msg"],
-                                        flush=True,
-                                    )
-                                    print(
-                                        continuation_message["completion_msg"],
-                                        flush=True,
-                                    )
-                                    print(
-                                        continuation_message["restart_msg"], flush=True
-                                    )
-
-                                actual_continuation = continuation_message[
-                                    "continuation_message"
-                                ]
-                            else:
-                                # Legacy format - just the continuation message
-                                actual_continuation = continuation_message
-
-                            # Preserve user context but replace assistant response with continuation
-                            new_messages = current_messages[:-1] + [actual_continuation]
-
-                            new_response = await self._generate_completion(
-                                new_messages,
-                                tools=self.convert_tools_to_llm_format(),
-                                stream=True,
-                                interactive=interactive,
-                            )
-                            if hasattr(new_response, "__aiter__"):
-                                async for new_chunk in new_response:
-                                    yield new_chunk
-                            else:
-                                yield str(new_response)
-                            return
-
-                        if not (
-                            hasattr(self, "streaming_json_callback")
-                            and self.streaming_json_callback
-                        ):
-                            print("\r\n✅ Tool execution complete. Continuing...\n")
-
-                except ToolDeniedReturnToPrompt as e:
-                    # Store the exception to raise after generator completes
-                    context.tool_denial_exception = e
-                    # yield "\nTool execution denied - returning to prompt.\n"
-                    return  # Exit the generator
-
-                # Make a new streaming request with tool results if we had tool calls
-                if has_tool_calls:
-                    try:
-                        tools = (
-                            self.convert_tools_to_llm_format()
-                            if self.available_tools
-                            else None
-                        )
-                        # Clean messages before API call to prevent JSON deserialization errors
-                        cleaned_current_messages = self._clean_messages_for_deepseek(
-                            current_messages
-                        )
-                        current_response = self.deepseek_client.chat.completions.create(
-                            model=self.deepseek_config.model,
-                            messages=cleaned_current_messages,
-                            temperature=self.deepseek_config.temperature,
-                            max_tokens=self.deepseek_config.max_tokens,
-                            stream=self.deepseek_config.stream,
-                            tools=tools,
-                        )
-                        # Handle both streaming and non-streaming responses
-                        if self.deepseek_config.stream:
-                            # Continue to next round with new streaming response
-                            continue
-                        else:
-                            # Handle non-streaming response and break out of streaming generator
-                            if (
-                                hasattr(current_response, "choices")
-                                and current_response.choices
-                            ):
-                                choice = current_response.choices[0]
-                                message = choice.message
-
-                                # Handle reasoning content if present
-                                if (
-                                    hasattr(message, "reasoning_content")
-                                    and message.reasoning_content
-                                ):
-                                    yield f"<reasoning>{message.reasoning_content}</reasoning>\n\n"
-
-                                # Yield the content and exit
-                                if message.content:
-                                    yield message.content
-                                break
-                            else:
-                                yield "Error: Invalid response format\n"
-                                break
-
-                    except Exception as e:
-                        yield f"Error continuing conversation after tool execution: {e}\n"
-                        break
-
-                else:
-                    # No tool calls, we're done
-                    # Store reasoning content for next message if using reasoner
-                    if (
-                        accumulated_reasoning_content
-                        and self.deepseek_config.model == "deepseek-reasoner"
-                    ):
-                        self.last_reasoning_content = accumulated_reasoning_content
-                    break
-
-        # Create a wrapper to handle tool denial exceptions
-        async def wrapper():
-            generator = async_stream_generator()
-
-            try:
-                async for chunk in generator:
-                    yield chunk
-            finally:
-                # If we collected a tool denial exception, raise it now
-                if context.tool_denial_exception:
-                    raise context.tool_denial_exception
-
-        return wrapper()
+        """Handle streaming response - delegate to centralized handler."""
+        return self._handle_streaming_response_generic(
+            response, original_messages, interactive
+        )
 
     async def _handle_buffered_streaming_response(
         self,
@@ -842,84 +584,22 @@ class MCPDeepseekHost(BaseMCPAgent):
         original_messages: List[Dict[str, str]] = None,
         interactive: bool = True,
     ) -> str:
-        """Handle streaming response by collecting all chunks and emitting through buffer system."""
-        # Collect all chunks first
-        full_content = ""
-        tool_calls_dict = {}  # Accumulate tool calls by index
-        last_response = None
-
-        for chunk in response:
-            if chunk.choices:
-                delta = chunk.choices[0].delta
-                last_response = chunk  # Keep the last chunk for tool calls
-
-                # Handle regular content
-                if delta.content:
-                    full_content += delta.content
-
-                # Handle tool calls in streaming - accumulate by index
-                if hasattr(delta, "tool_calls") and delta.tool_calls:
-                    for tool_call in delta.tool_calls:
-                        index = getattr(tool_call, "index", 0)
-
-                        # Initialize tool call if not exists
-                        if index not in tool_calls_dict:
-                            tool_calls_dict[index] = {
-                                "id": None,
-                                "function": {"name": None, "arguments": ""},
-                            }
-
-                        # Accumulate tool call data
-                        if tool_call.id is not None:
-                            tool_calls_dict[index]["id"] = tool_call.id
-
-                        if hasattr(tool_call, "function") and tool_call.function:
-                            if tool_call.function.name is not None:
-                                tool_calls_dict[index]["function"][
-                                    "name"
-                                ] = tool_call.function.name
-                            if tool_call.function.arguments is not None:
-                                tool_calls_dict[index]["function"][
-                                    "arguments"
-                                ] += tool_call.function.arguments
-
-        # Convert accumulated tool calls to list
-        collected_tool_calls = []
-        for index in sorted(tool_calls_dict.keys()):
-            tc_data = tool_calls_dict[index]
-            # Create a mock tool call object
-            from types import SimpleNamespace
-
-            tool_call = SimpleNamespace()
-            tool_call.id = tc_data["id"]
-            tool_call.function = SimpleNamespace()
-            tool_call.function.name = tc_data["function"]["name"]
-            tool_call.function.arguments = tc_data["function"]["arguments"]
-            collected_tool_calls.append(tool_call)
+        """Handle streaming response for JSON mode - simplified version."""
+        # Process chunks to get content and tool calls
+        accumulated_content, tool_calls, provider_data = (
+            await self._process_streaming_chunks(response)
+        )
 
         # For streaming JSON mode, trigger the centralized base agent handler
         if self.streaming_json_callback:
-            if collected_tool_calls:
-                # In streaming mode with proper tool_calls, use full content as is
-                # The _extract_text_before_tool_calls is for legacy format parsing
-                extracted_text = full_content
-
-                # Create a mock response object with accumulated tool calls
-                from types import SimpleNamespace
-
-                mock_response = SimpleNamespace()
-                mock_response.choices = [SimpleNamespace()]
-                mock_response.choices[0].message = SimpleNamespace()
-                mock_response.choices[0].message.content = (
-                    extracted_text  # Use extracted text
+            if tool_calls:
+                # Create a mock response object for centralized processing
+                mock_response = self._create_mock_response(
+                    accumulated_content, tool_calls
                 )
-                mock_response.choices[0].message.tool_calls = collected_tool_calls
-
-                # Let base agent handle the Claude Code format via the standard flow
-                # We'll return the response so it gets processed normally
                 return mock_response
             else:
                 # Just text content, emit it directly
-                self.streaming_json_callback(full_content)
+                self.streaming_json_callback(accumulated_content)
 
-        return full_content
+        return accumulated_content

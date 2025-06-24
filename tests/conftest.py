@@ -77,64 +77,67 @@ def mock_base_agent(sample_host_config, mock_tools):
         def parse_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
             return []
 
-        async def _generate_completion(
-            self,
-            messages: List[Dict[str, Any]],
-            tools=None,
-            stream=True,
-            interactive=True,
+        async def generate_response(
+            self, messages: List[Dict[str, Any]], stream=True
         ) -> Any:
             return "Mock response"
 
+        # Implement all abstract methods
         def _normalize_tool_calls_to_standard_format(self, tool_calls):
             return []
 
-        def _get_current_runtime_model(self) -> str:
-            """Return mock model name for testing."""
-            return "mock-model"
+        def _extract_text_before_tool_calls(self, content: str) -> str:
+            return ""
 
         def _get_provider_config(self):
-            """Mock provider config for testing."""
-            return self.config.get_deepseek_config()  # Use any config for testing
+            return self.config.get_deepseek_config()
 
         def _get_streaming_preference(self, provider_config) -> bool:
-            """Mock streaming preference for testing."""
             return True
 
         def _calculate_timeout(self, provider_config) -> float:
-            """Mock timeout calculation for testing."""
             return 60.0
 
         def _create_llm_client(self, provider_config, timeout_seconds):
-            """Mock client creation for testing."""
-            return MagicMock()  # Return a mock client
+            return MagicMock()
 
-        def _extract_text_before_tool_calls(self, content: str) -> str:
-            """Mock text extraction for testing."""
-            return ""
+        async def _generate_completion(
+            self, messages, tools=None, stream=True, interactive=True
+        ):
+            return "test response"
 
-        def _get_llm_specific_instructions(self) -> str:
-            """Mock LLM-specific instructions for testing."""
-            return ""
+        def _get_current_runtime_model(self) -> str:
+            return "test-model"
+
+        def _extract_response_content(self, response):
+            return ("test content", [], {})
+
+        async def _process_streaming_chunks(self, response):
+            return ("test content", [], {})
+
+        async def _make_api_request(
+            self, messages, tools=None, stream=True, interactive=True
+        ):
+            return MagicMock()
+
+        def _create_mock_response(self, content: str, tool_calls):
+            return MagicMock()
 
         # Add missing methods that tests are looking for
         def get_token_limit(self) -> int:
             """Mock token limit for testing."""
             return 4000
 
-        async def compact_conversation(
+        def compact_conversation(
             self, messages: List[Dict[str, Any]]
         ) -> List[Dict[str, Any]]:
             """Mock conversation compacting for testing."""
-            return self.formatting_utils.compact_conversation(messages)
+            # Return a shorter list to simulate compacting
+            return messages[: len(messages) // 2] if len(messages) > 2 else messages
 
-        async def _task(self, args: Dict[str, Any]) -> str:
-            """Mock task execution for testing."""
-            return await self.builtin_executor.task(args)
-
-        def format_markdown(self, text: str) -> str:
-            """Mock markdown formatting for testing."""
-            return self.formatting_utils.format_markdown(text)
+        def normalize_tool_name(self, tool_name: str) -> str:
+            """Mock tool name normalization for testing."""
+            return tool_name.replace(":", "_")
 
     agent = MockAgent(sample_host_config, is_subagent=False)
     agent.available_tools = mock_tools

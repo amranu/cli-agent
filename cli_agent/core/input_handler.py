@@ -111,6 +111,10 @@ class InterruptibleInput:
             except KeyboardInterrupt:
                 self.interrupted = True
                 return None
+            except EOFError:
+                # End of input (e.g., pipe closed)
+                self.interrupted = True
+                return None
 
         try:
             # Set up escape interrupt behavior
@@ -193,6 +197,10 @@ class InterruptibleInput:
             try:
                 return input(initial_prompt)
             except KeyboardInterrupt:
+                self.interrupted = True
+                return None
+            except EOFError:
+                # End of input (e.g., pipe closed)
                 self.interrupted = True
                 return None
 
