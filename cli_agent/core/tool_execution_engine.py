@@ -22,11 +22,20 @@ class ToolExecutionEngine:
 
         try:
             if tool_key not in self.agent.available_tools:
-                # Debug: show available tools when tool not found
-                available_list = list(self.agent.available_tools.keys())[
-                    :10
-                ]  # First 10 tools
-                return f"Error: Tool {tool_key} not found. Available tools: {available_list}"
+                # Try reverse normalization: convert underscores back to colons
+                # This handles cases where LLM calls "ai-models_deepseek_chat" but tool is stored as "ai-models:deepseek_chat"
+                denormalized_key = (
+                    tool_key.replace("_", ":", 1) if "_" in tool_key else tool_key
+                )
+
+                if denormalized_key in self.agent.available_tools:
+                    tool_key = denormalized_key  # Use the original key format
+                else:
+                    # Debug: show available tools when tool not found
+                    available_list = list(self.agent.available_tools.keys())[
+                        :10
+                    ]  # First 10 tools
+                    return f"Error: Tool {tool_key} not found. Available tools: {available_list}"
 
             tool_info = self.agent.available_tools[tool_key]
             tool_name = tool_info["name"]
