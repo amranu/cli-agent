@@ -455,6 +455,24 @@ class HostConfig(BaseSettings):
 
         return available
 
+    def get_default_provider_for_model(self, model_name: str) -> Optional[str]:
+        """Determine the default provider for a given model name.
+
+        Args:
+            model_name: The model name to find a provider for
+
+        Returns:
+            The default provider name, or None if not found
+        """
+        available = self.get_available_provider_models()
+
+        # Check each provider to see if they have this model
+        for provider, models in available.items():
+            if model_name in models:
+                return provider
+
+        return None
+
     def get_tool_permission_config(self):
         """Get tool permission configuration."""
         from cli_agent.core.tool_permissions import ToolPermissionConfig

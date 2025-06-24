@@ -307,22 +307,31 @@ Custom Commands:"""
                 return f"Current: {self.agent.config.default_provider_model} (Provider: {provider_name}, Model: {model_name})"
             return "Current model: Unknown"
         else:
-            # Switch to new model with current provider
+            # Switch to new model with appropriate provider
             model_name = args.strip()
             try:
                 from config import load_config
 
                 config = load_config()
-                current_provider, _ = config.parse_provider_model_string(
-                    config.default_provider_model
-                )
-                new_provider_model = f"{current_provider}:{model_name}"
+
+                # Determine the appropriate provider for this model
+                default_provider = config.get_default_provider_for_model(model_name)
+                if default_provider:
+                    provider_to_use = default_provider
+                else:
+                    # Fallback to current provider if model not found in any provider
+                    current_provider, _ = config.parse_provider_model_string(
+                        config.default_provider_model
+                    )
+                    provider_to_use = current_provider
+
+                new_provider_model = f"{provider_to_use}:{model_name}"
 
                 config.default_provider_model = new_provider_model
                 config.save_persistent_config()
 
                 return {
-                    "status": f"✅ Switched to model: {model_name} (Provider: {current_provider})",
+                    "status": f"✅ Switched to model: {model_name} (Provider: {provider_to_use})",
                     "reload_host": "provider-model",
                 }
             except Exception as e:
