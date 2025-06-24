@@ -69,6 +69,8 @@ class SlashCommandManager:
             return await self._handle_compact(messages)
         elif command == "model":
             return self._handle_model(args)
+        elif command == "models":
+            return self._handle_models()
         elif command == "provider":
             return self._handle_provider(args)
         elif command == "review":
@@ -112,6 +114,7 @@ Built-in Commands:
   /compact        - Compact conversation history into a summary
   /tokens         - Show current token usage statistics
   /model [name]   - Show current model or switch to model (e.g. /model deepseek-reasoner)
+  /models         - List all available models with their providers
   /provider [name]- Show current provider or switch provider (e.g. /provider openrouter)
   /review [file]  - Request code review
   /tools          - List all available tools
@@ -336,6 +339,39 @@ Custom Commands:"""
                 }
             except Exception as e:
                 return f"❌ Failed to switch model: {str(e)}"
+
+    def _handle_models(self) -> str:
+        """Handle /models command - list all available models with their providers."""
+        try:
+            from config import load_config
+
+            config = load_config()
+            available_models = config.get_available_provider_models()
+            
+            if not available_models:
+                return "❌ No models available. Configure API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY)."
+            
+            output = []
+            output.append("📋 **Available Models:**\n")
+            
+            total_models = 0
+            for provider, models in available_models.items():
+                output.append(f"**{provider.upper()}** ({len(models)} models):")
+                for model in models:
+                    total_models += 1
+                    # Show usage format for switching
+                    usage_format = f"{provider}:{model}"
+                    output.append(f"  • `{model}` → `/switch {usage_format}`")
+                output.append("")  # Empty line between providers
+            
+            output.append(f"**Total:** {total_models} models across {len(available_models)} providers")
+            output.append("\n💡 Use `/switch <provider>:<model>` to switch models")
+            output.append("💡 Use `/model` to see current model")
+            
+            return "\n".join(output)
+            
+        except Exception as e:
+            return f"❌ Failed to list models: {str(e)}"
 
     def _handle_provider(self, args: str) -> Dict[str, Any]:
         """Handle /provider command."""
