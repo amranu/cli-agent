@@ -235,7 +235,21 @@ def create_model_tool(
         max_tokens: Optional[int] = None,
         stream: bool = False,
     ) -> Dict[str, Any]:
-        f"""Use {model} model via {actual_provider} provider with persistent conversations."""
+        f"""Use {model} model via {actual_provider} provider with persistent conversations.
+
+        Args:
+            messages: Array of conversation messages (optional if continuing conversation)
+            conversation_id: ID of existing conversation to continue
+            new_conversation: Force create new conversation (ignores existing ID)
+            clear_conversation: Clear conversation history before processing
+            system_prompt: Optional system prompt to override default
+            temperature: Temperature parameter (0.0-1.0) for response randomness
+            max_tokens: Maximum number of tokens to generate
+            stream: Enable streaming response (returns final result)
+
+        Returns:
+            Dictionary with 'response' text and 'conversation_id'
+        """
         try:
             # Handle conversation management
             current_conversation_id = conversation_id
