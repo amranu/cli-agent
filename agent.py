@@ -595,6 +595,61 @@ def mcp():
     pass
 
 
+@mcp.command()
+@click.option("--port", default=3000, help="Port to serve on")
+@click.option("--host", default="localhost", help="Host to serve on")
+@click.option("--stdio", is_flag=True, help="Use stdio transport instead of TCP")
+def serve(port, host, stdio):
+    """Serve all available models over MCP protocol."""
+    try:
+        from cli_agent.mcp.model_server import create_model_server
+
+        server = create_model_server()
+
+        if stdio:
+            # Use stdio transport for MCP clients that expect it
+            click.echo("Starting MCP model server on stdio transport", err=True)
+            asyncio.run(server.run_stdio_async())
+        else:
+            # Use TCP transport for web-based or network clients
+            click.echo(f"Starting MCP model server on {host}:{port}", err=True)
+            asyncio.run(server.run_async(host=host, port=port))
+
+    except ImportError as e:
+        click.echo(f"Error: {e}", err=True)
+        click.echo("Please install FastMCP with: pip install fastmcp", err=True)
+    except Exception as e:
+        click.echo(f"Error starting MCP server: {e}", err=True)
+
+
+@mcp.command("list-models")
+def list_models():
+    """List all available models that would be exposed via MCP."""
+    try:
+        from cli_agent.mcp.model_server import normalize_model_name
+
+        config = load_config()
+        available = config.get_available_provider_models()
+
+        if not available:
+            click.echo("No models available. Check your API key configuration.")
+            return
+
+        click.echo("Available models for MCP server:")
+        total_models = 0
+        for provider, models in available.items():
+            click.echo(f"\n{provider}:")
+            for model in models:
+                tool_name = f"{provider}_{normalize_model_name(model)}"
+                click.echo(f"  - {tool_name} ({provider}:{model})")
+                total_models += 1
+
+        click.echo(f"\nTotal: {total_models} models available")
+
+    except Exception as e:
+        click.echo(f"Error listing models: {e}", err=True)
+
+
 @cli.group()
 def sessions():
     """Manage conversation sessions."""

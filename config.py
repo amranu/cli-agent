@@ -174,6 +174,13 @@ class HostConfig(BaseSettings):
     disallowed_tools: List[str] = Field(default_factory=list, alias="DISALLOWED_TOOLS")
     auto_approve_tools: bool = Field(default=False, alias="AUTO_APPROVE_TOOLS")
 
+    # MCP Server settings
+    mcp_server_enabled: bool = Field(default=False, alias="MCP_SERVER_ENABLED")
+    mcp_server_port: int = Field(default=3000, alias="MCP_SERVER_PORT")
+    mcp_server_host: str = Field(default="localhost", alias="MCP_SERVER_HOST")
+    mcp_server_auth_token: str = Field(default="", alias="MCP_SERVER_AUTH_TOKEN")
+    mcp_server_log_level: str = Field(default="INFO", alias="MCP_SERVER_LOG_LEVEL")
+
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", env_prefix="", extra="ignore"
     )
