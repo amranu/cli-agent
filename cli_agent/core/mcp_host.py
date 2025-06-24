@@ -303,11 +303,15 @@ class MCPHost(BaseLLMProvider):
         self, messages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """Model-specific message enhancement."""
-        enhanced_messages = messages
+        enhanced_messages = messages.copy()
+
+        # Enhance first message with AGENT.md content if available
+        is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
+        if is_first_message and not self.is_subagent:
+            enhanced_messages = self.system_prompt_builder.enhance_first_message_with_agent_md(enhanced_messages)
 
         # Add system prompt based on model's style
         system_style = self.model.get_system_prompt_style()
-        is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
 
         if self.is_subagent or is_first_message:
             system_prompt = self._create_system_prompt(for_first_message=True)
