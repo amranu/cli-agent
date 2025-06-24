@@ -69,6 +69,8 @@ class SlashCommandManager:
             return await self._handle_compact(messages)
         elif command == "model":
             return self._handle_model(args)
+        elif command == "provider":
+            return self._handle_provider(args)
         elif command == "review":
             return self._handle_review(args)
         elif command == "tokens":
@@ -109,14 +111,15 @@ Built-in Commands:
   /clear          - Clear conversation history
   /compact        - Compact conversation history into a summary
   /tokens         - Show current token usage statistics
-  /model [name]   - Show current model or set model
+  /model [name]   - Show current model or switch to model (e.g. /model deepseek-reasoner)
+  /provider [name]- Show current provider or switch provider (e.g. /provider openrouter)
   /review [file]  - Request code review
   /tools          - List all available tools
   /permissions    - Manage tool execution permissions
   /init           - Analyze codebase and generate AGENT.md
   /quit, /exit    - Exit the interactive chat
 
-Model Switching:
+Legacy Model Switching (deprecated):
   /switch-deepseek - Switch to deepseek-chat model
   /switch-reason  - Switch to deepseek-reasoner model
   /switch-gemini-flash - Switch to Gemini Flash 2.5 backend
@@ -231,11 +234,12 @@ Custom Commands:"""
             from config import load_config
 
             config = load_config()
-            config.deepseek_model = "deepseek-chat"
+            config.default_provider_model = "deepseek:deepseek-chat"
+            config.model_type = "deepseek"
             config.save_persistent_config()
             return {
-                "status": f"✅ Model switched to: {config.deepseek_model}",
-                "reload_host": "deepseek",
+                "status": f"⚠️  DEPRECATED: Use '/model deepseek-chat' instead.\n✅ Switched to: {config.default_provider_model}",
+                "reload_host": "provider-model",
             }
         except Exception as e:
             return f"❌ Failed to switch model: {str(e)}"
@@ -246,11 +250,12 @@ Custom Commands:"""
             from config import load_config
 
             config = load_config()
-            config.deepseek_model = "deepseek-reasoner"
+            config.default_provider_model = "deepseek:deepseek-reasoner"
+            config.model_type = "deepseek"
             config.save_persistent_config()
             return {
-                "status": f"✅ Model switched to: {config.deepseek_model}",
-                "reload_host": "deepseek",
+                "status": f"⚠️  DEPRECATED: Use '/model deepseek-reasoner' instead.\n✅ Switched to: {config.default_provider_model}",
+                "reload_host": "provider-model",
             }
         except Exception as e:
             return f"❌ Failed to switch model: {str(e)}"
@@ -261,12 +266,12 @@ Custom Commands:"""
             from config import load_config
 
             config = load_config()
-            config.deepseek_model = "gemini"
-            config.gemini_model = "gemini-2.5-flash"
+            config.default_provider_model = "google:gemini-2.5-flash"
+            config.model_type = "gemini"
             config.save_persistent_config()
             return {
-                "status": f"✅ Backend switched to: Gemini Flash 2.5 ({config.gemini_model})",
-                "reload_host": "gemini",
+                "status": f"⚠️  DEPRECATED: Use '/provider google' or '/model gemini-2.5-flash' instead.\n✅ Switched to: {config.default_provider_model}",
+                "reload_host": "provider-model",
             }
         except Exception as e:
             return f"❌ Failed to switch backend: {str(e)}"
@@ -277,30 +282,87 @@ Custom Commands:"""
             from config import load_config
 
             config = load_config()
-            config.deepseek_model = "gemini"
-            config.gemini_model = "gemini-2.5-pro"
+            config.default_provider_model = "google:gemini-2.5-pro"
+            config.model_type = "gemini"
             config.save_persistent_config()
             return {
-                "status": f"✅ Backend switched to: Gemini Pro 2.5 ({config.gemini_model})",
-                "reload_host": "gemini",
+                "status": f"⚠️  DEPRECATED: Use '/provider google' or '/model gemini-2.5-pro' instead.\n✅ Switched to: {config.default_provider_model}",
+                "reload_host": "provider-model",
             }
         except Exception as e:
             return f"❌ Failed to switch backend: {str(e)}"
 
-    def _handle_model(self, args: str) -> str:
+    def _handle_model(self, args: str) -> Dict[str, Any]:
         """Handle /model command."""
         if not args.strip():
             # Show current model
-            if hasattr(self.agent, "config"):
-                if hasattr(self.agent.config, "get_deepseek_config"):
-                    return f"Current model: {self.agent.config.get_deepseek_config().model}"
-                elif hasattr(self.agent.config, "get_gemini_config"):
-                    return (
-                        f"Current model: {self.agent.config.get_gemini_config().model}"
+            if hasattr(self.agent, "config") and hasattr(
+                self.agent.config, "default_provider_model"
+            ):
+                provider_name, model_name = (
+                    self.agent.config.parse_provider_model_string(
+                        self.agent.config.default_provider_model
                     )
+                )
+                return f"Current: {self.agent.config.default_provider_model} (Provider: {provider_name}, Model: {model_name})"
             return "Current model: Unknown"
         else:
-            return "Model switching not implemented yet. Use environment variables to change models."
+            # Switch to new model with current provider
+            model_name = args.strip()
+            try:
+                from config import load_config
+
+                config = load_config()
+                current_provider, _ = config.parse_provider_model_string(
+                    config.default_provider_model
+                )
+                new_provider_model = f"{current_provider}:{model_name}"
+
+                config.default_provider_model = new_provider_model
+                config.save_persistent_config()
+
+                return {
+                    "status": f"✅ Switched to model: {model_name} (Provider: {current_provider})",
+                    "reload_host": "provider-model",
+                }
+            except Exception as e:
+                return f"❌ Failed to switch model: {str(e)}"
+
+    def _handle_provider(self, args: str) -> Dict[str, Any]:
+        """Handle /provider command."""
+        if not args.strip():
+            # Show current provider
+            if hasattr(self.agent, "config") and hasattr(
+                self.agent.config, "default_provider_model"
+            ):
+                provider_name, model_name = (
+                    self.agent.config.parse_provider_model_string(
+                        self.agent.config.default_provider_model
+                    )
+                )
+                return f"Current: {self.agent.config.default_provider_model} (Provider: {provider_name}, Model: {model_name})"
+            return "Current provider: Unknown"
+        else:
+            # Switch to new provider with current model
+            provider_name = args.strip()
+            try:
+                from config import load_config
+
+                config = load_config()
+                _, current_model = config.parse_provider_model_string(
+                    config.default_provider_model
+                )
+                new_provider_model = f"{provider_name}:{current_model}"
+
+                config.default_provider_model = new_provider_model
+                config.save_persistent_config()
+
+                return {
+                    "status": f"✅ Switched to provider: {provider_name} (Model: {current_model})",
+                    "reload_host": "provider-model",
+                }
+            except Exception as e:
+                return f"❌ Failed to switch provider: {str(e)}"
 
     def _handle_review(self, args: str) -> str:
         """Handle /review command."""

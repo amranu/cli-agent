@@ -46,6 +46,51 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def create_host(
+    config: HostConfig, is_subagent: bool = False, provider_model: Optional[str] = None
+) -> BaseMCPAgent:
+    """Create host using new provider-model architecture with fallback to legacy.
+
+    Args:
+        config: Host configuration
+        is_subagent: Whether this is a subagent instance
+        provider_model: Optional provider:model string override
+
+    Returns:
+        BaseMCPAgent instance (either MCPHost or legacy host)
+    """
+    try:
+        # Try new provider-model architecture first
+        if provider_model:
+            host = config.create_host_from_provider_model(provider_model)
+        else:
+            host = config.create_host_from_provider_model()
+
+        # Set subagent flag if needed
+        if is_subagent:
+            host.is_subagent = True
+
+        logger.info(
+            f"Created provider-model host: {getattr(config, 'default_provider_model', 'default')}"
+        )
+        return host
+
+    except Exception as e:
+        # Fallback to legacy host creation for backward compatibility
+        logger.warning(f"Provider-model creation failed: {e}")
+        logger.warning("Falling back to legacy host creation")
+
+        # Check if Gemini backend should be used
+        if config.deepseek_model == "gemini":
+            from mcp_gemini_host import MCPGeminiHost
+
+            return MCPGeminiHost(config, is_subagent)
+        else:
+            from mcp_deepseek_host import MCPDeepseekHost
+
+            return MCPDeepseekHost(config, is_subagent)
+
+
 # CLI functionality
 @click.group()
 @click.option(
@@ -309,28 +354,12 @@ async def ask(
 
         config = load_config()
 
-        # Check if Gemini backend should be used
-        if config.deepseek_model == "gemini":
-            if not config.gemini_api_key:
-                click.echo(
-                    "Error: GEMINI_API_KEY not set. Run 'init' command first and update .env file."
-                )
-                return
-
-            # Import and create Gemini host
-            from mcp_gemini_host import MCPGeminiHost
-
-            host = MCPGeminiHost(config)
-        else:
-            if not config.deepseek_api_key:
-                click.echo(
-                    "Error: DEEPSEEK_API_KEY not set. Run 'init' command first and update .env file."
-                )
-                return
-
-            from mcp_deepseek_host import MCPDeepseekHost
-
-            host = MCPDeepseekHost(config)
+        # Create host using helper function
+        try:
+            host = create_host(config)
+        except Exception as e:
+            click.echo(f"Error creating host: {e}")
+            return
 
         # Parse tool permissions from CLI arguments
         def parse_tool_list(tool_args):
@@ -463,20 +492,10 @@ async def execute_task_subprocess(task_file_path: str):
         config = load_config()
 
         # Create appropriate host instance with subagent flag and communication socket
-        if hasattr(config, "deepseek_model") and config.deepseek_model == "gemini":
-            from mcp_gemini_host import MCPGeminiHost
-
-            subagent = MCPGeminiHost(config, is_subagent=True)
-            print(
-                f"🤖 [SUBAGENT {task_id}] Created Gemini subagent with is_subagent=True"
-            )
-        else:
-            from mcp_deepseek_host import MCPDeepseekHost
-
-            subagent = MCPDeepseekHost(config, is_subagent=True)
-            print(
-                f"🤖 [SUBAGENT {task_id}] Created DeepSeek subagent with is_subagent=True"
-            )
+        subagent = create_host(config, is_subagent=True)
+        print(
+            f"🤖 [SUBAGENT {task_id}] Created subagent with provider-model: {config.default_provider_model}"
+        )
 
         # Set communication socket for tool forwarding
         if comm_socket:
@@ -752,23 +771,18 @@ async def handle_streaming_json_chat(
     # Load configuration
     config = load_config()
 
-    # Create host
-    if config.deepseek_model == "gemini":
-        if not config.gemini_api_key:
-            click.echo("Error: GEMINI_API_KEY not set.")
-            return
-        from mcp_gemini_host import MCPGeminiHost
-
-        host = MCPGeminiHost(config)
-        model_name = config.gemini_model
-    else:
-        if not config.deepseek_api_key:
-            click.echo("Error: DEEPSEEK_API_KEY not set.")
-            return
-        from mcp_deepseek_host import MCPDeepseekHost
-
-        host = MCPDeepseekHost(config)
-        model_name = config.deepseek_model
+    # Create host using helper function
+    try:
+        host = create_host(config)
+        # Extract model name from provider-model string
+        _, model_name = config.parse_provider_model_string(
+            config.default_provider_model
+        )
+        if not model_name:
+            model_name = config.default_provider_model  # Fallback for legacy format
+    except Exception as e:
+        click.echo(f"Error creating host: {e}")
+        return
 
     # Connect to servers
     for server_spec in server:
@@ -954,33 +968,17 @@ async def handle_text_chat(
     # Load configuration
     config = load_config()
 
-    # Check if Gemini backend should be used
-    if config.deepseek_model == "gemini":
-        if not config.gemini_api_key:
-            click.echo(
-                "Error: GEMINI_API_KEY not set. Run 'init' command first and update .env file."
-            )
-            return
-
-        # Import and create Gemini host
-        from mcp_gemini_host import MCPGeminiHost
-
-        host = MCPGeminiHost(config)
-        click.echo(f"Using model: {config.gemini_model}")
-        click.echo(f"Temperature: {config.gemini_temperature}")
-    else:
-        if not config.deepseek_api_key:
-            click.echo(
-                "Error: DEEPSEEK_API_KEY not set. Run 'init' command first and update .env file."
-            )
-            return
-
-        # Create Deepseek host with new subagent system
-        from mcp_deepseek_host import MCPDeepseekHost
-
-        host = MCPDeepseekHost(config)
-        click.echo(f"Using model: {config.deepseek_model}")
-        click.echo(f"Temperature: {config.deepseek_temperature}")
+    # Create host using helper function
+    try:
+        host = create_host(config)
+        provider_name, model_name = config.parse_provider_model_string(
+            config.default_provider_model
+        )
+        click.echo(f"Using provider-model: {config.default_provider_model}")
+        click.echo(f"Provider: {provider_name}, Model: {model_name}")
+    except Exception as e:
+        click.echo(f"Error creating host: {e}")
+        return
 
     # Initialize tool permission manager
     from cli_agent.core.tool_permissions import (
@@ -1058,28 +1056,45 @@ async def handle_text_chat(
                 # Reload config and create new host
                 config = load_config()
 
-                if reload_type == "gemini":
-                    if not config.gemini_api_key:
-                        click.echo(
-                            "Error: GEMINI_API_KEY not set. Cannot switch to Gemini."
-                        )
-                        break
-                    from mcp_gemini_host import MCPGeminiHost
+                # Check if reload_type is a provider:model combination or provider-model reload
+                if ":" in reload_type or reload_type == "provider-model":
+                    # New provider-model format
+                    try:
+                        if reload_type == "provider-model":
+                            # Use the current default_provider_model from config
+                            provider_model = config.default_provider_model
+                        else:
+                            provider_model = reload_type
 
-                    host = MCPGeminiHost(config)
-                    click.echo(f"Switched to model: {config.gemini_model}")
-                    click.echo(f"Temperature: {config.gemini_temperature}")
-                else:  # deepseek
-                    if not config.deepseek_api_key:
-                        click.echo(
-                            "Error: DEEPSEEK_API_KEY not set. Cannot switch to DeepSeek."
+                        host = create_host(config, provider_model=provider_model)
+                        provider_name, model_name = config.parse_provider_model_string(
+                            provider_model
                         )
+                        click.echo(f"Switched to: {provider_model}")
+                        click.echo(f"Provider: {provider_name}, Model: {model_name}")
+                    except Exception as e:
+                        click.echo(f"Error switching to {reload_type}: {e}")
                         break
-                    from mcp_deepseek_host import MCPDeepseekHost
-
-                    host = MCPDeepseekHost(config)
-                    click.echo(f"Switched to model: {config.deepseek_model}")
-                    click.echo(f"Temperature: {config.deepseek_temperature}")
+                else:
+                    # Legacy model switching
+                    if reload_type == "gemini":
+                        try:
+                            host = create_host(
+                                config, provider_model="google:gemini-2.5-flash"
+                            )
+                            click.echo(f"Switched to legacy Gemini")
+                        except Exception as e:
+                            click.echo(f"Error switching to Gemini: {e}")
+                            break
+                    else:  # deepseek
+                        try:
+                            host = create_host(
+                                config, provider_model="deepseek:deepseek-chat"
+                            )
+                            click.echo(f"Switched to legacy DeepSeek")
+                        except Exception as e:
+                            click.echo(f"Error switching to DeepSeek: {e}")
+                            break
 
                 # Reconnect to MCP servers
                 for server_name, server_config in config.mcp_servers.items():

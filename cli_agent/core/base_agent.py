@@ -1809,11 +1809,28 @@ class BaseMCPAgent(ABC):
                 # Use only the extracted text for conversation history
                 response_content = text_before_tools
 
+        # Convert tool calls to proper OpenAI API format for conversation history
+        api_formatted_tool_calls = []
+        for tc in tool_calls:
+            formatted_tc = {
+                "id": tc.get("id", f"call_{len(api_formatted_tool_calls)}"),
+                "type": "function",
+                "function": {
+                    "name": tc.get("name", "unknown"),
+                    "arguments": (
+                        tc.get("arguments")
+                        if isinstance(tc.get("arguments"), str)
+                        else json.dumps(tc.get("arguments", {}))
+                    ),
+                },
+            }
+            api_formatted_tool_calls.append(formatted_tc)
+
         current_messages.append(
             {
                 "role": "assistant",
                 "content": response_content or "",
-                "tool_calls": tool_calls,
+                "tool_calls": api_formatted_tool_calls,
             }
         )
 

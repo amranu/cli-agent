@@ -42,6 +42,33 @@ def emit_result_with_id(result: str):
     emit_message("result", result, task_id=current_task_id)
 
 
+def _get_default_provider_for_model(model_name: str) -> str:
+    """Map model name to its default provider:model format."""
+    model_lower = model_name.lower()
+
+    # Gemini models -> Google provider
+    if any(keyword in model_lower for keyword in ["gemini", "flash", "pro"]):
+        return f"google:{model_name}"
+
+    # Claude models -> Anthropic provider
+    elif any(
+        keyword in model_lower for keyword in ["claude", "sonnet", "haiku", "opus"]
+    ):
+        return f"anthropic:{model_name}"
+
+    # GPT/OpenAI models -> OpenAI provider
+    elif any(keyword in model_lower for keyword in ["gpt", "o1", "turbo"]):
+        return f"openai:{model_name}"
+
+    # DeepSeek models -> DeepSeek provider
+    elif any(keyword in model_lower for keyword in ["deepseek", "chat", "reasoner"]):
+        return f"deepseek:{model_name}"
+
+    # Default to DeepSeek provider for unknown models
+    else:
+        return f"deepseek:{model_name}"
+
+
 def emit_error_with_id(error: str, details: str = ""):
     """Emit error with task_id."""
     emit_message("error", error, details=details, task_id=current_task_id)
@@ -68,48 +95,47 @@ async def run_subagent_task(task_file_path: str):
         # Load config and create host
         config = load_config()
 
-        # Check if task specifies a specific model to use
-        task_model = task_data.get("model", None)
+        # Use new provider-model architecture for subagents
+        try:
+            # Check if task specifies a specific model to use
+            task_model = task_data.get("model", None)
 
-        if task_model:
-            # Use task-specific model
-            if task_model.startswith("gemini"):
-                # Create config copy with task-specific model
-                import copy
+            if task_model:
+                # Use task-specific provider-model format
+                if ":" in task_model:
+                    # Already in provider:model format
+                    provider_model = task_model
+                else:
+                    # Map model name to its default provider
+                    provider_model = _get_default_provider_for_model(task_model)
 
-                from mcp_gemini_host import MCPGeminiHost
+                # Create host using provider-model architecture
+                host = config.create_host_from_provider_model(provider_model)
+                if hasattr(host, "is_subagent"):
+                    host.is_subagent = True
+                emit_output_with_id(f"Created {provider_model} subagent")
+            else:
+                # Use current default provider-model
+                host = config.create_host_from_provider_model()
+                if hasattr(host, "is_subagent"):
+                    host.is_subagent = True
+                emit_output_with_id(f"Created {config.default_provider_model} subagent")
 
-                task_config = copy.deepcopy(config)
-                task_config.gemini_model = task_model
-                task_config.deepseek_model = "gemini"  # Signal to use Gemini backend
-                host = MCPGeminiHost(task_config, is_subagent=True)
-                emit_output_with_id(f"Created {task_model} subagent")
-            else:  # deepseek models
-                # Create config copy with task-specific model
-                import copy
-
-                from mcp_deepseek_host import MCPDeepseekHost
-
-                task_config = copy.deepcopy(config)
-                task_config.deepseek_model = task_model
-                host = MCPDeepseekHost(task_config, is_subagent=True)
-                emit_output_with_id(f"Created {task_model} subagent")
-        else:
-            # Inherit from main agent (existing logic)
+        except Exception as e:
+            # Fallback to legacy for compatibility
+            emit_output_with_id(
+                f"Provider-model creation failed: {e}, falling back to legacy"
+            )
             if config.deepseek_model == "gemini":
                 from mcp_gemini_host import MCPGeminiHost
 
                 host = MCPGeminiHost(config, is_subagent=True)
-                emit_output_with_id(
-                    "Created Gemini subagent (inherited from main agent)"
-                )
+                emit_output_with_id("Created legacy Gemini subagent")
             else:
                 from mcp_deepseek_host import MCPDeepseekHost
 
                 host = MCPDeepseekHost(config, is_subagent=True)
-                emit_output_with_id(
-                    "Created DeepSeek subagent (inherited from main agent)"
-                )
+                emit_output_with_id("Created legacy DeepSeek subagent")
 
         # Set up tool permission manager for subagent (inherits main agent settings)
         from cli_agent.core.input_handler import InterruptibleInput
@@ -283,11 +309,11 @@ CRITICAL INSTRUCTIONS:
             async def capture_tool_execution(tool_key, arguments):
                 result = await original_execute_mcp_tool(tool_key, arguments)
                 captured_tool_results.append({"tool": tool_key, "result": result})
-                
+
                 # Emit tool result immediately for real-time feedback
                 tool_name = tool_key.split(":")[-1]
                 emit_output_with_id(f"🔧 {tool_name}: {str(result).strip()}")
-                
+
                 return result
 
             host.tool_execution_engine.execute_mcp_tool = capture_tool_execution

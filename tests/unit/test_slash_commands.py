@@ -163,7 +163,7 @@ class TestSlashCommandManager:
 
         # Test model command with arguments
         result = await manager.handle_slash_command("/model deepseek-chat")
-        assert result is None or isinstance(result, str)
+        assert result is None or isinstance(result, str) or isinstance(result, dict)
 
     @pytest.mark.asyncio
     async def test_error_handling_in_commands(self, mock_base_agent):

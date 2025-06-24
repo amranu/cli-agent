@@ -171,6 +171,28 @@ class GeminiToolConverter(BaseToolConverter):
         return function_declarations
 
 
+class AnthropicToolConverter(BaseToolConverter):
+    """Converter for Anthropic/Claude tools."""
+
+    def convert_tools(self, available_tools: Dict[str, Dict]) -> List[Dict]:
+        """Convert tools to Anthropic tool format."""
+        tools = []
+
+        for tool_key, tool_info in available_tools.items():
+            if not self.validate_tool_info(tool_key, tool_info):
+                continue
+
+            tool = {
+                "name": self.normalize_tool_name(tool_key),
+                "description": self.generate_description(tool_info),
+                "input_schema": self.get_base_schema(tool_info),
+            }
+            tools.append(tool)
+
+        logger.debug(f"Converted {len(tools)} tools to Anthropic format")
+        return tools
+
+
 class ToolConverterFactory:
     """Factory for creating appropriate tool converters."""
 
@@ -181,6 +203,7 @@ class ToolConverterFactory:
             "openai": OpenAIStyleToolConverter,
             "deepseek": OpenAIStyleToolConverter,
             "gemini": GeminiToolConverter,
+            "anthropic": AnthropicToolConverter,
         }
 
         converter_class = converters.get(llm_type.lower())
@@ -193,7 +216,7 @@ class ToolConverterFactory:
     @staticmethod
     def get_supported_llm_types() -> List[str]:
         """Get list of supported LLM types."""
-        return ["openai", "deepseek", "gemini"]
+        return ["openai", "deepseek", "gemini", "anthropic"]
 
 
 def convert_tools_for_llm(available_tools: Dict[str, Dict], llm_type: str) -> Any:

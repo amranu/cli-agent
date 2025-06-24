@@ -173,8 +173,13 @@ class ToolPermissionManager:
 
         # Always allow core agent management tools without prompting
         core_tools = {
-            "task", "task_status", "task_results", 
-            "emit_result", "emit_output", "emit_error", "emit_status"
+            "task",
+            "task_status",
+            "task_results",
+            "emit_result",
+            "emit_output",
+            "emit_error",
+            "emit_status",
         }
         if tool_name in core_tools:
             return ToolPermissionResult(

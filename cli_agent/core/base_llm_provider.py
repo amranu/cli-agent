@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class BaseLLMProvider(BaseMCPAgent):
     """Template base class for LLM providers with centralized streaming and tool logic.
-    
+
     This class eliminates duplicate code between different LLM providers by implementing
     common functionality while requiring providers to only implement their specific
     API integration and response parsing logic.
@@ -33,7 +33,7 @@ class BaseLLMProvider(BaseMCPAgent):
         logger.info(
             f"_generate_completion called with {len(messages)} messages, tools: {tools is not None}, stream: {stream}, interactive: {interactive}"
         )
-        
+
         # Check if we should use buffering for streaming JSON
         use_buffering = (
             hasattr(self, "streaming_json_callback")
@@ -180,7 +180,9 @@ class BaseLLMProvider(BaseMCPAgent):
                     {
                         "id": getattr(tool_call, "id", f"call_{i}"),
                         "name": getattr(tool_call, "name", "unknown"),
-                        "arguments": getattr(tool_call, "args", getattr(tool_call, "arguments", {})),
+                        "arguments": getattr(
+                            tool_call, "args", getattr(tool_call, "arguments", {})
+                        ),
                     }
                 )
             else:
@@ -202,7 +204,7 @@ class BaseLLMProvider(BaseMCPAgent):
     def _is_retryable_error(self, error: Exception) -> bool:
         """Determine if an error is retryable - combines generic and provider-specific logic."""
         error_str = str(error).lower()
-        
+
         # Generic retryable conditions from base class
         generic_retryable = (
             "timeout" in error_str
@@ -214,10 +216,10 @@ class BaseLLMProvider(BaseMCPAgent):
             or "503" in error_str
             or "504" in error_str
         )
-        
+
         # Provider-specific retryable conditions
         provider_retryable = self._is_provider_retryable_error(error_str)
-        
+
         return generic_retryable or provider_retryable
 
     # ============================================================================
@@ -227,10 +229,10 @@ class BaseLLMProvider(BaseMCPAgent):
     @abstractmethod
     def _extract_structured_calls_impl(self, response: Any) -> List[Any]:
         """Extract structured tool calls from provider-specific response format.
-        
+
         Args:
             response: Provider's raw response object
-            
+
         Returns:
             List of tool call objects in provider's format
         """
@@ -239,10 +241,10 @@ class BaseLLMProvider(BaseMCPAgent):
     @abstractmethod
     def _parse_text_based_calls_impl(self, text_content: str) -> List[Any]:
         """Parse text-based tool calls using provider-specific text parsing.
-        
+
         Args:
             text_content: Raw text content from response
-            
+
         Returns:
             List of tool call objects parsed from text
         """
@@ -251,7 +253,7 @@ class BaseLLMProvider(BaseMCPAgent):
     @abstractmethod
     def _get_text_extraction_patterns(self) -> List[str]:
         """Get provider-specific regex patterns for extracting text before tool calls.
-        
+
         Returns:
             List of regex patterns specific to the provider's tool call format
         """
@@ -260,10 +262,10 @@ class BaseLLMProvider(BaseMCPAgent):
     @abstractmethod
     def _is_provider_retryable_error(self, error_str: str) -> bool:
         """Check if error is retryable according to provider-specific rules.
-        
+
         Args:
             error_str: Lowercase error message string
-            
+
         Returns:
             True if error should be retried for this provider
         """
@@ -274,10 +276,10 @@ class BaseLLMProvider(BaseMCPAgent):
         self, response: Any
     ) -> tuple[str, List[Any], Dict[str, Any]]:
         """Extract text content, tool calls, and provider-specific data from response.
-        
+
         Args:
             response: Provider's raw response object
-            
+
         Returns:
             tuple: (text_content, tool_calls, provider_specific_data)
         """
@@ -288,10 +290,10 @@ class BaseLLMProvider(BaseMCPAgent):
         self, response
     ) -> tuple[str, List[Any], Dict[str, Any]]:
         """Process provider's streaming response chunks.
-        
+
         Args:
             response: Provider's streaming response object
-            
+
         Returns:
             tuple: (accumulated_content, tool_calls, provider_specific_data)
         """
@@ -305,12 +307,12 @@ class BaseLLMProvider(BaseMCPAgent):
         stream: bool = True,
     ) -> Any:
         """Make an API request to the provider.
-        
+
         Args:
             messages: Processed messages ready for the provider
             tools: Tools formatted for the provider (if any)
             stream: Whether to use streaming
-            
+
         Returns:
             Provider-specific response object
         """
@@ -319,11 +321,11 @@ class BaseLLMProvider(BaseMCPAgent):
     @abstractmethod
     def _create_mock_response(self, content: str, tool_calls: List[Any]) -> Any:
         """Create a mock response object for centralized processing.
-        
+
         Args:
             content: Text content
             tool_calls: List of tool calls
-            
+
         Returns:
             Mock response object compatible with provider's format
         """
@@ -335,7 +337,7 @@ class BaseLLMProvider(BaseMCPAgent):
 
     def _handle_provider_specific_features(self, provider_data: Dict[str, Any]) -> None:
         """Handle provider-specific features. Override in subclasses if needed.
-        
+
         Args:
             provider_data: Provider-specific data from response extraction
         """
@@ -343,10 +345,10 @@ class BaseLLMProvider(BaseMCPAgent):
 
     def _format_provider_specific_content(self, provider_data: Dict[str, Any]) -> str:
         """Format provider-specific content for output. Override in subclasses if needed.
-        
+
         Args:
             provider_data: Provider-specific data from response extraction
-            
+
         Returns:
             Formatted content string
         """

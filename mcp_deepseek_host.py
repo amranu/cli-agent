@@ -294,10 +294,7 @@ class MCPDeepseekHost(BaseLLMProvider):
     def _is_provider_retryable_error(self, error_str: str) -> bool:
         """DeepSeek-specific retryable error detection."""
         # DeepSeek-specific retryable conditions
-        return (
-            "deepseek" in error_str
-            or "model overloaded" in error_str
-        )
+        return "deepseek" in error_str or "model overloaded" in error_str
 
     def _get_current_runtime_model(self) -> str:
         """Get the actual DeepSeek model being used at runtime."""

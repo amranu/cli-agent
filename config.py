@@ -1,8 +1,8 @@
-"""Configuration management for MCP Deepseek Host."""
+"""Configuration management for MCP Agent with Provider-Model Architecture."""
 
 import os
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -48,6 +48,52 @@ class GeminiConfig(BaseModel):
     )
 
 
+class AnthropicConfig(BaseModel):
+    """Configuration for Anthropic API."""
+
+    api_key: str
+    base_url: str = "https://api.anthropic.com"
+    model: str = "claude-3-5-sonnet-20241022"
+    temperature: float = 0.7
+    max_tokens: int = 8192
+    timeout: float = 120.0
+
+
+class OpenAIConfig(BaseModel):
+    """Configuration for OpenAI API."""
+
+    api_key: str
+    base_url: str = "https://api.openai.com/v1"
+    model: str = "gpt-4-turbo-preview"
+    temperature: float = 0.7
+    max_tokens: int = 4096
+    timeout: float = 120.0
+
+
+class OpenRouterConfig(BaseModel):
+    """Configuration for OpenRouter API."""
+
+    api_key: str
+    base_url: str = "https://openrouter.ai/api/v1"
+    model: str = "anthropic/claude-3.5-sonnet"
+    temperature: float = 0.7
+    max_tokens: int = 8192
+    timeout: float = 120.0
+    app_name: Optional[str] = None
+    site_url: Optional[str] = None
+
+
+class ProviderModelConfig(BaseModel):
+    """Configuration for provider-model combination."""
+
+    provider_name: str  # anthropic, openai, openrouter, deepseek, google
+    model_name: str  # claude-3.5-sonnet, gpt-4, etc.
+    provider_config: Union[
+        AnthropicConfig, OpenAIConfig, OpenRouterConfig, DeepseekConfig, GeminiConfig
+    ]
+    display_name: Optional[str] = None  # Human-readable name
+
+
 class HostConfig(BaseSettings):
     """Main configuration for the MCP Host."""
 
@@ -73,8 +119,38 @@ class HostConfig(BaseSettings):
         default="AUTO", alias="GEMINI_FUNCTION_CALLING_MODE"
     )
 
+    # Anthropic configuration
+    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    anthropic_model: str = Field(
+        default="claude-3-5-sonnet-20241022", alias="ANTHROPIC_MODEL"
+    )
+    anthropic_temperature: float = Field(default=0.7, alias="ANTHROPIC_TEMPERATURE")
+    anthropic_max_tokens: int = Field(default=8192, alias="ANTHROPIC_MAX_TOKENS")
+
+    # OpenAI configuration
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-4-turbo-preview", alias="OPENAI_MODEL")
+    openai_temperature: float = Field(default=0.7, alias="OPENAI_TEMPERATURE")
+    openai_max_tokens: int = Field(default=4096, alias="OPENAI_MAX_TOKENS")
+
+    # OpenRouter configuration
+    openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
+    openrouter_model: str = Field(
+        default="anthropic/claude-3.5-sonnet", alias="OPENROUTER_MODEL"
+    )
+    openrouter_temperature: float = Field(default=0.7, alias="OPENROUTER_TEMPERATURE")
+    openrouter_max_tokens: int = Field(default=8192, alias="OPENROUTER_MAX_TOKENS")
+
+    # Provider-Model selection
+    default_provider_model: str = Field(
+        default="deepseek:deepseek-chat", alias="DEFAULT_PROVIDER_MODEL"
+    )
+    model_type: str = Field(
+        default="deepseek", alias="MODEL_TYPE"
+    )  # For backward compatibility
+
     # Host configuration
-    host_name: str = Field(default="mcp-deepseek-host", alias="HOST_NAME")
+    host_name: str = Field(default="mcp-agent", alias="HOST_NAME")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     # MCP servers configuration
@@ -125,6 +201,259 @@ class HostConfig(BaseSettings):
             force_function_calling=self.gemini_force_function_calling,
             function_calling_mode=self.gemini_function_calling_mode,
         )
+
+    def get_anthropic_config(self) -> AnthropicConfig:
+        """Get Anthropic configuration."""
+        return AnthropicConfig(
+            api_key=self.anthropic_api_key,
+            model=self.anthropic_model,
+            temperature=self.anthropic_temperature,
+            max_tokens=self.anthropic_max_tokens,
+        )
+
+    def get_openai_config(self) -> OpenAIConfig:
+        """Get OpenAI configuration."""
+        return OpenAIConfig(
+            api_key=self.openai_api_key,
+            model=self.openai_model,
+            temperature=self.openai_temperature,
+            max_tokens=self.openai_max_tokens,
+        )
+
+    def get_openrouter_config(self) -> OpenRouterConfig:
+        """Get OpenRouter configuration."""
+        return OpenRouterConfig(
+            api_key=self.openrouter_api_key,
+            model=self.openrouter_model,
+            temperature=self.openrouter_temperature,
+            max_tokens=self.openrouter_max_tokens,
+        )
+
+    def parse_provider_model_string(self, provider_model: str) -> Tuple[str, str]:
+        """Parse provider:model string into provider and model components.
+
+        Args:
+            provider_model: String like 'openrouter:claude-3.5-sonnet' or 'deepseek:deepseek-chat'
+
+        Returns:
+            Tuple of (provider_name, model_name)
+        """
+        if ":" in provider_model:
+            provider, model = provider_model.split(":", 1)
+            return provider.strip(), model.strip()
+        else:
+            # Fallback to backward compatibility
+            return provider_model.strip(), ""
+
+    def get_provider_model_config(
+        self, provider_model: Optional[str] = None
+    ) -> ProviderModelConfig:
+        """Get provider and model configuration for the specified combination.
+
+        Args:
+            provider_model: String like 'openrouter:claude-3.5-sonnet'. If None, uses default.
+
+        Returns:
+            ProviderModelConfig with provider name, model name, and provider config
+        """
+        target_provider_model = provider_model or self.default_provider_model
+        provider_name, model_name = self.parse_provider_model_string(
+            target_provider_model
+        )
+
+        # Get appropriate provider config
+        if provider_name == "anthropic":
+            provider_config = self.get_anthropic_config()
+            if model_name:
+                provider_config.model = model_name
+        elif provider_name == "openai":
+            provider_config = self.get_openai_config()
+            if model_name:
+                provider_config.model = model_name
+        elif provider_name == "openrouter":
+            provider_config = self.get_openrouter_config()
+            if model_name:
+                provider_config.model = model_name
+        elif provider_name == "deepseek":
+            provider_config = self.get_deepseek_config()
+            if model_name:
+                provider_config.model = model_name
+        elif provider_name == "google":
+            provider_config = self.get_gemini_config()
+            if model_name:
+                provider_config.model = model_name
+        else:
+            raise ValueError(f"Unknown provider: {provider_name}")
+
+        return ProviderModelConfig(
+            provider_name=provider_name,
+            model_name=provider_config.model,
+            provider_config=provider_config,
+            display_name=f"{provider_name}:{provider_config.model}",
+        )
+
+    def create_host_from_provider_model(self, provider_model: Optional[str] = None):
+        """Create MCPHost instance from provider-model configuration.
+
+        Args:
+            provider_model: String like 'openrouter:claude-3.5-sonnet'. If None, uses default.
+
+        Returns:
+            MCPHost instance configured with the specified provider and model
+        """
+        pm_config = self.get_provider_model_config(provider_model)
+
+        # Import here to avoid circular imports
+        from cli_agent.core.mcp_host import MCPHost
+        from cli_agent.core.model_config import (
+            ClaudeModel,
+            DeepSeekModel,
+            GeminiModel,
+            GPTModel,
+        )
+        from cli_agent.providers.anthropic_provider import AnthropicProvider
+        from cli_agent.providers.deepseek_provider import DeepSeekProvider
+        from cli_agent.providers.google_provider import GoogleProvider
+        from cli_agent.providers.openai_provider import OpenAIProvider
+        from cli_agent.providers.openrouter_provider import OpenRouterProvider
+
+        # Create provider instance
+        if pm_config.provider_name == "anthropic":
+            provider = AnthropicProvider(
+                api_key=pm_config.provider_config.api_key,
+                base_url=pm_config.provider_config.base_url,
+                timeout=pm_config.provider_config.timeout,
+            )
+        elif pm_config.provider_name == "openai":
+            provider = OpenAIProvider(
+                api_key=pm_config.provider_config.api_key,
+                base_url=pm_config.provider_config.base_url,
+                timeout=pm_config.provider_config.timeout,
+            )
+        elif pm_config.provider_name == "openrouter":
+            provider = OpenRouterProvider(
+                api_key=pm_config.provider_config.api_key,
+                base_url=pm_config.provider_config.base_url,
+                timeout=pm_config.provider_config.timeout,
+            )
+            # Set app info if available
+            if (
+                hasattr(pm_config.provider_config, "app_name")
+                and pm_config.provider_config.app_name
+            ):
+                provider.set_app_info(
+                    pm_config.provider_config.app_name,
+                    pm_config.provider_config.site_url
+                    or "https://github.com/your-repo",
+                )
+        elif pm_config.provider_name == "deepseek":
+            provider = DeepSeekProvider(
+                api_key=pm_config.provider_config.api_key,
+                base_url=pm_config.provider_config.base_url,
+                timeout=600.0,  # DeepSeek can be slower
+            )
+        elif pm_config.provider_name == "google":
+            provider = GoogleProvider(
+                api_key=pm_config.provider_config.api_key, timeout=120.0
+            )
+        else:
+            raise ValueError(f"Unknown provider: {pm_config.provider_name}")
+
+        # Create model instance based on model name
+        model_name = pm_config.model_name.lower()
+        if "claude" in model_name:
+            # For Claude, try to map to variant name
+            if "3.5-sonnet" in model_name or "3-5-sonnet" in model_name:
+                model = ClaudeModel(variant="claude-3.5-sonnet")
+            elif "3.5-haiku" in model_name or "3-5-haiku" in model_name:
+                model = ClaudeModel(variant="claude-3.5-haiku")
+            elif "opus" in model_name:
+                model = ClaudeModel(variant="claude-3-opus")
+            else:
+                model = ClaudeModel(variant="claude-3.5-sonnet")  # Default
+        elif "gpt" in model_name or "o1" in model_name:
+            # For GPT, extract variant
+            if "gpt-4" in model_name:
+                model = GPTModel(variant="gpt-4")
+            elif "gpt-3.5" in model_name:
+                model = GPTModel(variant="gpt-3.5-turbo")
+            elif "o1" in model_name:
+                model = GPTModel(variant="o1-preview")
+            else:
+                model = GPTModel(variant="gpt-4")  # Default
+        elif "gemini" in model_name:
+            # For Gemini, extract variant
+            if "2.5-flash" in model_name:
+                model = GeminiModel(variant="gemini-2.5-flash")
+            elif "1.5-pro" in model_name:
+                model = GeminiModel(variant="gemini-1.5-pro")
+            elif "1.5-flash" in model_name:
+                model = GeminiModel(variant="gemini-1.5-flash")
+            else:
+                model = GeminiModel(variant="gemini-2.5-flash")  # Default
+        elif "deepseek" in model_name:
+            # For DeepSeek, extract variant
+            if "reasoner" in model_name:
+                model = DeepSeekModel(variant="deepseek-reasoner")
+            else:
+                model = DeepSeekModel(variant="deepseek-chat")  # Default
+        else:
+            # Fallback to Claude model for unknown models
+            model = ClaudeModel(variant="claude-3.5-sonnet")
+
+        # Override temperature and max_tokens after creation
+        model.temperature = pm_config.provider_config.temperature
+        if hasattr(pm_config.provider_config, "max_tokens"):
+            model.max_tokens = pm_config.provider_config.max_tokens
+        elif hasattr(pm_config.provider_config, "max_output_tokens"):
+            model.max_tokens = pm_config.provider_config.max_output_tokens
+
+        return MCPHost(provider=provider, model=model, config=self)
+
+    def get_available_provider_models(self) -> Dict[str, List[str]]:
+        """Get available provider-model combinations.
+
+        Returns:
+            Dict mapping provider names to lists of available models
+        """
+        available = {}
+
+        if self.anthropic_api_key:
+            available["anthropic"] = [
+                "claude-3-5-sonnet-20241022",
+                "claude-3-5-haiku-20241022",
+                "claude-3-opus-20240229",
+            ]
+
+        if self.openai_api_key:
+            available["openai"] = [
+                "gpt-4-turbo-preview",
+                "gpt-4-0125-preview",
+                "gpt-3.5-turbo",
+                "o1-preview",
+                "o1-mini",
+            ]
+
+        if self.openrouter_api_key:
+            available["openrouter"] = [
+                "anthropic/claude-3.5-sonnet",
+                "openai/gpt-4-turbo-preview",
+                "google/gemini-pro-1.5",
+                "meta-llama/llama-3.1-405b-instruct",
+                "deepseek/deepseek-chat",
+            ]
+
+        if self.deepseek_api_key:
+            available["deepseek"] = ["deepseek-chat", "deepseek-reasoner"]
+
+        if self.gemini_api_key:
+            available["gemini"] = [
+                "gemini-2.5-flash",
+                "gemini-1.5-pro",
+                "gemini-1.5-flash",
+            ]
+
+        return available
 
     def get_tool_permission_config(self):
         """Get tool permission configuration."""
@@ -221,6 +550,20 @@ class HostConfig(BaseSettings):
             "GEMINI_TOP_P": str(self.gemini_top_p),
             "GEMINI_TOP_K": str(self.gemini_top_k),
             "GEMINI_STREAM": str(self.gemini_stream).lower(),
+            "ANTHROPIC_API_KEY": self.anthropic_api_key,
+            "ANTHROPIC_MODEL": self.anthropic_model,
+            "ANTHROPIC_TEMPERATURE": str(self.anthropic_temperature),
+            "ANTHROPIC_MAX_TOKENS": str(self.anthropic_max_tokens),
+            "OPENAI_API_KEY": self.openai_api_key,
+            "OPENAI_MODEL": self.openai_model,
+            "OPENAI_TEMPERATURE": str(self.openai_temperature),
+            "OPENAI_MAX_TOKENS": str(self.openai_max_tokens),
+            "OPENROUTER_API_KEY": self.openrouter_api_key,
+            "OPENROUTER_MODEL": self.openrouter_model,
+            "OPENROUTER_TEMPERATURE": str(self.openrouter_temperature),
+            "OPENROUTER_MAX_TOKENS": str(self.openrouter_max_tokens),
+            "DEFAULT_PROVIDER_MODEL": self.default_provider_model,
+            "MODEL_TYPE": self.model_type,
             "HOST_NAME": self.host_name,
             "LOG_LEVEL": self.log_level,
         }
@@ -266,8 +609,14 @@ class HostConfig(BaseSettings):
             # Group by type for better organization
             deepseek_vars = [v for v in missing_vars if v.startswith("DEEPSEEK_")]
             gemini_vars = [v for v in missing_vars if v.startswith("GEMINI_")]
+            anthropic_vars = [v for v in missing_vars if v.startswith("ANTHROPIC_")]
+            openai_vars = [v for v in missing_vars if v.startswith("OPENAI_")]
+            openrouter_vars = [v for v in missing_vars if v.startswith("OPENROUTER_")]
             host_vars = [
-                v for v in missing_vars if v.startswith("HOST_") or v in ["LOG_LEVEL"]
+                v
+                for v in missing_vars
+                if v.startswith("HOST_")
+                or v in ["LOG_LEVEL", "DEFAULT_PROVIDER_MODEL", "MODEL_TYPE"]
             ]
 
             if deepseek_vars:
@@ -279,6 +628,24 @@ class HostConfig(BaseSettings):
             if gemini_vars:
                 updated_lines.append("# Gemini API Configuration")
                 for var in sorted(gemini_vars):
+                    updated_lines.append(f"{var}={managed_vars[var]}")
+                updated_lines.append("")
+
+            if anthropic_vars:
+                updated_lines.append("# Anthropic API Configuration")
+                for var in sorted(anthropic_vars):
+                    updated_lines.append(f"{var}={managed_vars[var]}")
+                updated_lines.append("")
+
+            if openai_vars:
+                updated_lines.append("# OpenAI API Configuration")
+                for var in sorted(openai_vars):
+                    updated_lines.append(f"{var}={managed_vars[var]}")
+                updated_lines.append("")
+
+            if openrouter_vars:
+                updated_lines.append("# OpenRouter API Configuration")
+                for var in sorted(openrouter_vars):
                     updated_lines.append(f"{var}={managed_vars[var]}")
                 updated_lines.append("")
 
@@ -310,6 +677,11 @@ class HostConfig(BaseSettings):
         persistent_config = {
             "deepseek_model": self.deepseek_model,
             "gemini_model": self.gemini_model,
+            "anthropic_model": self.anthropic_model,
+            "openai_model": self.openai_model,
+            "openrouter_model": self.openrouter_model,
+            "default_provider_model": self.default_provider_model,
+            "model_type": self.model_type,
             "last_updated": time.time(),
         }
 
@@ -340,10 +712,54 @@ class HostConfig(BaseSettings):
                 self.deepseek_model = persistent_config["deepseek_model"]
             if "gemini_model" in persistent_config:
                 self.gemini_model = persistent_config["gemini_model"]
+            if "anthropic_model" in persistent_config:
+                self.anthropic_model = persistent_config["anthropic_model"]
+            if "openai_model" in persistent_config:
+                self.openai_model = persistent_config["openai_model"]
+            if "openrouter_model" in persistent_config:
+                self.openrouter_model = persistent_config["openrouter_model"]
+            if "default_provider_model" in persistent_config:
+                self.default_provider_model = persistent_config[
+                    "default_provider_model"
+                ]
+            if "model_type" in persistent_config:
+                self.model_type = persistent_config["model_type"]
+
+            # Migrate legacy model settings to provider-model format
+            self._migrate_legacy_model_settings()
 
             print(f"Loaded persistent configuration from {config_file}")
         except Exception as e:
             print(f"Warning: Could not load persistent configuration: {e}")
+
+    def _migrate_legacy_model_settings(self):
+        """Migrate legacy model settings to provider-model format."""
+        # Only migrate if default_provider_model is not set or is clearly wrong
+        migration_needed = False
+
+        # Fix the root cause: deepseek_model should never be "gemini"
+        if self.deepseek_model == "gemini":
+            # Reset deepseek_model to a proper DeepSeek model
+            self.deepseek_model = "deepseek-chat"
+            migration_needed = True
+
+        # If default_provider_model is empty or invalid, set a sensible default
+        if not self.default_provider_model or ":" not in self.default_provider_model:
+            # Default to deepseek with the configured deepseek model
+            self.default_provider_model = f"deepseek:{self.deepseek_model}"
+            migration_needed = True
+
+        # Fix any obviously wrong configurations where deepseek_model was abused
+        provider, model = self.parse_provider_model_string(self.default_provider_model)
+        if provider == "deepseek" and model == "gemini":
+            # This is clearly wrong - fix it to use google provider with gemini model
+            self.default_provider_model = f"google:{self.gemini_model}"
+            migration_needed = True
+
+        # Save updated configuration if migration occurred
+        if migration_needed:
+            self.save_persistent_config()
+            print(f"Migrated to provider-model: {self.default_provider_model}")
 
 
 def load_config() -> HostConfig:
@@ -372,8 +788,30 @@ GEMINI_TOP_P=0.9
 GEMINI_TOP_K=40
 GEMINI_STREAM=false
 
+# Anthropic API Configuration
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+ANTHROPIC_TEMPERATURE=0.7
+ANTHROPIC_MAX_TOKENS=8192
+
+# OpenAI API Configuration
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4-turbo-preview
+OPENAI_TEMPERATURE=0.7
+OPENAI_MAX_TOKENS=4096
+
+# OpenRouter API Configuration
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
+OPENROUTER_TEMPERATURE=0.7
+OPENROUTER_MAX_TOKENS=8192
+
+# Provider-Model Selection
+DEFAULT_PROVIDER_MODEL=deepseek:deepseek-chat
+MODEL_TYPE=deepseek
+
 # Host Configuration
-HOST_NAME=mcp-deepseek-host
+HOST_NAME=mcp-agent
 LOG_LEVEL=INFO
 """
 

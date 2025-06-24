@@ -1,6 +1,7 @@
 """Response handling framework for MCP agents."""
 
 import asyncio
+import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
@@ -13,6 +14,22 @@ class ResponseHandler:
     def __init__(self, agent):
         """Initialize with reference to the parent agent."""
         self.agent = agent
+
+    def _ensure_arguments_are_json_string(self, arguments: Any) -> str:
+        """Ensure tool call arguments are formatted as JSON string.
+
+        Args:
+            arguments: Arguments in any format (dict, str, etc.)
+
+        Returns:
+            JSON string representation of arguments
+        """
+        if isinstance(arguments, str):
+            return arguments
+        elif isinstance(arguments, dict):
+            return json.dumps(arguments)
+        else:
+            return json.dumps({}) if arguments is None else json.dumps(arguments)
 
     async def handle_complete_response_generic(
         self,
@@ -126,14 +143,16 @@ class ResponseHandler:
                                             else "unknown"
                                         ),
                                     ),
-                                    "arguments": getattr(
-                                        tc,
-                                        "args",
-                                        (
-                                            tc.function.arguments
-                                            if hasattr(tc, "function")
-                                            else {}
-                                        ),
+                                    "arguments": self._ensure_arguments_are_json_string(
+                                        getattr(
+                                            tc,
+                                            "args",
+                                            (
+                                                tc.function.arguments
+                                                if hasattr(tc, "function")
+                                                else {}
+                                            ),
+                                        )
                                     ),
                                 },
                             }
