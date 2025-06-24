@@ -272,20 +272,25 @@ CRITICAL INSTRUCTIONS:
         # NOTE: Don't override _execute_mcp_tool - let normal tool call handling work
         # host._execute_mcp_tool = emit_tool_execution
 
-        # Approach: Override tool execution to capture results
+        # Approach: Override tool execution engine to capture results
         try:
             # Capture tool execution results
             captured_tool_results = []
 
-            # Override the tool execution to capture results
-            original_execute_mcp_tool = host._execute_mcp_tool
+            # Override the tool execution engine's execute_mcp_tool method directly
+            original_execute_mcp_tool = host.tool_execution_engine.execute_mcp_tool
 
             async def capture_tool_execution(tool_key, arguments):
                 result = await original_execute_mcp_tool(tool_key, arguments)
                 captured_tool_results.append({"tool": tool_key, "result": result})
+                
+                # Emit tool result immediately for real-time feedback
+                tool_name = tool_key.split(":")[-1]
+                emit_output_with_id(f"🔧 {tool_name}: {str(result).strip()}")
+                
                 return result
 
-            host._execute_mcp_tool = capture_tool_execution
+            host.tool_execution_engine.execute_mcp_tool = capture_tool_execution
 
             try:
                 # Generate response with tool capture
@@ -325,7 +330,7 @@ CRITICAL INSTRUCTIONS:
 
             finally:
                 # Restore original method
-                host._execute_mcp_tool = original_execute_mcp_tool
+                host.tool_execution_engine.execute_mcp_tool = original_execute_mcp_tool
 
             # Use emit_result to return the captured output
             from subagent import emit_result

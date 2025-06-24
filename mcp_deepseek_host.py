@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from openai import OpenAI
 
-from cli_agent.core.base_agent import BaseMCPAgent
+from cli_agent.core.base_llm_provider import BaseLLMProvider
 from cli_agent.utils.tool_conversion import OpenAIStyleToolConverter
 from cli_agent.utils.tool_parsing import DeepSeekToolCallParser
 from config import HostConfig
@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class MCPDeepseekHost(BaseMCPAgent):
+class MCPDeepseekHost(BaseLLMProvider):
     """MCP Host that uses Deepseek as the language model backend."""
 
     def __init__(self, config: HostConfig, is_subagent: bool = False):
@@ -65,20 +65,9 @@ class MCPDeepseekHost(BaseMCPAgent):
         converter = OpenAIStyleToolConverter()
         return converter.convert_tools(self.available_tools)
 
-    def parse_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
-        """Parse tool calls using centralized framework with DeepSeek-specific extraction."""
-        logger.debug(f"parse_tool_calls received response type: {type(response)}")
-        logger.debug(f"parse_tool_calls response content: {response}")
+    # parse_tool_calls is now implemented in BaseLLMProvider
 
-        # Extract text content for text-based parsing
-        text_content = ""
-        if isinstance(response, str):
-            text_content = response
-
-        # Use centralized parsing framework
-        return self._parse_tool_calls_generic(response, text_content)
-
-    def _extract_structured_calls(self, response: Any) -> List[Any]:
+    def _extract_structured_calls_impl(self, response: Any) -> List[Any]:
         """Extract structured tool calls from DeepSeek response."""
         structured_calls = []
 
@@ -116,7 +105,7 @@ class MCPDeepseekHost(BaseMCPAgent):
 
         return structured_calls
 
-    def _parse_text_based_calls(self, text_content: str) -> List[Any]:
+    def _parse_text_based_calls_impl(self, text_content: str) -> List[Any]:
         """Parse text-based tool calls using DeepSeek-specific patterns."""
         text_calls = []
 
@@ -137,12 +126,9 @@ class MCPDeepseekHost(BaseMCPAgent):
 
         return text_calls
 
-    def _extract_text_before_tool_calls(self, content: str) -> str:
-        """Extract text that appears before DeepSeek tool calls."""
-        import re
-
-        # DeepSeek-specific patterns
-        patterns = [
+    def _get_text_extraction_patterns(self) -> List[str]:
+        """Get DeepSeek-specific regex patterns for extracting text before tool calls."""
+        return [
             # DeepSeek tool call markers
             r"^(.*?)(?=<｜tool▁calls▁begin｜>|<｜tool▁call▁begin｜>)",
             r"^(.*?)(?=```json\s*\{\s*\"function\")",
@@ -150,18 +136,6 @@ class MCPDeepseekHost(BaseMCPAgent):
             # JSON function calls
             r"^(.*?)(?=\{\s*\"function\":)",
         ]
-
-        for pattern in patterns:
-            match = re.search(pattern, content, re.DOTALL)
-            if match:
-                text_before = match.group(1).strip()
-                if text_before:  # Only return if there's actual content
-                    # Remove code block markers if present
-                    text_before = re.sub(r"^```\w*\s*", "", text_before)
-                    text_before = re.sub(r"\s*```$", "", text_before)
-                    return text_before
-
-        return ""
 
     def _get_llm_specific_instructions(self) -> str:
         """Provide DeepSeek-specific instructions."""
@@ -195,51 +169,7 @@ class MCPDeepseekHost(BaseMCPAgent):
             processed_messages, tools, stream, modify_messages_in_place
         )
 
-    async def _generate_completion(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict]] = None,
-        stream: bool = True,
-        interactive: bool = True,
-    ) -> Any:
-        """Generate completion using DeepSeek API - delegate to centralized handlers."""
-        # Check if we should use buffering for streaming JSON
-        use_buffering = (
-            hasattr(self, "streaming_json_callback")
-            and self.streaming_json_callback is not None
-        )
-
-        try:
-            if stream:
-                if use_buffering:
-                    # Use buffering for streaming JSON mode
-                    return await self._handle_buffered_streaming_response(
-                        await self._make_api_request(messages, tools, stream=True),
-                        messages,
-                        interactive=interactive,
-                    )
-                else:
-                    return self._handle_streaming_response_generic(
-                        await self._make_api_request(messages, tools, stream=True),
-                        messages,
-                        interactive=interactive,
-                    )
-            else:
-                # Non-streaming response
-                response = await self._make_api_request(messages, tools, stream=False)
-                return await self._handle_complete_response_generic(
-                    response, messages, interactive=interactive
-                )
-
-        except Exception as e:
-            # Re-raise tool permission denials so they can be handled at the chat level
-            from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
-
-            if isinstance(e, ToolDeniedReturnToPrompt):
-                raise  # Re-raise the exception to bubble up to interactive chat
-
-            logger.error(f"Error in generate completion: {e}")
-            return f"Error: {str(e)}"
+    # _generate_completion is now implemented in BaseLLMProvider
 
     def _format_messages_for_reasoner(
         self, messages: List[Dict[str, Any]]
@@ -361,13 +291,11 @@ class MCPDeepseekHost(BaseMCPAgent):
         """DeepSeek-specific message enhancement for deepseek-reasoner."""
         return self._format_messages_for_reasoner(messages)
 
-    def _is_retryable_error(self, error: Exception) -> bool:
+    def _is_provider_retryable_error(self, error_str: str) -> bool:
         """DeepSeek-specific retryable error detection."""
-        error_str = str(error).lower()
-        # DeepSeek-specific retryable conditions plus generic ones
+        # DeepSeek-specific retryable conditions
         return (
-            super()._is_retryable_error(error)
-            or "deepseek" in error_str
+            "deepseek" in error_str
             or "model overloaded" in error_str
         )
 
@@ -375,44 +303,7 @@ class MCPDeepseekHost(BaseMCPAgent):
         """Get the actual DeepSeek model being used at runtime."""
         return self.deepseek_config.model
 
-    def _normalize_tool_calls_to_standard_format(
-        self, tool_calls: List[Any]
-    ) -> List[Dict[str, Any]]:
-        """Convert DeepSeek tool calls to standardized format."""
-        normalized_calls = []
-
-        for i, tool_call in enumerate(tool_calls):
-            if hasattr(tool_call, "get"):
-                # Dict format (already structured)
-                if "function" in tool_call:
-                    # DeepSeek OpenAI-style format
-                    normalized_calls.append(
-                        {
-                            "id": tool_call.get("id", f"call_{i}"),
-                            "name": tool_call["function"].get("name", "unknown"),
-                            "arguments": tool_call["function"].get("arguments", {}),
-                        }
-                    )
-                else:
-                    # Simple dict format
-                    normalized_calls.append(
-                        {
-                            "id": tool_call.get("id", f"call_{i}"),
-                            "name": tool_call.get("name", "unknown"),
-                            "arguments": tool_call.get("arguments", {}),
-                        }
-                    )
-            else:
-                # SimpleNamespace format
-                normalized_calls.append(
-                    {
-                        "id": getattr(tool_call, "id", f"call_{i}"),
-                        "name": getattr(tool_call, "name", "unknown"),
-                        "arguments": getattr(tool_call, "args", {}),
-                    }
-                )
-
-        return normalized_calls
+    # _normalize_tool_calls_to_standard_format is now implemented in BaseLLMProvider
 
     # ============================================================================
     # PROVIDER-SPECIFIC ADAPTER METHODS
@@ -423,11 +314,15 @@ class MCPDeepseekHost(BaseMCPAgent):
     ) -> tuple[str, List[Any], Dict[str, Any]]:
         """Extract content from DeepSeek response."""
         if not hasattr(response, "choices") or not response.choices:
+            logger.info("Response has no choices attribute or empty choices")
             return "", [], {}
 
         message = response.choices[0].message
         text_content = message.content or ""
         tool_calls = message.tool_calls if hasattr(message, "tool_calls") else []
+
+        logger.info(f"Extracted text_content: {repr(text_content)}")
+        logger.info(f"Extracted tool_calls: {len(tool_calls) if tool_calls else 0}")
 
         # Handle DeepSeek-specific reasoning content
         provider_data = {}
@@ -578,28 +473,4 @@ class MCPDeepseekHost(BaseMCPAgent):
             response, original_messages, interactive
         )
 
-    async def _handle_buffered_streaming_response(
-        self,
-        response,
-        original_messages: List[Dict[str, str]] = None,
-        interactive: bool = True,
-    ) -> str:
-        """Handle streaming response for JSON mode - simplified version."""
-        # Process chunks to get content and tool calls
-        accumulated_content, tool_calls, provider_data = (
-            await self._process_streaming_chunks(response)
-        )
-
-        # For streaming JSON mode, trigger the centralized base agent handler
-        if self.streaming_json_callback:
-            if tool_calls:
-                # Create a mock response object for centralized processing
-                mock_response = self._create_mock_response(
-                    accumulated_content, tool_calls
-                )
-                return mock_response
-            else:
-                # Just text content, emit it directly
-                self.streaming_json_callback(accumulated_content)
-
-        return accumulated_content
+    # _handle_buffered_streaming_response is now implemented in BaseLLMProvider

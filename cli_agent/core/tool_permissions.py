@@ -171,6 +171,18 @@ class ToolPermissionManager:
     ) -> ToolPermissionResult:
         """Check if tool is allowed/disallowed by configuration."""
 
+        # Always allow core agent management tools without prompting
+        core_tools = {
+            "task", "task_status", "task_results", 
+            "emit_result", "emit_output", "emit_error", "emit_status"
+        }
+        if tool_name in core_tools:
+            return ToolPermissionResult(
+                allowed=True,
+                reason=f"Tool '{tool_name}' is a core agent management tool",
+                skip_prompt=True,
+            )
+
         # Check disallowed tools first (takes precedence)
         for pattern in self.config.disallowed_tools:
             if self._matches_pattern(tool_name, pattern):

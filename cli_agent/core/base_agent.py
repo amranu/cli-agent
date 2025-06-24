@@ -959,6 +959,7 @@ class BaseMCPAgent(ABC):
         modify_messages_in_place: bool = False,
     ) -> Union[str, Any]:
         """Generate a response using the specific LLM. Centralized implementation with subagent yielding."""
+        logger.info(f"generate_response called with {len(messages)} messages")
         # For subagents, use interactive=False to avoid terminal formatting issues
         interactive = not self.is_subagent
 
@@ -1550,6 +1551,7 @@ class BaseMCPAgent(ABC):
         # Use the existing parse_tool_calls method (implemented by subclasses)
         # This maintains compatibility with existing implementations
         tool_calls = self.parse_tool_calls(response)
+        logger.info(f"parse_tool_calls returned: {tool_calls}")
 
         # Normalize to consistent format if needed
         normalized_calls = []
@@ -1562,15 +1564,16 @@ class BaseMCPAgent(ABC):
                         call = call.copy()
                         call["type"] = "function"
                     normalized_calls.append(call)
-                elif "name" in call and "args" in call:
+                elif "name" in call and ("args" in call or "arguments" in call):
                     # Convert from simple format to standard format
+                    arguments = call.get("args") or call.get("arguments", {})
                     normalized_calls.append(
                         {
-                            "id": f"call_{i}_{int(time.time())}",
+                            "id": call.get("id", f"call_{i}_{int(time.time())}"),
                             "type": "function",
                             "function": {
                                 "name": call["name"],
-                                "arguments": call.get("args", {}),
+                                "arguments": arguments,
                             },
                         }
                     )
@@ -1767,13 +1770,13 @@ class BaseMCPAgent(ABC):
             response, accumulated_content
         )
 
-        logger.debug(f"Extracted tool calls in centralized processing: {tool_calls}")
-        logger.debug(
+        logger.info(f"Extracted tool calls in centralized processing: {tool_calls}")
+        logger.info(
             f"Number of tool calls found: {len(tool_calls) if tool_calls else 0}"
         )
 
         if not tool_calls:
-            logger.debug("No tool calls found - returning early")
+            logger.info("No tool calls found - returning early")
             return current_messages, None, False
 
         # Display tool execution info

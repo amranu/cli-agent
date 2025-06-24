@@ -41,6 +41,7 @@ class ResponseHandler:
 
         # Process tool calls if any
         if tool_calls:
+            logger.info(f"Processing {len(tool_calls)} tool calls")
             # Process tool calls using centralized framework
             updated_messages, continuation_message, tools_executed = (
                 await self.agent._process_tool_calls_centralized(
@@ -52,10 +53,13 @@ class ResponseHandler:
                     accumulated_content=text_content,
                 )
             )
+            logger.info(
+                f"Tool processing result: tools_executed={tools_executed}, continuation_message={continuation_message is not None}"
+            )
 
-            # If tools were executed and there's a continuation, handle it
-            if tools_executed and continuation_message:
-                # Generate follow-up response
+            # If tools were executed, generate follow-up response with tool results
+            if tools_executed:
+                # Generate response with tool results (both normal tools and subagent continuation)
                 follow_up_response = await self.agent.generate_response(
                     updated_messages, stream=False
                 )

@@ -82,9 +82,35 @@ class ChatInterface:
                         if isinstance(slash_result, dict) and slash_result.get("quit"):
                             print(slash_result.get("status", "Goodbye!"))
                             break
+                        # Check if it's a reload_host command
+                        elif isinstance(slash_result, dict) and slash_result.get("reload_host"):
+                            print(slash_result.get("status", "Reloading..."))
+                            # Return dict with reload_host key and current messages
+                            return {"reload_host": slash_result["reload_host"], "messages": messages}
+                        # Check if it's a clear_messages command
+                        elif isinstance(slash_result, dict) and slash_result.get("clear_messages"):
+                            print(slash_result.get("status", "Messages cleared."))
+                            messages.clear()  # Clear the messages list
+                        # Check if it's a compacted_messages command
+                        elif isinstance(slash_result, dict) and slash_result.get("compacted_messages"):
+                            print(slash_result.get("status", "Messages compacted."))
+                            messages[:] = slash_result["compacted_messages"]  # Replace messages with compacted ones
+                        # Check if it's a send_to_llm command (like /init)
+                        elif isinstance(slash_result, dict) and slash_result.get("send_to_llm"):
+                            print(slash_result.get("status", "Sending to LLM..."))
+                            # Add the prompt as a user message and continue processing
+                            messages.append({"role": "user", "content": slash_result["send_to_llm"]})
+                            # Don't continue, let it process the LLM prompt
                         else:
                             print(slash_result)
-                    continue
+                            continue
+                    
+                    # If we got here, it means we have a send_to_llm command to process
+                    if isinstance(slash_result, dict) and slash_result.get("send_to_llm"):
+                        # Continue to process the LLM request (don't skip to next iteration)
+                        pass
+                    else:
+                        continue
 
                 processed_input = self.handle_user_input(user_input)
                 if processed_input is None:

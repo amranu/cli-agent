@@ -16,7 +16,7 @@ from google.genai import types
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from cli_agent.core.base_agent import BaseMCPAgent
+from cli_agent.core.base_llm_provider import BaseLLMProvider
 from cli_agent.core.input_handler import InterruptibleInput
 from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 from cli_agent.utils.tool_conversion import GeminiToolConverter
@@ -31,7 +31,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class MCPGeminiHost(BaseMCPAgent):
+class MCPGeminiHost(BaseLLMProvider):
     """MCP Host that uses Google Gemini as the language model backend."""
 
     def __init__(self, config: HostConfig, is_subagent: bool = False):
@@ -97,50 +97,9 @@ class MCPGeminiHost(BaseMCPAgent):
         function_declarations = converter.convert_tools(self.available_tools)
         return [types.Tool(function_declarations=function_declarations)]
 
-    def parse_tool_calls(self, response: Any) -> List:
-        """Parse tool calls using centralized framework with Gemini-specific extraction."""
-        from types import SimpleNamespace
+    # parse_tool_calls is now implemented in BaseLLMProvider
 
-        # Handle string responses (no tool calls possible)
-        if isinstance(response, str):
-            return []
-
-        # Extract text content from response for text-based tool call parsing
-        text_content = ""
-        if (
-            hasattr(response, "candidates")
-            and response.candidates
-            and response.candidates[0].content
-            and response.candidates[0].content.parts
-        ):
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, "text") and part.text:
-                    text_content += part.text
-        elif hasattr(response, "text") and response.text:
-            text_content = response.text
-        elif (
-            hasattr(response, "candidates")
-            and response.candidates
-            and hasattr(response.candidates[0], "text")
-            and response.candidates[0].text
-        ):
-            text_content = response.candidates[0].text
-
-        # Use centralized parsing framework
-        unified_calls = self._parse_tool_calls_generic(response, text_content)
-
-        # Convert back to SimpleNamespace format for compatibility
-        converted_calls = []
-        for call_dict in unified_calls:
-            call = SimpleNamespace()
-            call.name = call_dict["name"]
-            call.args = call_dict["arguments"]
-            call.id = call_dict.get("id")
-            converted_calls.append(call)
-
-        return converted_calls
-
-    def _extract_structured_calls(self, response: Any) -> List[Any]:
+    def _extract_structured_calls_impl(self, response: Any) -> List[Any]:
         """Extract structured tool calls from Gemini response."""
         from types import SimpleNamespace
 
@@ -162,7 +121,7 @@ class MCPGeminiHost(BaseMCPAgent):
 
         return structured_calls
 
-    def _parse_text_based_calls(self, text_content: str) -> List[Any]:
+    def _parse_text_based_calls_impl(self, text_content: str) -> List[Any]:
         """Parse text-based tool calls using Gemini-specific patterns."""
         text_calls = []
 
@@ -194,12 +153,9 @@ class MCPGeminiHost(BaseMCPAgent):
 
         return text_calls
 
-    def _extract_text_before_tool_calls(self, content: str) -> str:
-        """Extract text that appears before Gemini tool calls."""
-        import re
-
-        # Gemini-specific patterns
-        patterns = [
+    def _get_text_extraction_patterns(self) -> List[str]:
+        """Get Gemini-specific regex patterns for extracting text before tool calls."""
+        return [
             # Gemini XML-style tool calls
             r"^(.*?)(?=<execute_tool>)",
             r"^(.*?)(?=<tool_call>)",
@@ -208,18 +164,6 @@ class MCPGeminiHost(BaseMCPAgent):
             # Inline tool calls
             r"^(.*?)(?=Tool:\s*\w+:\w+)",
         ]
-
-        for pattern in patterns:
-            match = re.search(pattern, content, re.DOTALL)
-            if match:
-                text_before = match.group(1).strip()
-                if text_before:  # Only return if there's actual content
-                    # Remove code block markers if present
-                    text_before = re.sub(r"^```\w*\s*", "", text_before)
-                    text_before = re.sub(r"\s*```$", "", text_before)
-                    return text_before
-
-        return ""
 
     def _get_llm_specific_instructions(self) -> str:
         """Provide Gemini-specific instructions that emphasize tool usage and action."""
@@ -312,13 +256,11 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
 
         return enhanced_messages
 
-    def _is_retryable_error(self, error: Exception) -> bool:
+    def _is_provider_retryable_error(self, error_str: str) -> bool:
         """Gemini-specific retryable error detection."""
-        error_str = str(error).lower()
-        # Gemini-specific retryable conditions plus generic ones
+        # Gemini-specific retryable conditions
         return (
-            super()._is_retryable_error(error)
-            or "retryerror" in error_str
+            "retryerror" in error_str
             or "internal server error" in error_str
             or "500" in error_str
             or "gemini" in error_str
@@ -328,53 +270,7 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
         """Get the actual Gemini model being used at runtime."""
         return self.gemini_config.model
 
-    def _normalize_tool_calls_to_standard_format(
-        self, tool_calls: List[Any]
-    ) -> List[Dict[str, Any]]:
-        """Convert Gemini tool calls to standardized format."""
-        normalized_calls = []
-
-        for i, tool_call in enumerate(tool_calls):
-            if hasattr(tool_call, "name"):
-                # Gemini function call object
-                normalized_calls.append(
-                    {
-                        "id": getattr(tool_call, "id", f"call_{i}"),
-                        "name": tool_call.name,
-                        "arguments": getattr(tool_call, "args", {}),
-                    }
-                )
-            elif isinstance(tool_call, dict):
-                # Dict format
-                if "function" in tool_call:
-                    # Structured format
-                    normalized_calls.append(
-                        {
-                            "id": tool_call.get("id", f"call_{i}"),
-                            "name": tool_call["function"].get("name", "unknown"),
-                            "arguments": tool_call["function"].get("arguments", {}),
-                        }
-                    )
-                else:
-                    # Simple dict format
-                    normalized_calls.append(
-                        {
-                            "id": tool_call.get("id", f"call_{i}"),
-                            "name": tool_call.get("name", "unknown"),
-                            "arguments": tool_call.get("arguments", {}),
-                        }
-                    )
-            else:
-                # Fallback for other formats
-                normalized_calls.append(
-                    {
-                        "id": f"call_{i}",
-                        "name": str(tool_call),
-                        "arguments": {},
-                    }
-                )
-
-        return normalized_calls
+    # _normalize_tool_calls_to_standard_format is now implemented in BaseLLMProvider
 
     # ============================================================================
     # PROVIDER-SPECIFIC ADAPTER METHODS
@@ -526,76 +422,9 @@ Example: If asked to "run uname -a", do NOT respond with "I will run uname -a co
         """Format Gemini-specific content for output (none currently)."""
         return ""  # Gemini doesn't have special content formatting
 
-    async def _handle_buffered_streaming_response(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List] = None,
-        interactive: bool = True,
-    ) -> str:
-        """Handle streaming response for JSON mode - simplified version."""
-        # Process chunks to get content and tool calls
-        response = await self._make_api_request(messages, tools, stream=True)
-        accumulated_content, tool_calls, provider_data = (
-            await self._process_streaming_chunks(response)
-        )
+    # _handle_buffered_streaming_response is now implemented in BaseLLMProvider
 
-        # For streaming JSON mode, trigger the centralized base agent handler
-        if self.streaming_json_callback:
-            if tool_calls:
-                # Create a mock response object for centralized processing
-                mock_response = self._create_mock_response(
-                    accumulated_content, tool_calls
-                )
-                return mock_response
-            else:
-                # Just text content, emit it directly
-                self.streaming_json_callback(accumulated_content)
-
-        return accumulated_content
-
-    async def _generate_completion(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict]] = None,
-        stream: bool = True,
-        interactive: bool = True,
-    ) -> Any:
-        """Generate completion using Gemini API - delegate to centralized handlers."""
-        # Check if we should use buffering for streaming JSON
-        use_buffering = (
-            hasattr(self, "streaming_json_callback")
-            and self.streaming_json_callback is not None
-        )
-
-        try:
-            if stream:
-                if use_buffering:
-                    # Use buffering for streaming JSON mode
-                    return await self._handle_buffered_streaming_response(
-                        messages, tools, interactive=interactive
-                    )
-                else:
-                    return self._handle_streaming_response_generic(
-                        await self._make_api_request(messages, tools, stream=True),
-                        messages,
-                        interactive=interactive,
-                    )
-            else:
-                # Non-streaming response
-                response = await self._make_api_request(messages, tools, stream=False)
-                return await self._handle_complete_response_generic(
-                    response, messages, interactive=interactive
-                )
-        except Exception as e:
-            # Re-raise tool permission denials so they can be handled at the chat level
-            if isinstance(e, ToolDeniedReturnToPrompt):
-                raise  # Re-raise the exception to bubble up to interactive chat
-
-            import traceback
-
-            logger.error(f"Error in Gemini completion: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            raise
+    # _generate_completion is now implemented in BaseLLMProvider
 
     async def shutdown(self):
         """Shutdown all MCP connections and HTTP client."""
