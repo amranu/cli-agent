@@ -62,6 +62,15 @@ def create_model_server() -> FastMCP:
     # Get available models from configuration
     available_models = config.get_available_provider_models()
 
+    # Map config provider names to actual provider names
+    provider_name_map = {
+        "gemini": "google",  # config uses "gemini" but create_host expects "google"
+        "anthropic": "anthropic",
+        "openai": "openai",
+        "openrouter": "openrouter",
+        "deepseek": "deepseek",
+    }
+
     if not available_models:
         print(
             "Warning: No models available. Check your API key configuration.",
@@ -70,14 +79,17 @@ def create_model_server() -> FastMCP:
 
     # Create tools for each available model
     total_tools = 0
-    for provider, models in available_models.items():
+    for config_provider, models in available_models.items():
+        # Map to actual provider name
+        actual_provider = provider_name_map.get(config_provider, config_provider)
+
         for model in models:
             try:
-                create_model_tool(app, provider, model, config)
+                create_model_tool(app, config_provider, actual_provider, model, config)
                 total_tools += 1
             except Exception as e:
                 print(
-                    f"Warning: Failed to create tool for {provider}:{model}: {e}",
+                    f"Warning: Failed to create tool for {actual_provider}:{model}: {e}",
                     file=sys.stderr,
                 )
 
@@ -85,17 +97,20 @@ def create_model_server() -> FastMCP:
     return app
 
 
-def create_model_tool(app: FastMCP, provider: str, model: str, config):
+def create_model_tool(
+    app: FastMCP, config_provider: str, actual_provider: str, model: str, config
+):
     """Dynamically create an MCP tool for a specific model.
 
     Args:
         app: FastMCP server instance
-        provider: Provider name (e.g., 'anthropic', 'openai')
+        config_provider: Provider name from config (e.g., 'gemini', 'anthropic')
+        actual_provider: Actual provider name for host creation (e.g., 'google', 'anthropic')
         model: Model name (e.g., 'claude-3.5-sonnet')
         config: Configuration object
     """
-    tool_name = f"{provider}_{normalize_model_name(model)}"
-    provider_model = f"{provider}:{model}"
+    tool_name = f"{config_provider}_{normalize_model_name(model)}"
+    provider_model = f"{actual_provider}:{model}"
 
     # Create the tool function dynamically
     async def model_tool(
@@ -105,7 +120,7 @@ def create_model_tool(app: FastMCP, provider: str, model: str, config):
         max_tokens: Optional[int] = None,
         stream: bool = False,
     ) -> str:
-        f"""Use {model} model via {provider} provider.
+        f"""Use {model} model via {actual_provider} provider.
 
         Args:
             messages: Array of conversation messages with 'role' and 'content' keys
@@ -166,9 +181,9 @@ def create_model_tool(app: FastMCP, provider: str, model: str, config):
 
     # Set the function name and docstring
     model_tool.__name__ = tool_name
-    model_tool.__doc__ = f"""Use {model} model via {provider} provider.
+    model_tool.__doc__ = f"""Use {model} model via {actual_provider} provider.
 
-    This tool provides access to the {model} model through the {provider} API.
+    This tool provides access to the {model} model through the {actual_provider} API.
 
     Args:
         messages: Array of conversation messages with 'role' and 'content' keys

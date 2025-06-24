@@ -341,13 +341,15 @@ Tool usage: When users request actions (running commands, reading files, etc.), 
 class GeminiModel(ModelConfig):
     """Gemini model configuration."""
 
-    def __init__(self, variant: str = "gemini-2.0-flash"):
+    def __init__(self, variant: str = "gemini-2.5-flash"):
         """Initialize Gemini model configuration.
 
         Args:
-            variant: Gemini model variant (gemini-2.0-flash, gemini-1.5-pro, etc.)
+            variant: Gemini model variant (gemini-2.5-flash, gemini-2.5-pro, gemini-1.5-pro, etc.)
         """
         model_map = {
+            "gemini-2.5-flash": "gemini-2.5-flash",
+            "gemini-2.5-pro": "gemini-2.5-pro",
             "gemini-2.0-flash": "gemini-2.0-flash-exp",
             "gemini-1.5-pro": "gemini-1.5-pro-002",
             "gemini-1.5-flash": "gemini-1.5-flash-002",
@@ -355,6 +357,8 @@ class GeminiModel(ModelConfig):
 
         # Context length varies by model
         context_lengths = {
+            "gemini-2.5-flash": 1000000,
+            "gemini-2.5-pro": 2000000,
             "gemini-2.0-flash": 1000000,
             "gemini-1.5-pro": 2000000,
             "gemini-1.5-flash": 1000000,
