@@ -420,6 +420,8 @@ class HostConfig(BaseSettings):
 
         if self.anthropic_api_key:
             available["anthropic"] = [
+                "claude-opus-4-20250514",
+                "claude-sonnet-4-20250514",
                 "claude-3-5-sonnet-20241022",
                 "claude-3-5-haiku-20241022",
                 "claude-3-opus-20240229",
