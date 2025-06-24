@@ -5,6 +5,8 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
+from cli_agent.core.global_interrupt import get_global_interrupt_manager
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,6 +16,7 @@ class ResponseHandler:
     def __init__(self, agent):
         """Initialize with reference to the parent agent."""
         self.agent = agent
+        self.global_interrupt_manager = get_global_interrupt_manager()
 
     def _ensure_arguments_are_json_string(self, arguments: Any) -> str:
         """Ensure tool call arguments are formatted as JSON string.
@@ -162,11 +165,28 @@ class ResponseHandler:
                 )
 
                 if interactive:
-                    yield f"\n\n🔧 Executing {len(tool_calls)} tool(s)..."
+                    print(f"\n\n🔧 Executing {len(tool_calls)} tool(s)...", flush=True)
 
                 # Execute each tool and add results to conversation
                 for i, tool_call in enumerate(tool_calls):
                     try:
+                        # Check for global interrupt before each tool execution
+                        if self.global_interrupt_manager.is_interrupted():
+                            if interactive:
+                                print("\n🛑 Tool execution interrupted by user", flush=True)
+                            break
+
+                        # Also check input handler for additional interrupt detection
+                        if (
+                            hasattr(self.agent, "_input_handler")
+                            and self.agent._input_handler
+                        ):
+                            # Check for pending interrupts (ESC/Ctrl+C)
+                            if self.agent._input_handler.check_for_interrupt():
+                                if interactive:
+                                    print("\n🛑 Tool execution interrupted by user", flush=True)
+                                break
+
                         tool_name = getattr(
                             tool_call,
                             "name",
@@ -176,15 +196,19 @@ class ResponseHandler:
                                 else "unknown"
                             ),
                         )
-                        tool_args = getattr(
-                            tool_call,
-                            "args",
-                            (
-                                tool_call.function.arguments
-                                if hasattr(tool_call, "function")
-                                else {}
-                            ),
-                        )
+
+                        # Try to get args from different possible attributes
+                        tool_args = None
+                        if hasattr(tool_call, "args"):
+                            tool_args = tool_call.args
+                        elif hasattr(tool_call, "input"):
+                            tool_args = tool_call.input
+                        elif hasattr(tool_call, "function") and hasattr(
+                            tool_call.function, "arguments"
+                        ):
+                            tool_args = tool_call.function.arguments
+                        else:
+                            tool_args = {}
 
                         # Convert string arguments to dict if needed
                         if isinstance(tool_args, str):
@@ -223,7 +247,16 @@ class ResponseHandler:
                         )
 
                         if interactive:
-                            yield f"\n✅ {tool_name}: {result}"
+                            # Use formatting utils to handle truncation
+                            if hasattr(self.agent, "formatting_utils"):
+                                display_result = (
+                                    self.agent.formatting_utils.truncate_tool_result(
+                                        result
+                                    )
+                                )
+                                print(f"\n✅ {tool_name}: {display_result}", flush=True)
+                            else:
+                                print(f"\n✅ {tool_name}: {result}", flush=True)
 
                         # Add tool result to conversation
                         current_messages.append(
@@ -246,7 +279,16 @@ class ResponseHandler:
 
                         error_msg = f"Error executing {tool_name}: {str(e)}"
                         if interactive:
-                            yield f"\n❌ {error_msg}"
+                            # Use formatting utils to handle truncation for errors too
+                            if hasattr(self.agent, "formatting_utils"):
+                                display_error = (
+                                    self.agent.formatting_utils.truncate_tool_result(
+                                        error_msg
+                                    )
+                                )
+                                print(f"\n❌ {display_error}", flush=True)
+                            else:
+                                print(f"\n❌ {error_msg}", flush=True)
 
                         # Add error to conversation
                         current_messages.append(
@@ -264,7 +306,7 @@ class ResponseHandler:
                     and self.agent.subagent_manager.get_active_count() > 0
                 ):
                     if interactive:
-                        yield f"\n\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n"
+                        print(f"\n\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n", flush=True)
 
                     # Wait for all subagents to complete and collect results
                     subagent_results = (
@@ -273,7 +315,7 @@ class ResponseHandler:
 
                     if subagent_results:
                         if interactive:
-                            yield f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n"
+                            print(f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n", flush=True)
 
                         # Create continuation message with subagent results
                         original_request = (
@@ -287,7 +329,7 @@ class ResponseHandler:
 
                         # Restart conversation with subagent results instead of continuing
                         if interactive:
-                            yield f"\n🔄 Restarting conversation with subagent results...\n"
+                            print(f"\n🔄 Restarting conversation with subagent results...\n", flush=True)
 
                         restart_response = await self.agent.generate_response(
                             [continuation_message], stream=True
@@ -301,12 +343,12 @@ class ResponseHandler:
                         return  # Exit - don't continue with original tool results
                     else:
                         if interactive:
-                            yield f"\n⚠️ No results collected from subagents.\n"
+                            print(f"\n⚠️ No results collected from subagents.\n", flush=True)
                         return
 
                 # Generate follow-up response with tool results (only if no subagents were spawned)
                 if interactive:
-                    yield f"\n\n💭 Processing tool results..."
+                    print(f"\n\n💭 Processing tool results...", flush=True)
 
                 try:
                     follow_up_response = await self.agent.generate_response(
@@ -320,7 +362,7 @@ class ResponseHandler:
                         yield f"\n\n{str(follow_up_response)}"
                 except Exception as e:
                     if interactive:
-                        yield f"\n❌ Error generating follow-up: {str(e)}"
+                        print(f"\n❌ Error generating follow-up: {str(e)}", flush=True)
 
         return async_stream_generator()
 
