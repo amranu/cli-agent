@@ -143,9 +143,22 @@ class BuiltinToolExecutor:
         except Exception as e:
             return f"Error getting current directory: {str(e)}"
 
+    def _get_todo_file_path(self) -> str:
+        """Get the session-specific todo file path."""
+        # Create .config/agent directory if it doesn't exist
+        config_dir = Path.home() / ".config" / "agent"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Get session ID from agent config if available, otherwise use 'default'
+        session_id = getattr(self.agent.config, 'session_id', 'default')
+        if not session_id or session_id == 'None':
+            session_id = 'default'
+            
+        return str(config_dir / f"todos_{session_id}.json")
+
     def todo_read(self, args: Dict[str, Any]) -> str:
-        """Read the current todo list."""
-        todo_file = "todo.json"
+        """Read the current session's todo list."""
+        todo_file = self._get_todo_file_path()
 
         try:
             if not os.path.exists(todo_file):
@@ -158,16 +171,17 @@ class BuiltinToolExecutor:
             return f"Error reading todo list: {str(e)}"
 
     def todo_write(self, args: Dict[str, Any]) -> str:
-        """Write/update the todo list."""
+        """Write/update the current session's todo list."""
         todos = args.get("todos", [])
-        todo_file = "todo.json"
+        todo_file = self._get_todo_file_path()
 
         try:
             with open(todo_file, "w", encoding="utf-8") as f:
                 json.dump(todos, f, indent=2)
 
             # Return the actual todo list data to the LLM for proper feedback
-            return f"Successfully updated todo list with {len(todos)} items. Current todo list:\n{json.dumps(todos, indent=2)}"
+            session_info = f" (session: {getattr(self.agent.config, 'session_id', 'default')})"
+            return f"Successfully updated todo list with {len(todos)} items{session_info}. Current todo list:\n{json.dumps(todos, indent=2)}"
 
         except Exception as e:
             return f"Error writing todo list: {str(e)}"
