@@ -4,14 +4,16 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 
 ## 🚀 Features
 
-- **Multiple AI Backends**: Support for DeepSeek and Google Gemini models with easy extensibility
-- **Modular Architecture**: Centralized base agent with provider-specific implementations
+- **Multiple AI Backends**: Support for Anthropic Claude, OpenAI GPT, DeepSeek, Google Gemini, and OpenRouter with easy extensibility
+- **MCP Model Server**: Expose all AI models as standardized MCP tools with persistent conversations
+- **Modular Architecture**: Provider-model separation with centralized base agent for maximum flexibility
 - **MCP Server Integration**: Connect to multiple MCP servers for extended functionality
-- **Persistent Configuration**: Automatic configuration management in `~/.config/agent/`
+- **Persistent Conversations**: Maintain conversation context across multiple tool calls for each AI model
 - **Interactive Chat**: Real-time conversation with AI models and comprehensive tool access
 - **Subagent System**: Spawn focused subagents for complex tasks with automatic coordination
 - **Command-Line Tools**: Manage MCP servers and query models directly
 - **Built-in Tools**: File operations, bash execution, web fetching, todo management, and task delegation
+- **Enhanced Tool Display**: Full parameter visibility and complete response output (no truncation)
 
 ## 📦 Installation
 
@@ -29,8 +31,11 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 3.  **Configure API keys** (environment variables or interactive setup):
     ```bash
     # Set environment variables (recommended)
+    export ANTHROPIC_API_KEY=your_anthropic_api_key_here
+    export OPENAI_API_KEY=your_openai_api_key_here
     export DEEPSEEK_API_KEY=your_deepseek_api_key_here
     export GEMINI_API_KEY=your_gemini_api_key_here
+    export OPENROUTER_API_KEY=your_openrouter_api_key_here
 
     # Or use interactive configuration
     python agent.py chat  # Will prompt for missing keys
@@ -48,6 +53,53 @@ Start an interactive chat session with your configured AI model and MCP tools:
 python agent.py chat
 ```
 
+### MCP Model Server
+
+Start the MCP model server to expose all AI models as standardized MCP tools with persistent conversations:
+
+```bash
+# Start via stdio transport (recommended for MCP clients)
+python mcp_server.py --stdio
+
+# Or start via agent CLI
+python agent.py mcp serve
+
+# Start with TCP transport (useful for debugging)
+python agent.py mcp serve --port 3000 --host localhost
+```
+
+The model server exposes 11 AI models across 5 providers:
+- **Anthropic**: claude-3.5-sonnet, claude-3.5-haiku, claude-3-opus
+- **OpenAI**: gpt-4-turbo, gpt-3.5-turbo, o1-preview  
+- **DeepSeek**: deepseek-chat, deepseek-reasoner
+- **Gemini**: gemini-2.5-flash, gemini-2.5-pro, gemini-1.5-pro
+- **OpenRouter**: Multi-provider access
+
+#### MCP Model Server Usage
+
+Each model tool supports persistent conversations:
+
+```json
+// Start new conversation
+{
+  "messages": [{"role": "user", "content": "Hello"}]
+}
+// Returns: {"response": "Hi! How can I help?", "conversation_id": "abc123"}
+
+// Continue conversation
+{
+  "conversation_id": "abc123",
+  "messages": [{"role": "user", "content": "What's 2+2?"}]
+}
+
+// Clear conversation and restart
+{
+  "conversation_id": "abc123", 
+  "clear_conversation": true,
+  "messages": [{"role": "user", "content": "New topic"}]
+}
+```
+
 ### MCP Server Management
 
 #### Add a new MCP server
@@ -56,6 +108,9 @@ python agent.py chat
 # Format: name:command:arg1:arg2:...
 python agent.py mcp add myserver:node:/path/to/server.js
 python agent.py mcp add filesystem:python:-m:mcp.server.stdio:filesystem:--root:.
+
+# Add the AI models server to your MCP configuration
+python agent.py mcp add ai-models:python:mcp_server.py:--stdio
 ```
 
 #### List configured servers
@@ -80,9 +135,16 @@ python agent.py ask "What's the weather like today?"
 
 ### Model Switching
 
-Switch between different AI models (configuration persists automatically):
+Switch between different AI models using the provider-model format (configuration persists automatically):
 
 ```bash
+# Provider-model format switching
+python agent.py switch anthropic:claude-3.5-sonnet
+python agent.py switch openai:gpt-4-turbo-preview
+python agent.py switch deepseek:deepseek-chat
+python agent.py switch gemini:gemini-2.5-flash
+
+# Legacy model switching (still supported)
 python agent.py switch-deepseek      # DeepSeek Chat model
 python agent.py switch-reason        # DeepSeek Reasoner model
 python agent.py switch-gemini-flash  # Google Gemini Flash
@@ -92,6 +154,12 @@ python agent.py switch-gemini-pro    # Google Gemini Pro
 Or use slash commands within interactive chat:
 
 ```
+/switch anthropic:claude-3.5-sonnet
+/switch openai:gpt-4-turbo-preview
+/switch deepseek:deepseek-reasoner
+/switch gemini:gemini-2.5-pro
+
+# Legacy commands (still supported)
 /switch-deepseek
 /switch-reason
 /switch-gemini-flash
@@ -114,19 +182,37 @@ The agent uses an automatic persistent configuration system that saves settings 
 Configure the agent through environment variables:
 
 ```bash
+# Anthropic Configuration (required for Claude models)
+ANTHROPIC_API_KEY=your_key_here
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022     # optional, defaults to claude-3-5-sonnet-20241022
+ANTHROPIC_TEMPERATURE=0.7                      # optional, defaults to 0.7
+
+# OpenAI Configuration (required for GPT models)  
+OPENAI_API_KEY=your_key_here
+OPENAI_MODEL=gpt-4-turbo-preview               # optional, defaults to gpt-4-turbo-preview
+OPENAI_TEMPERATURE=0.7                         # optional, defaults to 0.7
+
 # DeepSeek Configuration (required for DeepSeek models)
 DEEPSEEK_API_KEY=your_key_here
-DEEPSEEK_MODEL=deepseek-chat                    # optional, defaults to deepseek-chat
-DEEPSEEK_TEMPERATURE=0.7                        # optional, defaults to 0.7
+DEEPSEEK_MODEL=deepseek-chat                   # optional, defaults to deepseek-chat
+DEEPSEEK_TEMPERATURE=0.6                       # optional, defaults to 0.6
 
 # Gemini Configuration (required for Gemini models)
 GEMINI_API_KEY=your_key_here
-GEMINI_MODEL=gemini-2.5-flash                   # optional, defaults to gemini-2.5-flash
-GEMINI_TEMPERATURE=0.7                          # optional, defaults to 0.7
+GEMINI_MODEL=gemini-2.5-flash                  # optional, defaults to gemini-2.5-flash
+GEMINI_TEMPERATURE=0.7                         # optional, defaults to 0.7
+
+# OpenRouter Configuration (optional for multi-provider access)
+OPENROUTER_API_KEY=your_key_here
+OPENROUTER_MODEL=anthropic/claude-3.5-sonnet   # optional
+OPENROUTER_TEMPERATURE=0.7                     # optional, defaults to 0.7
+
+# Provider-Model Selection (new format)
+DEFAULT_PROVIDER_MODEL=anthropic:claude-3.5-sonnet  # defaults to deepseek:deepseek-chat
 
 # Host Configuration (optional)
-HOST_NAME=mcp-agent                             # defaults to 'mcp-agent'
-LOG_LEVEL=INFO                                  # defaults to INFO
+HOST_NAME=mcp-agent                            # defaults to 'mcp-agent'
+LOG_LEVEL=INFO                                 # defaults to INFO
 ```
 
 Configuration changes made via commands (like model switching) are automatically persisted and don't require manual `.env` file editing.
@@ -149,11 +235,30 @@ The agent comes with comprehensive built-in tools:
 
 Connect external MCP servers to add functionality like:
 
+-   **AI Model Access**: All 11 AI models via the built-in MCP model server
 -   **API Integrations**: Connect to various web APIs
 -   **File System**: Advanced file operations
 -   **Database Connectors**: PostgreSQL, MySQL, SQLite
 -   **Development Tools**: Git operations, code analysis
 -   **Custom Services**: Your own MCP-compatible tools
+
+### AI Model Tools (via MCP Server)
+
+Each AI model is exposed as an MCP tool with persistent conversation support:
+
+-   **anthropic_claude_3_5_sonnet**: Anthropic's flagship model for complex reasoning
+-   **openai_gpt_4_turbo_preview**: OpenAI's most capable model
+-   **deepseek_deepseek_chat**: DeepSeek's standard chat model
+-   **deepseek_deepseek_reasoner**: DeepSeek's reasoning-focused model
+-   **gemini_gemini_2_5_flash**: Google's fast, efficient model
+-   **gemini_gemini_2_5_pro**: Google's most capable model
+-   And 5 more models across all providers
+
+All model tools support:
+- **Persistent Conversations**: Maintain context across calls
+- **Conversation Management**: Create, continue, or clear conversations
+- **Full Parameter Control**: Temperature, max_tokens, system prompts
+- **Complete Response Display**: No truncation of results
 
 ## 🔍 Interactive Chat Commands
 
@@ -165,14 +270,38 @@ Within the interactive chat, use these slash commands:
 -   `/model` - Show current model
 -   `/tokens` - Show token usage
 -   `/compact` - Compact conversation history
--   `/switch-deepseek` - Switch to DeepSeek Chat
--   `/switch-reason` - Switch to DeepSeek Reasoner
--   `/switch-gemini-flash` - Switch to Gemini Flash
--   `/switch-gemini-pro` - Switch to Gemini Pro
+-   `/switch <provider>:<model>` - Switch to any provider-model combination
+-   `/switch-deepseek` - Switch to DeepSeek Chat (legacy)
+-   `/switch-reason` - Switch to DeepSeek Reasoner (legacy)
+-   `/switch-gemini-flash` - Switch to Gemini Flash (legacy)
+-   `/switch-gemini-pro` - Switch to Gemini Pro (legacy)
 -   `/task` - Spawn a subagent for complex tasks
 -   `/task-status` - Check status of running subagents
 
 ## 📚 Examples
+
+### Example: MCP Model Server Usage
+
+Using AI models via MCP (requires MCP client):
+
+```json
+// Start conversation with Claude
+{
+  "tool": "anthropic_claude_3_5_sonnet",
+  "arguments": {
+    "messages": [{"role": "user", "content": "Explain quantum computing"}]
+  }
+}
+
+// Continue conversation
+{
+  "tool": "anthropic_claude_3_5_sonnet", 
+  "arguments": {
+    "conversation_id": "abc123",
+    "messages": [{"role": "user", "content": "How does it compare to classical computing?"}]
+  }
+}
+```
 
 ### Example: Basic File Operations
 
@@ -216,30 +345,39 @@ Subagents work independently and automatically return results to the main conver
 
 ## 🏗️ Architecture
 
-### Modular Agent Architecture
+### Provider-Model Architecture
 
 ```
-┌─────────────────┐    ┌──────────────────────┐    ┌─────────────────┐
-│   CLI Interface │────│   BaseMCPAgent       │────│   AI Backends   │
-│                 │    │   (Centralized)      │    │                 │
-└─────────────────┘    └──────────────────────┘    │ ┌─────────────┐ │
-                               │                    │ │DeepSeek Host│ │
-                               │                    │ │Gemini Host  │ │
-                    ┌─────────────────┐              │ │[Easy to    │ │
-                    │  Subagent Mgr   │              │ │ extend]     │ │
-                    │                 │              │ └─────────────┘ │
-                    │ ┌─────────────┐ │              └─────────────────┘
-                    │ │Focused Tasks│ │                        │
-                    │ │Auto Cleanup │ │              ┌─────────────────┐
-                    │ │Parallel Exec│ │              │  MCP Servers    │
-                    │ └─────────────┘ │              │                 │
-                    └─────────────────┘              │ ┌─────────────┐ │
-                               │                     │ │ File System │ │
-                    ┌─────────────────┐              │ │ APIs        │ │
-                    │ Built-in Tools  │              │ │ Database    │ │
-                    │                 │              │ │ Custom Tools│ │
-                    │ ┌─────────────┐ │              │ └─────────────┘ │
-                    │ │File Ops     │ │              └─────────────────┘
+┌─────────────────┐    ┌──────────────────────┐    ┌─────────────────────┐
+│   CLI Interface │────│   BaseMCPAgent       │────│  Provider-Model     │
+│                 │    │   (Centralized)      │    │  Architecture       │
+└─────────────────┘    └──────────────────────┘    │ ┌─────────────────┐ │
+                               │                    │ │ MCPHost         │ │
+                    ┌─────────────────┐              │ │ (Provider +     │ │
+                    │ MCP Model Server│              │ │  Model)         │ │
+                    │                 │              │ └─────────────────┘ │
+                    │ ┌─────────────┐ │              │ ┌─────────────────┐ │
+                    │ │11 AI Models │ │              │ │ AnthropicProvider│ │
+                    │ │Conversations│ │              │ │ OpenAIProvider  │ │
+                    │ │FastMCP Proto│ │              │ │ DeepSeekProvider│ │
+                    │ └─────────────┘ │              │ │ GoogleProvider  │ │
+                    └─────────────────┘              │ │ OpenRouterProvider│ │
+                               │                     │ └─────────────────┘ │
+                    ┌─────────────────┐              └─────────────────────┘
+                    │  Subagent Mgr   │                        │
+                    │                 │              ┌─────────────────┐
+                    │ ┌─────────────┐ │              │  MCP Servers    │
+                    │ │Focused Tasks│ │              │                 │
+                    │ │Auto Cleanup │ │              │ ┌─────────────┐ │
+                    │ │Parallel Exec│ │              │ │ AI Models   │ │
+                    │ └─────────────┘ │              │ │ File System │ │
+                    └─────────────────┘              │ │ APIs        │ │
+                               │                     │ │ Database    │ │
+                    ┌─────────────────┐              │ │ Custom Tools│ │
+                    │ Built-in Tools  │              │ └─────────────┘ │
+                    │                 │              └─────────────────┘
+                    │ ┌─────────────┐ │
+                    │ │File Ops     │ │
                     │ │Bash Execute │ │
                     │ │Todo Mgmt    │ │
                     │ │Web Fetch    │ │
@@ -250,11 +388,14 @@ Subagents work independently and automatically return results to the main conver
 
 ### Key Architectural Benefits
 
--   **Centralized Base Agent**: Shared functionality across all LLM providers
--   **Easy Extensibility**: Adding new LLM backends requires minimal code
+-   **Provider-Model Separation**: API providers decoupled from model characteristics
+-   **MCP Model Server**: Standardized access to all AI models via MCP protocol
+-   **Persistent Conversations**: Conversation context maintained across tool calls
+-   **Easy Extensibility**: Adding new providers or models requires minimal code
 -   **Robust Tool Integration**: Unified tool execution with provider-specific optimizations
 -   **Intelligent Subagent System**: Automatic task delegation and coordination
--   **Persistent Configuration**: No manual file editing required
+-   **Multi-Provider Access**: Same model accessible through different providers
+-   **Enhanced Visibility**: Full parameter display and complete response output
 
 ## 🤝 Contributing
 
@@ -271,8 +412,13 @@ Please read our [CONTRIBUTING.md](CONTRIBUTING.md) file for more details on our 
 ## 📋 Requirements
 
 -   Python 3.10+
--   DeepSeek API key (for DeepSeek models)
--   Google AI Studio API key (for Gemini models)
+-   API keys for desired providers:
+    -   Anthropic API key (for Claude models)
+    -   OpenAI API key (for GPT models)
+    -   DeepSeek API key (for DeepSeek models)
+    -   Google AI Studio API key (for Gemini models)
+    -   OpenRouter API key (for multi-provider access)
+-   FastMCP for MCP server functionality
 -   Node.js (for MCP servers that require it)
 
 ## 🔒 Security
