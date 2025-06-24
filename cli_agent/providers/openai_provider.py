@@ -91,9 +91,8 @@ class OpenAIProvider(BaseProvider):
         if tools and not is_o1_model:
             request_params["tools"] = tools
 
-        logger.debug(
-            f"OpenAI API request: {len(messages)} messages, tools={len(tools) if tools else 0}"
-        )
+        logger.info(f"OpenAI API request: model={model_name}, {len(messages)} messages, tools={len(tools) if tools else 0}")
+        logger.info(f"Full request params: {request_params}")
 
         try:
             response = await self.client.chat.completions.create(**request_params)
@@ -125,7 +124,7 @@ class OpenAIProvider(BaseProvider):
             raise
 
     def extract_response_content(
-        self, response: Any
+        self, response: Any, requested_model: str = None
     ) -> Tuple[str, List[Any], Dict[str, Any]]:
         """Extract content from OpenAI response."""
         if not hasattr(response, "choices") or not response.choices:
@@ -152,6 +151,10 @@ class OpenAIProvider(BaseProvider):
         # Extract model information
         if hasattr(response, "model"):
             metadata["model"] = response.model
+            if requested_model:
+                logger.info(f"OpenAI response: requested={requested_model}, actual={response.model}")
+            else:
+                logger.info(f"OpenAI response: actual={response.model}")
 
         logger.debug(
             f"Extracted OpenAI response: {len(text_content)} chars, {len(tool_calls)} tool calls"
