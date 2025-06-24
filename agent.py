@@ -43,6 +43,14 @@ logging.basicConfig(
     level=logging.DEBUG,  # Suppress WARNING messages during interactive chat
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+
+# Suppress noisy third-party library logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("anthropic").setLevel(logging.WARNING)
+logging.getLogger("FastMCP.fastmcp.server.server").setLevel(logging.WARNING)
+logging.getLogger("fastmcp").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
@@ -260,6 +268,14 @@ async def chat(
             session_id = session_manager.create_new_session()
             messages = []
             click.echo(f"Started new session: {session_id[:8]}...")
+
+        # Initialize todo file for this session
+        import os, json
+        todo_dir = os.path.expanduser("~/.config/agent")
+        os.makedirs(todo_dir, exist_ok=True)
+        todo_file = os.path.join(todo_dir, f"todos_{session_id}.json")
+        with open(todo_file, "w") as f:
+            json.dump([], f)
 
         # Handle mixed modes or invalid combinations FIRST
         # Allow text input with stream-json output (but not the reverse)
