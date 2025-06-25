@@ -104,7 +104,8 @@ class AnthropicProvider(BaseProvider):
             response.raise_for_status()
 
             if stream:
-                return response
+                # Return an async iterator instead of the raw response
+                return self._create_streaming_iterator(response)
             else:
                 return response.json()
 
@@ -401,3 +402,166 @@ class AnthropicProvider(BaseProvider):
                 logger.warning(f"Unknown tool format: {type(tool)}")
 
         return anthropic_tools if anthropic_tools else None
+
+    def _create_streaming_iterator(self, response):
+        """Create an async iterator from httpx.Response for streaming that yields OpenAI-compatible chunks."""
+
+        async def anthropic_stream_iterator():
+            """Convert Anthropic streaming events to OpenAI-compatible format."""
+            current_tool_use = None
+            tool_index = 0  # Track tool call index for OpenAI compatibility
+
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+
+                if line.startswith("data: "):
+                    data_str = line[6:]  # Remove "data: " prefix
+
+                    if data_str.strip() == "[DONE]":
+                        break
+
+                    try:
+                        event = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+
+                    event_type = event.get("type")
+
+                    if event_type == "content_block_start":
+                        content_block = event.get("content_block", {})
+                        if content_block.get("type") == "tool_use":
+                            current_tool_use = {
+                                "id": content_block.get("id"),
+                                "name": content_block.get("name"),
+                                "arguments": "",
+                                "index": tool_index,
+                            }
+                            tool_index += 1
+
+                            # Yield tool call start with ID and name
+                            chunk = type(
+                                "Chunk",
+                                (),
+                                {
+                                    "choices": [
+                                        type(
+                                            "Choice",
+                                            (),
+                                            {
+                                                "delta": type(
+                                                    "Delta",
+                                                    (),
+                                                    {
+                                                        "tool_calls": [
+                                                            type(
+                                                                "ToolCall",
+                                                                (),
+                                                                {
+                                                                    "index": current_tool_use[
+                                                                        "index"
+                                                                    ],
+                                                                    "id": current_tool_use[
+                                                                        "id"
+                                                                    ],
+                                                                    "type": "function",
+                                                                    "function": type(
+                                                                        "Function",
+                                                                        (),
+                                                                        {
+                                                                            "name": current_tool_use[
+                                                                                "name"
+                                                                            ],
+                                                                            "arguments": "",
+                                                                        },
+                                                                    )(),
+                                                                },
+                                                            )()
+                                                        ]
+                                                    },
+                                                )()
+                                            },
+                                        )()
+                                    ]
+                                },
+                            )()
+                            yield chunk
+
+                    elif event_type == "content_block_delta":
+                        delta = event.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            # Yield text content as OpenAI-compatible chunk
+                            chunk = type(
+                                "Chunk",
+                                (),
+                                {
+                                    "choices": [
+                                        type(
+                                            "Choice",
+                                            (),
+                                            {
+                                                "delta": type(
+                                                    "Delta",
+                                                    (),
+                                                    {"content": delta.get("text", "")},
+                                                )()
+                                            },
+                                        )()
+                                    ]
+                                },
+                            )()
+                            yield chunk
+
+                        elif (
+                            delta.get("type") == "input_json_delta" and current_tool_use
+                        ):
+                            # Yield incremental tool arguments
+                            partial_json = delta.get("partial_json", "")
+                            current_tool_use["arguments"] += partial_json
+
+                            chunk = type(
+                                "Chunk",
+                                (),
+                                {
+                                    "choices": [
+                                        type(
+                                            "Choice",
+                                            (),
+                                            {
+                                                "delta": type(
+                                                    "Delta",
+                                                    (),
+                                                    {
+                                                        "tool_calls": [
+                                                            type(
+                                                                "ToolCall",
+                                                                (),
+                                                                {
+                                                                    "index": current_tool_use[
+                                                                        "index"
+                                                                    ],
+                                                                    "function": type(
+                                                                        "Function",
+                                                                        (),
+                                                                        {
+                                                                            "arguments": partial_json
+                                                                        },
+                                                                    )(),
+                                                                },
+                                                            )()
+                                                        ]
+                                                    },
+                                                )()
+                                            },
+                                        )()
+                                    ]
+                                },
+                            )()
+                            yield chunk
+
+                    elif event_type == "content_block_stop":
+                        if current_tool_use:
+                            # Tool call is complete, but we've already yielded incremental updates
+                            current_tool_use = None
+
+        return anthropic_stream_iterator()

@@ -451,11 +451,50 @@ class ChatInterface:
                         self.terminal_manager.update_prompt("> ")
                         continue  # Return to prompt without adding to conversation
                     except Exception as e:
-                        logger.error(f"Error in chat: {e}")
-                        await self._emit_error(f"Error: {str(e)}", "general")
-                        # Reset prompt to ready state
-                        self.terminal_manager.update_prompt("> ")
-                        continue
+                        # Check if this is a 429 rate limit error
+                        error_str = str(e).lower()
+                        if "429" in error_str or "rate limit" in error_str:
+                            logger.warning(f"Rate limit detected: {e}")
+                            await self._emit_system_message(
+                                "Rate limit reached. Retrying in 10 seconds...",
+                                "rate_limit",
+                                "⏳",
+                            )
+
+                            # Wait 10 seconds with visual countdown
+                            for i in range(10, 0, -1):
+                                await self._emit_status(
+                                    f"Retrying in {i} second{'s' if i != 1 else ''}...",
+                                    "info",
+                                )
+                                await asyncio.sleep(1)
+
+                            await self._emit_status("Retrying now...", "info")
+
+                            # Retry by recursively calling the same logic
+                            # Remove the last user message to avoid duplication
+                            if messages and messages[-1]["role"] == "user":
+                                logger.info(
+                                    "Retrying after rate limit with preserved conversation"
+                                )
+
+                                # Retry the entire request process recursively
+                                return await self._retry_llm_request(
+                                    messages, input_handler
+                                )
+                            else:
+                                await self._emit_error(
+                                    "Unable to retry - no user message found",
+                                    "retry_error",
+                                )
+                                self.terminal_manager.update_prompt("> ")
+                                continue
+                        else:
+                            logger.error(f"Error in chat: {e}")
+                            await self._emit_error(f"Error: {str(e)}", "general")
+                            # Reset prompt to ready state
+                            self.terminal_manager.update_prompt("> ")
+                            continue
 
             except KeyboardInterrupt:
                 await self._emit_system_message("Goodbye!", "goodbye", "👋")
@@ -654,6 +693,102 @@ class ChatInterface:
         """Emit text event instead of print statement."""
         if self.event_emitter:
             await self.event_emitter.emit_text(content, is_markdown=is_markdown)
+
+    async def _retry_llm_request(self, messages, input_handler):
+        """Retry LLM request with the same messages after rate limit."""
+        try:
+            # Make API call interruptible by running in a task
+            await self._emit_system_message(
+                "Retrying... (press ESC to interrupt)", "thinking", "💭"
+            )
+
+            logger.info("Creating retry task for generate_response")
+            current_task = asyncio.create_task(
+                self.agent.generate_response(messages, stream=True)
+            )
+            logger.info("Retry task created, waiting for completion")
+
+            # Create a background task to handle input during LLM output (simplified version)
+            async def handle_concurrent_input():
+                try:
+                    while not current_task.done():
+                        if input_handler.check_for_interrupt():
+                            input_handler.interrupted = True
+                            return
+                        await asyncio.sleep(0.1)
+                except Exception:
+                    await asyncio.sleep(0.1)
+
+            monitor_task = asyncio.create_task(handle_concurrent_input())
+
+            # Wait for either completion or interruption
+            response = None
+            logger.info("Waiting for retry task completion or interruption...")
+            done, pending = await asyncio.wait(
+                [current_task, monitor_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            logger.info(
+                f"Retry task completed. Done: {len(done)}, Pending: {len(pending)}"
+            )
+
+            # Cancel any remaining tasks
+            for task in pending:
+                task.cancel()
+
+            # Check for interruption
+            if (
+                input_handler.interrupted
+                or self.global_interrupt_manager.is_interrupted()
+            ):
+                await self._emit_interruption("Retry cancelled by user", "user")
+                input_handler.interrupted = False
+                self.global_interrupt_manager.clear_interrupt()
+                return
+
+            if current_task and current_task.done() and not current_task.cancelled():
+                logger.info("Retry task completed successfully")
+                response = current_task.result()
+                logger.info(f"Retry response received: {type(response)}")
+
+                # Handle the response (similar to main chat logic)
+                if hasattr(response, "__aiter__"):
+                    response_content = await self._collect_response_content(response)
+                elif isinstance(response, str):
+                    response_content = response
+                    logger.info(
+                        f"Got retry string response: {repr(response_content[:100])}"
+                    )
+                else:
+                    response_content = str(response)
+                    logger.info(f"Got retry other response: {type(response)}")
+
+                # Check if response handler has updated messages (tool execution)
+                if hasattr(self.agent, "response_handler") and hasattr(
+                    self.agent.response_handler, "get_updated_messages"
+                ):
+                    updated_messages = (
+                        self.agent.response_handler.get_updated_messages()
+                    )
+                    if updated_messages and len(updated_messages) > len(messages):
+                        # Tool execution occurred - update conversation with tool results
+                        original_length = len(messages)
+                        new_messages = updated_messages[original_length:]
+                        messages.extend(new_messages)
+                elif response_content:
+                    # Just add the assistant response
+                    messages.append({"role": "assistant", "content": response_content})
+
+                # Reset prompt to ready state for next input
+                self.terminal_manager.update_prompt("> ")
+
+                await self._emit_status("Retry successful!", "info")
+
+        except Exception as e:
+            # If retry also fails, just log and continue
+            logger.error(f"Retry also failed: {e}")
+            await self._emit_error(f"Retry failed: {str(e)}", "retry_error")
+            self.terminal_manager.update_prompt("> ")
 
     async def _collect_response_content(self, response) -> str:
         """Collect response content for conversation history without display logic."""

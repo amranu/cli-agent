@@ -264,7 +264,12 @@ class ToolPermissionManager:
                 allowed=True, reason="Auto-approved for session", skip_prompt=True
             )
 
-        # Check session-level approvals/denials
+        # CONFIG-BASED PERMISSION: CHECK FIRST!
+        config_result = self._is_tool_allowed_by_config(tool_name, arguments)
+        if config_result.skip_prompt:
+            return config_result
+
+        # Check session-level approvals/denials (only if not globally allowed)
         if tool_name in self.session_approvals:
             return ToolPermissionResult(
                 allowed=True, reason="Previously approved for session", skip_prompt=True
@@ -274,11 +279,6 @@ class ToolPermissionManager:
             return ToolPermissionResult(
                 allowed=False, reason="Previously denied for session", skip_prompt=True
             )
-
-        # Check configuration-based permissions
-        config_result = self._is_tool_allowed_by_config(tool_name, arguments)
-        if config_result.skip_prompt:
-            return config_result
 
         # Need to prompt user
         if input_handler is None:

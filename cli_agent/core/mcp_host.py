@@ -201,7 +201,7 @@ class MCPHost(BaseLLMProvider):
         if hasattr(response, "__aiter__"):
             # Async iterator (OpenAI, Anthropic, etc.)
             chunks_iter = response
-        else:
+        elif hasattr(response, "__iter__"):
             # Sync iterator (Gemini) - convert to async with yield points for event processing
             async def async_generator():
                 for chunk in response:
@@ -210,6 +210,12 @@ class MCPHost(BaseLLMProvider):
                     await asyncio.sleep(0)
 
             chunks_iter = async_generator()
+        else:
+            # Response is not iterable - fall back to provider's process_streaming_response
+            logger.warning(
+                f"Response object {type(response)} is not iterable, falling back to provider processing"
+            )
+            return await self.provider.process_streaming_response(response)
 
         async for chunk in chunks_iter:
             # Handle different provider chunk formats
@@ -268,15 +274,22 @@ class MCPHost(BaseLLMProvider):
 
             elif hasattr(chunk, "candidates") and chunk.candidates:
                 # Gemini format - only process through candidates to avoid .text warnings
+                logger.debug(
+                    f"Gemini chunk type: {type(chunk)}, candidates: {len(chunk.candidates)}"
+                )
+                logger.debug(f"Gemini chunk repr: {repr(chunk)}")
                 chunk_text = ""
                 candidate = chunk.candidates[0] if chunk.candidates else None
                 if candidate and hasattr(candidate, "content") and candidate.content:
                     if hasattr(candidate.content, "parts") and candidate.content.parts:
-                        for part in candidate.content.parts:
-                            if hasattr(part, "text") and part.text:
-                                chunk_text += part.text
-                                accumulated_content += part.text
-                            elif hasattr(part, "function_call") and part.function_call:
+                        logger.debug(
+                            f"Gemini chunk has {len(candidate.content.parts)} parts"
+                        )
+                        for i, part in enumerate(candidate.content.parts):
+                            if hasattr(part, "function_call") and part.function_call:
+                                logger.debug(
+                                    f"Gemini part {i}: function call '{part.function_call.name}'"
+                                )
                                 # Convert Gemini function call to standard format
                                 fc = part.function_call
                                 tool_call = {
@@ -296,13 +309,40 @@ class MCPHost(BaseLLMProvider):
                                 await self.event_emitter.emit_status(
                                     f"Tool call detected: {fc.name}", level="info"
                                 )
+                            elif hasattr(part, "text") and part.text:
+                                logger.debug(
+                                    f"Gemini part {i}: text content '{part.text[:100]}...' (len={len(part.text)})"
+                                )
+                                chunk_text += part.text
+                            else:
+                                logger.debug(
+                                    f"Gemini part {i}: unknown type {type(part)} with attrs {dir(part)}"
+                                )
+                                # Try to inspect the part more deeply
+                                if hasattr(part, "__dict__"):
+                                    logger.debug(
+                                        f"Gemini part {i} dict: {part.__dict__}"
+                                    )
+                                logger.debug(f"Gemini part {i} repr: {repr(part)}")
+                        logger.debug(
+                            f"Gemini chunk total text accumulated: '{chunk_text[:100]}...' (len={len(chunk_text)})"
+                        )
+                        # Accumulate the chunk text into the main content
+                        accumulated_content += chunk_text
+                    else:
+                        logger.debug("Gemini chunk candidate has no parts")
+                else:
+                    logger.debug("Gemini chunk has no candidate content")
 
                 # Don't emit text immediately - buffer for proper markdown formatting
 
         # Emit accumulated content as properly formatted markdown
+        logger.debug(
+            f"Final accumulated_content length: {len(accumulated_content)}, tool_calls: {len(accumulated_tool_calls)}"
+        )
         if accumulated_content:
             logger.debug(
-                f"Emitting buffered content: {len(accumulated_content)} characters"
+                f"Emitting buffered content: {len(accumulated_content)} characters - '{accumulated_content[:200]}...'"
             )
             # Emit the complete response with markdown formatting
             await self.event_emitter.emit_text(
@@ -311,6 +351,10 @@ class MCPHost(BaseLLMProvider):
             # Add newline after LLM response
             await self.event_emitter.emit_text(
                 content="\n", is_streaming=False, is_markdown=False
+            )
+        else:
+            logger.warning(
+                "No accumulated content to emit, but streaming processing completed"
             )
 
         # Content accumulation complete - ready for final formatting
@@ -516,12 +560,12 @@ class MCPHost(BaseLLMProvider):
                 # Add as system message
                 enhanced_messages = [
                     {"role": "system", "content": system_prompt}
-                ] + messages
+                ] + enhanced_messages
             elif system_style == "parameter":
                 # Add as system message for provider to extract and use as system parameter
                 enhanced_messages = [
                     {"role": "system", "content": system_prompt}
-                ] + messages
+                ] + enhanced_messages
             elif system_style == "prepend":
                 # Prepend to first user message (for models that don't support system messages)
                 if enhanced_messages and enhanced_messages[0].get("role") == "user":

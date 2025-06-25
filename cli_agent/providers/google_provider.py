@@ -67,8 +67,8 @@ class GoogleProvider(BaseProvider):
     ) -> Any:
         """Make request to Gemini API."""
 
-        # Convert messages to Gemini string format
-        gemini_prompt = self._convert_messages_to_gemini_format(messages)
+        # Convert messages to Gemini conversation format
+        gemini_contents = self._convert_messages_to_gemini_format(messages)
 
         # Configure tool calling if tools provided
         tool_config = None
@@ -89,7 +89,7 @@ class GoogleProvider(BaseProvider):
                 # Gemini streaming returns an async generator
                 response = self.client.models.generate_content_stream(
                     model=model_name,
-                    contents=gemini_prompt,
+                    contents=gemini_contents,
                     config=config,
                 )
                 # Gemini streaming returns a regular generator, not async
@@ -97,7 +97,7 @@ class GoogleProvider(BaseProvider):
             else:
                 response = self.client.models.generate_content(
                     model=model_name,
-                    contents=gemini_prompt,
+                    contents=gemini_contents,
                     config=config,
                 )
                 return response
@@ -248,8 +248,106 @@ class GoogleProvider(BaseProvider):
             except Exception as e:
                 logger.error(f"Error closing Gemini HTTP client: {e}")
 
-    def _convert_messages_to_gemini_format(self, messages: List[Dict[str, Any]]) -> str:
-        """Convert messages to Gemini string format."""
+    def _convert_messages_to_gemini_format(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Any]:
+        """Convert messages to proper Gemini conversation format."""
+        try:
+            from google.genai import types
+        except ImportError:
+            # Fallback to string format if types not available
+            return self._convert_messages_to_string_format(messages)
+
+        gemini_contents = []
+        system_instruction = None
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            if role == "system":
+                # Store system message for later - Gemini handles system instructions separately
+                if system_instruction is None:
+                    system_instruction = content
+                else:
+                    system_instruction += f"\n{content}"
+            elif role == "user":
+                gemini_contents.append(
+                    types.Content(role="user", parts=[types.Part(text=content)])
+                )
+            elif role == "assistant":
+                # Handle assistant messages
+                parts = []
+                if content:
+                    parts.append(types.Part(text=content))
+
+                # Handle tool calls if present
+                tool_calls = msg.get("tool_calls", [])
+                for tool_call in tool_calls:
+                    if isinstance(tool_call, dict) and "function" in tool_call:
+                        func = tool_call["function"]
+                        func_name = func.get("name", "")
+                        func_args = func.get("arguments", "{}")
+
+                        # Parse arguments if they're a string
+                        if isinstance(func_args, str):
+                            try:
+                                import json
+
+                                func_args = json.loads(func_args)
+                            except:
+                                func_args = {}
+
+                        # Create function call part
+                        function_call = types.FunctionCall(
+                            name=func_name, args=func_args
+                        )
+                        parts.append(types.Part(function_call=function_call))
+
+                if parts:
+                    gemini_contents.append(
+                        types.Content(
+                            role="model",  # Gemini uses "model" for assistant
+                            parts=parts,
+                        )
+                    )
+            elif role == "tool":
+                # Handle tool results
+                tool_call_id = msg.get("tool_call_id", "")
+                tool_name = msg.get("name", "unknown_tool")
+
+                # Create function response
+                function_response = types.FunctionResponse(
+                    name=tool_name, response={"result": content}
+                )
+
+                gemini_contents.append(
+                    types.Content(
+                        role="function",
+                        parts=[types.Part(function_response=function_response)],
+                    )
+                )
+
+        # If we have a system instruction, we should handle it separately
+        # For now, prepend it to the first user message if present
+        if system_instruction and gemini_contents:
+            first_content = gemini_contents[0]
+            if first_content.role == "user" and first_content.parts:
+                # Prepend system instruction to first user message
+                original_text = (
+                    first_content.parts[0].text
+                    if hasattr(first_content.parts[0], "text")
+                    else ""
+                )
+                combined_text = f"System: {system_instruction}\n\nUser: {original_text}"
+                gemini_contents[0] = types.Content(
+                    role="user", parts=[types.Part(text=combined_text)]
+                )
+
+        return gemini_contents
+
+    def _convert_messages_to_string_format(self, messages: List[Dict[str, Any]]) -> str:
+        """Fallback: Convert messages to Gemini string format."""
         gemini_prompt_parts = []
 
         for msg in messages:

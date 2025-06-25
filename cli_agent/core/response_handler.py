@@ -321,7 +321,11 @@ class ResponseHandler:
                         if isinstance(tool_args, str):
                             import json
 
-                            tool_args = json.loads(tool_args)
+                            # Handle empty string case (tools with no arguments)
+                            if tool_args.strip() == "":
+                                tool_args = {}
+                            else:
+                                tool_args = json.loads(tool_args)
 
                         # Debug log for replace_in_file spacing issues
                         if tool_name == "replace_in_file" and isinstance(
