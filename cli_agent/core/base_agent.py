@@ -138,19 +138,21 @@ class BaseMCPAgent(ABC):
         self.builtin_executor = BuiltinToolExecutor(self)
 
         # Initialize event system first
-        from cli_agent.core.event_system import EventBus, EventEmitter
         from cli_agent.core.display_manager import DisplayManager
-        
+        from cli_agent.core.event_system import EventBus, EventEmitter
+
         self.event_bus = EventBus()
         self.event_emitter = EventEmitter(self.event_bus)
-        
+
         # Initialize subagent coordinator after event system is available
         self.subagent_coordinator = SubagentCoordinator(self)
-        
+
         # Initialize display manager for interactive mode
         # For subagents, use non-interactive mode to avoid double display
-        self.display_manager = DisplayManager(self.event_bus, interactive=not is_subagent)
-        
+        self.display_manager = DisplayManager(
+            self.event_bus, interactive=not is_subagent
+        )
+
         logger.debug("Initialized event system with display manager")
 
         # Initialize modular components
@@ -181,7 +183,7 @@ class BaseMCPAgent(ABC):
             # Remove subagent management tools for subagents to prevent recursion
             subagent_tools = [
                 "builtin:task",
-                "builtin:task_status", 
+                "builtin:task_status",
                 "builtin:task_results",
             ]
             for tool_key in subagent_tools:
@@ -189,7 +191,9 @@ class BaseMCPAgent(ABC):
                     del builtin_tools[tool_key]
                     logger.info(f"Removed {tool_key} from subagent tools")
             # Ensure emit_result is available for subagents
-            logger.info(f"Subagent has emit_result tool: {'builtin:emit_result' in builtin_tools}")
+            logger.info(
+                f"Subagent has emit_result tool: {'builtin:emit_result' in builtin_tools}"
+            )
         else:
             # Remove emit_result tool for main agents (subagents only)
             if "builtin:emit_result" in builtin_tools:
@@ -417,9 +421,12 @@ class BaseMCPAgent(ABC):
             elif message.type == "permission_request":
                 # Handle permission request from subagent
                 import asyncio
-                asyncio.create_task(self.subagent_coordinator.handle_subagent_permission_request(
-                    message, task_id
-                ))
+
+                asyncio.create_task(
+                    self.subagent_coordinator.handle_subagent_permission_request(
+                        message, task_id
+                    )
+                )
                 return  # Don't display permission requests, handle them directly
             else:
                 formatted = f"[SUBAGENT-{task_id} {message.type}] {message.content}"
@@ -1805,8 +1812,9 @@ class BaseMCPAgent(ABC):
             return
 
         # Use event system if available
-        if hasattr(self, 'event_bus') and self.event_bus:
+        if hasattr(self, "event_bus") and self.event_bus:
             from cli_agent.core.event_system import ToolExecutionStartEvent
+
             for tc in tool_calls:
                 tool_name = tc["function"]["name"].replace("_", ":", 1)
                 try:
@@ -1817,7 +1825,7 @@ class BaseMCPAgent(ABC):
                         tool_name=tool_name,
                         tool_id=tc.get("id", "unknown"),
                         arguments=args,
-                        streaming_mode=streaming_mode
+                        streaming_mode=streaming_mode,
                     )
                     asyncio.create_task(self.event_bus.emit(event))
                 except Exception:
@@ -1825,7 +1833,7 @@ class BaseMCPAgent(ABC):
                         tool_name=tool_name,
                         tool_id=tc.get("id", "unknown"),
                         arguments={},
-                        streaming_mode=streaming_mode
+                        streaming_mode=streaming_mode,
                     )
                     asyncio.create_task(self.event_bus.emit(event))
             return

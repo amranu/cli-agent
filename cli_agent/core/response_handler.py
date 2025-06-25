@@ -5,8 +5,14 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
+from cli_agent.core.event_system import (
+    EventBus,
+    StatusEvent,
+    TextEvent,
+    ToolCallEvent,
+    ToolResultEvent,
+)
 from cli_agent.core.global_interrupt import get_global_interrupt_manager
-from cli_agent.core.event_system import EventBus, TextEvent, ToolCallEvent, ToolResultEvent, StatusEvent
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +24,12 @@ class ResponseHandler:
         """Initialize with reference to the parent agent."""
         self.agent = agent
         self.global_interrupt_manager = get_global_interrupt_manager()
-        
+
         # Initialize event emitter if event bus is available
         self.event_emitter = None
-        if hasattr(agent, 'event_bus') and agent.event_bus:
+        if hasattr(agent, "event_bus") and agent.event_bus:
             from cli_agent.core.event_system import EventEmitter
+
             self.event_emitter = EventEmitter(agent.event_bus)
 
     def _ensure_arguments_are_json_string(self, arguments: Any) -> str:
@@ -107,7 +114,7 @@ class ResponseHandler:
         interactive: bool = True,
     ):
         """Generic handler for streaming responses from any LLM provider."""
-        
+
         # Store updated messages that can be accessed after streaming completes
         self._updated_messages = None
 
@@ -118,7 +125,9 @@ class ResponseHandler:
                 accumulated_content, tool_calls, provider_data = (
                     await self.agent._process_streaming_chunks(response)
                 )
-                logger.info(f"Processed streaming chunks: content={len(accumulated_content)} chars, tools={len(tool_calls) if tool_calls else 0}")
+                logger.info(
+                    f"Processed streaming chunks: content={len(accumulated_content)} chars, tools={len(tool_calls) if tool_calls else 0}"
+                )
             except Exception as e:
                 logger.error(f"Error processing streaming chunks: {e}")
                 accumulated_content = ""
@@ -145,11 +154,13 @@ class ResponseHandler:
                         tool_name = tc.name
                     elif hasattr(tc, "function") and hasattr(tc.function, "name"):
                         tool_name = tc.function.name
-                    
+
                     # Check if this is a task spawning tool
                     if "task" in tool_name:
                         task_tools_executed = True
-                        logger.info(f"Detected task tool execution: {tool_name} - will not yield content until subagents complete")
+                        logger.info(
+                            f"Detected task tool execution: {tool_name} - will not yield content until subagents complete"
+                        )
                         break
 
             # If subagents will be spawned, DO NOT yield content yet - wait for subagent completion
@@ -158,7 +169,9 @@ class ResponseHandler:
                 logger.debug("No task tools detected, yielding accumulated content")
                 yield accumulated_content
             elif task_tools_executed:
-                logger.info("Task tools detected - suppressing content yield until subagent completion")
+                logger.info(
+                    "Task tools detected - suppressing content yield until subagent completion"
+                )
 
             # Process tool calls
             if tool_calls:
@@ -171,18 +184,54 @@ class ResponseHandler:
                         "content": accumulated_content or "",
                         "tool_calls": [
                             {
-                                "id": tc.get("id", f"call_{i}") if isinstance(tc, dict) else getattr(tc, "id", f"call_{i}"),
+                                "id": (
+                                    tc.get("id", f"call_{i}")
+                                    if isinstance(tc, dict)
+                                    else getattr(tc, "id", f"call_{i}")
+                                ),
                                 "type": "function",
                                 "function": {
                                     "name": (
-                                        tc["function"]["name"] if isinstance(tc, dict) and "function" in tc and isinstance(tc["function"], dict)
-                                        else tc.get("name", "unknown") if isinstance(tc, dict)
-                                        else getattr(tc, "name", getattr(tc.function, "name", "unknown") if hasattr(tc, "function") else "unknown")
+                                        tc["function"]["name"]
+                                        if isinstance(tc, dict)
+                                        and "function" in tc
+                                        and isinstance(tc["function"], dict)
+                                        else (
+                                            tc.get("name", "unknown")
+                                            if isinstance(tc, dict)
+                                            else getattr(
+                                                tc,
+                                                "name",
+                                                (
+                                                    getattr(
+                                                        tc.function, "name", "unknown"
+                                                    )
+                                                    if hasattr(tc, "function")
+                                                    else "unknown"
+                                                ),
+                                            )
+                                        )
                                     ),
                                     "arguments": self._ensure_arguments_are_json_string(
-                                        tc["function"]["arguments"] if isinstance(tc, dict) and "function" in tc and isinstance(tc["function"], dict)
-                                        else tc.get("args", {}) if isinstance(tc, dict)
-                                        else getattr(tc, "args", getattr(tc.function, "arguments", {}) if hasattr(tc, "function") else {})
+                                        tc["function"]["arguments"]
+                                        if isinstance(tc, dict)
+                                        and "function" in tc
+                                        and isinstance(tc["function"], dict)
+                                        else (
+                                            tc.get("args", {})
+                                            if isinstance(tc, dict)
+                                            else getattr(
+                                                tc,
+                                                "args",
+                                                (
+                                                    getattr(
+                                                        tc.function, "arguments", {}
+                                                    )
+                                                    if hasattr(tc, "function")
+                                                    else {}
+                                                ),
+                                            )
+                                        )
                                     ),
                                 },
                             }
@@ -190,7 +239,7 @@ class ResponseHandler:
                         ],
                     }
                 )
-                
+
                 # Store updated messages for access after streaming
                 self._updated_messages = current_messages
 
@@ -218,20 +267,26 @@ class ResponseHandler:
 
                         # Extract tool name with better error handling for both dict and object formats
                         tool_name = "unknown"
-                        
+
                         # Handle dictionary format (most common)
                         if isinstance(tool_call, dict):
-                            if "function" in tool_call and isinstance(tool_call["function"], dict):
+                            if "function" in tool_call and isinstance(
+                                tool_call["function"], dict
+                            ):
                                 tool_name = tool_call["function"].get("name", "unknown")
                             elif "name" in tool_call:
                                 tool_name = tool_call["name"]
                         # Handle object format (backup)
                         elif hasattr(tool_call, "name") and tool_call.name:
                             tool_name = tool_call.name
-                        elif hasattr(tool_call, "function") and hasattr(tool_call.function, "name"):
+                        elif hasattr(tool_call, "function") and hasattr(
+                            tool_call.function, "name"
+                        ):
                             tool_name = tool_call.function.name
-                        
-                        logger.debug(f"Extracted tool_name: {tool_name} from tool_call: {type(tool_call)} - {tool_call}")
+
+                        logger.debug(
+                            f"Extracted tool_name: {tool_name} from tool_call: {type(tool_call)} - {tool_call}"
+                        )
                         # Extract tool call ID handling both dict and object formats
                         if isinstance(tool_call, dict):
                             tool_call_id = tool_call.get("id", f"call_{i}")
@@ -241,7 +296,9 @@ class ResponseHandler:
                         # Try to get args from different possible formats
                         tool_args = None
                         if isinstance(tool_call, dict):
-                            if "function" in tool_call and isinstance(tool_call["function"], dict):
+                            if "function" in tool_call and isinstance(
+                                tool_call["function"], dict
+                            ):
                                 tool_args = tool_call["function"].get("arguments", {})
                             elif "args" in tool_call:
                                 tool_args = tool_call["args"]
@@ -278,12 +335,12 @@ class ResponseHandler:
                                 )
 
                         # Emit tool execution start event if event bus is available
-                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                        if hasattr(self.agent, "event_bus") and self.agent.event_bus:
                             await self.agent.event_emitter.emit_tool_execution_start(
                                 tool_name=tool_name,
                                 tool_id=tool_call_id,
                                 arguments=tool_args,
-                                streaming_mode=True
+                                streaming_mode=True,
                             )
 
                         # Execute the tool - map builtin tools correctly
@@ -316,8 +373,10 @@ class ResponseHandler:
                             tool_key = tool_name
                         else:
                             tool_key = tool_name
-                        
-                        logger.debug(f"Final tool_key for execution: {tool_key} (original tool_name: {tool_name})")
+
+                        logger.debug(
+                            f"Final tool_key for execution: {tool_key} (original tool_name: {tool_name})"
+                        )
                         result = (
                             await self.agent.tool_execution_engine.execute_mcp_tool(
                                 tool_key, tool_args
@@ -325,12 +384,12 @@ class ResponseHandler:
                         )
 
                         # Emit tool result event if event bus is available
-                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                        if hasattr(self.agent, "event_bus") and self.agent.event_bus:
                             await self.agent.event_emitter.emit_tool_result(
                                 tool_id=tool_call_id,
                                 tool_name=tool_name,
                                 result=result,
-                                is_error=False
+                                is_error=False,
                             )
                         elif interactive:
                             # Use formatting utils to handle truncation
@@ -367,14 +426,14 @@ class ResponseHandler:
                             raise
 
                         error_msg = f"Error executing {tool_name}: {str(e)}"
-                        
+
                         # Emit tool result error event if event bus is available
-                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                        if hasattr(self.agent, "event_bus") and self.agent.event_bus:
                             await self.agent.event_emitter.emit_tool_result(
                                 tool_id=getattr(tool_call, "id", f"call_{i}"),
                                 tool_name=tool_name,
                                 result=error_msg,
-                                is_error=True
+                                is_error=True,
                             )
                         elif interactive:
                             # Use formatting utils to handle truncation for errors too
@@ -406,11 +465,11 @@ class ResponseHandler:
                     and self.agent.subagent_manager.get_active_count() > 0
                 ):
                     # Emit status event for subagent spawning
-                    if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                    if hasattr(self.agent, "event_bus") and self.agent.event_bus:
                         await self.agent.event_emitter.emit_status(
                             status="Subagents spawned",
                             details="Interrupting main stream to wait for completion",
-                            level="info"
+                            level="info",
                         )
                     # Subagent status messages handled by event system
                     pass
@@ -422,11 +481,11 @@ class ResponseHandler:
 
                     if subagent_results:
                         # Emit status event for subagent results collection
-                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                        if hasattr(self.agent, "event_bus") and self.agent.event_bus:
                             await self.agent.event_emitter.emit_status(
                                 status=f"Collected {len(subagent_results)} subagent result(s)",
                                 details="Restarting with results",
-                                level="info"
+                                level="info",
                             )
                         # Subagent collection status handled by event system
                         pass
@@ -442,18 +501,20 @@ class ResponseHandler:
                         )
 
                         # Emit status event for conversation restart
-                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                        if hasattr(self.agent, "event_bus") and self.agent.event_bus:
                             await self.agent.event_emitter.emit_status(
                                 status="Restarting conversation with subagent results",
                                 details="Processing continuation with collected results",
-                                level="info"
+                                level="info",
                             )
                         # Subagent restart status handled by event system
                         pass
 
                         # Include the full conversation history plus the continuation message
                         # This ensures the LLM has context of all previous tool calls and results
-                        continuation_messages = current_messages + [continuation_message]
+                        continuation_messages = current_messages + [
+                            continuation_message
+                        ]
                         restart_response = await self.agent.generate_response(
                             continuation_messages, stream=True
                         )
@@ -466,22 +527,22 @@ class ResponseHandler:
                         return  # Exit - don't continue with original tool results
                     else:
                         # Emit warning event for no subagent results
-                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                        if hasattr(self.agent, "event_bus") and self.agent.event_bus:
                             await self.agent.event_emitter.emit_status(
                                 status="No results collected from subagents",
                                 details="Subagents completed without providing results",
-                                level="warning"
+                                level="warning",
                             )
                         # Subagent no-results status handled by event system
                         pass
                         return
 
                 # Generate follow-up response with tool results (only if no subagents were spawned)
-                if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                if hasattr(self.agent, "event_bus") and self.agent.event_bus:
                     await self.agent.event_emitter.emit_status(
                         status="Processing tool results",
                         details="Generating follow-up response based on tool outputs",
-                        level="info"
+                        level="info",
                     )
                 # Tool result processing status handled by event system
                 pass
@@ -489,37 +550,65 @@ class ResponseHandler:
                 try:
                     # Add instruction to prevent repeating identical tool calls (same tool + same arguments)
                     final_messages = current_messages.copy()
-                    
+
                     # Build a list of recently executed tool calls with their arguments
                     recent_tool_calls = []
                     for msg in current_messages[-10:]:  # Check last 10 messages
-                        if msg.get('role') == 'assistant' and 'tool_calls' in msg:
-                            for tc in msg['tool_calls']:
+                        if msg.get("role") == "assistant" and "tool_calls" in msg:
+                            for tc in msg["tool_calls"]:
                                 # Handle both dict and object formats for tool calls
                                 if isinstance(tc, dict):
-                                    if 'function' in tc and isinstance(tc['function'], dict):
-                                        tool_name = tc['function'].get('name', 'unknown')
-                                        tool_args = tc['function'].get('arguments', '{}')
+                                    if "function" in tc and isinstance(
+                                        tc["function"], dict
+                                    ):
+                                        tool_name = tc["function"].get(
+                                            "name", "unknown"
+                                        )
+                                        tool_args = tc["function"].get(
+                                            "arguments", "{}"
+                                        )
                                     else:
-                                        tool_name = tc.get('name', 'unknown')
-                                        tool_args = tc.get('arguments', '{}')
+                                        tool_name = tc.get("name", "unknown")
+                                        tool_args = tc.get("arguments", "{}")
                                 else:
-                                    tool_name = getattr(tc, 'name', getattr(tc.function, 'name', 'unknown') if hasattr(tc, 'function') else 'unknown')
-                                    tool_args = getattr(tc, 'arguments', getattr(tc.function, 'arguments', '{}') if hasattr(tc, 'function') else '{}')
-                                recent_tool_calls.append(f"{tool_name} with arguments {tool_args}")
-                    
+                                    tool_name = getattr(
+                                        tc,
+                                        "name",
+                                        (
+                                            getattr(tc.function, "name", "unknown")
+                                            if hasattr(tc, "function")
+                                            else "unknown"
+                                        ),
+                                    )
+                                    tool_args = getattr(
+                                        tc,
+                                        "arguments",
+                                        (
+                                            getattr(tc.function, "arguments", "{}")
+                                            if hasattr(tc, "function")
+                                            else "{}"
+                                        ),
+                                    )
+                                recent_tool_calls.append(
+                                    f"{tool_name} with arguments {tool_args}"
+                                )
+
                     if recent_tool_calls:
                         # Create specific instruction about not repeating identical calls
-                        final_messages.append({
-                            "role": "user",
-                            "content": f"You have already executed these exact tool calls in this conversation: {', '.join(recent_tool_calls)}. Please provide your response based on those results. Only make new tool calls if you need different tools or the same tools with different arguments."
-                        })
+                        final_messages.append(
+                            {
+                                "role": "user",
+                                "content": f"You have already executed these exact tool calls in this conversation: {', '.join(recent_tool_calls)}. Please provide your response based on those results. Only make new tool calls if you need different tools or the same tools with different arguments.",
+                            }
+                        )
                     else:
-                        final_messages.append({
-                            "role": "user", 
-                            "content": "Please provide your response based on the tool results above."
-                        })
-                    
+                        final_messages.append(
+                            {
+                                "role": "user",
+                                "content": "Please provide your response based on the tool results above.",
+                            }
+                        )
+
                     follow_up_response = await self.agent.generate_response(
                         final_messages, stream=True
                     )
@@ -534,10 +623,10 @@ class ResponseHandler:
                     pass
 
         return async_stream_generator()
-    
+
     def get_updated_messages(self) -> Optional[List[Dict[str, Any]]]:
         """Get the updated conversation messages after tool execution."""
-        return getattr(self, '_updated_messages', None)
+        return getattr(self, "_updated_messages", None)
 
     async def process_tool_calls_centralized(
         self,

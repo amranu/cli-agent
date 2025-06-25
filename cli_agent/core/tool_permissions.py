@@ -305,30 +305,32 @@ class ToolPermissionManager:
         prompt_lines = [
             "🔧 Tool Execution Request:",
             f"Tool: {tool_name}",
-            f"Action: {tool_description}"
+            f"Action: {tool_description}",
         ]
-        
+
         # Show arguments if they're not sensitive
         if tool_name != "bash_execute" or len(str(arguments)) < 100:
             prompt_lines.append(f"Arguments: {arguments}")
-        
-        prompt_lines.extend([
-            "",  # Empty line
-            "Allow this tool to execute?",
-            "[y] Yes, execute once",
-            f"[a] Yes, and allow '{tool_name}' for the rest of this session",
-            "[A] Yes, and auto-approve ALL tools for this session",
-            "[n] No, deny this execution",
-            f"[d] No, and deny '{tool_name}' for the rest of this session"
-        ])
-        
+
+        prompt_lines.extend(
+            [
+                "",  # Empty line
+                "Allow this tool to execute?",
+                "[y] Yes, execute once",
+                f"[a] Yes, and allow '{tool_name}' for the rest of this session",
+                "[A] Yes, and auto-approve ALL tools for this session",
+                "[n] No, deny this execution",
+                f"[d] No, and deny '{tool_name}' for the rest of this session",
+            ]
+        )
+
         # Send as single consolidated message
         full_prompt = "\n".join(prompt_lines)
-        
+
         try:
             # For subagents, pass the full prompt to the input handler
             # For regular agents, display the prompt and ask for choice
-            if hasattr(input_handler, 'subagent_context'):
+            if hasattr(input_handler, "subagent_context"):
                 # Subagent: send full prompt via permission request message
                 choice_prompt = f"{full_prompt}\n\nChoice [y/a/A/n/d]: "
                 response = input_handler.get_input(choice_prompt)

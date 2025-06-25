@@ -91,7 +91,6 @@ class AnthropicProvider(BaseProvider):
             f"Anthropic API request: {len(anthropic_messages)} messages, tools={len(tools) if tools else 0}"
         )
 
-
         try:
             if stream:
                 response = await self.client.post(

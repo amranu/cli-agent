@@ -12,24 +12,23 @@ import logging
 import sys
 from typing import Dict, List, Optional, Set
 
-from cli_agent.core.terminal_manager import get_terminal_manager
-
 from cli_agent.core.event_system import (
+    ErrorEvent,
     Event,
     EventBus,
     EventType,
+    InterruptEvent,
+    StatusEvent,
+    SystemEvent,
+    SystemMessageEvent,
     TextEvent,
     ToolCallEvent,
     ToolExecutionStartEvent,
     ToolResultEvent,
-    StatusEvent,
-    ErrorEvent,
-    SystemEvent,
-    SystemMessageEvent,
     UIStatusEvent,
     UserInputEvent,
-    InterruptEvent,
 )
+from cli_agent.core.terminal_manager import get_terminal_manager
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +36,11 @@ logger = logging.getLogger(__name__)
 class DisplayManager:
     """
     Central display coordinator that converts events to console output.
-    
+
     Replaces scattered print statements with event-driven display logic.
     Supports both interactive and non-interactive modes.
     """
-    
+
     def __init__(self, event_bus: EventBus, interactive: bool = True):
         self.event_bus = event_bus
         self.interactive = interactive
@@ -49,45 +48,47 @@ class DisplayManager:
         self.quiet_mode = False
         self.last_status_line = ""
         self.terminal_manager = get_terminal_manager()
-        
+
         # Default enabled events for interactive mode
         if interactive:
-            self.enabled_events.update([
-                EventType.TEXT,
-                EventType.TOOL_CALL,
-                EventType.TOOL_EXECUTION_START,
-                EventType.TOOL_RESULT,
-                EventType.STATUS,
-                EventType.ERROR,
-                EventType.SYSTEM,
-                EventType.SYSTEM_MESSAGE,
-                EventType.UI_STATUS,
-                EventType.USER_INPUT,
-                EventType.INTERRUPT
-            ])
-        
+            self.enabled_events.update(
+                [
+                    EventType.TEXT,
+                    EventType.TOOL_CALL,
+                    EventType.TOOL_EXECUTION_START,
+                    EventType.TOOL_RESULT,
+                    EventType.STATUS,
+                    EventType.ERROR,
+                    EventType.SYSTEM,
+                    EventType.SYSTEM_MESSAGE,
+                    EventType.UI_STATUS,
+                    EventType.USER_INPUT,
+                    EventType.INTERRUPT,
+                ]
+            )
+
         # Subscribe to all enabled events
         self._subscribe_to_events()
-    
+
     def _subscribe_to_events(self):
         """Subscribe to all enabled event types."""
         for event_type in self.enabled_events:
             self.event_bus.subscribe(event_type, self._handle_event)
-    
+
     def enable_event_type(self, event_type: EventType):
         """Enable display for a specific event type."""
         if event_type not in self.enabled_events:
             self.enabled_events.add(event_type)
             self.event_bus.subscribe(event_type, self._handle_event)
             logger.debug(f"Enabled display for {event_type.value}")
-    
+
     def disable_event_type(self, event_type: EventType):
         """Disable display for a specific event type."""
         if event_type in self.enabled_events:
             self.enabled_events.remove(event_type)
             self.event_bus.unsubscribe(event_type, self._handle_event)
             logger.debug(f"Disabled display for {event_type.value}")
-    
+
     def set_quiet_mode(self, quiet: bool):
         """Enable/disable quiet mode (suppress non-essential output)."""
         self.quiet_mode = quiet
@@ -95,12 +96,15 @@ class DisplayManager:
             logger.debug("Quiet mode enabled")
         else:
             logger.debug("Quiet mode disabled")
-    
+
     async def _handle_event(self, event: Event):
         """Route events to appropriate display handlers."""
-        if self.quiet_mode and event.event_type in [EventType.UI_STATUS, EventType.STATUS]:
+        if self.quiet_mode and event.event_type in [
+            EventType.UI_STATUS,
+            EventType.STATUS,
+        ]:
             return
-            
+
         try:
             if event.event_type == EventType.TEXT:
                 await self._display_text_event(event)
@@ -126,10 +130,10 @@ class DisplayManager:
                 await self._display_interrupt_event(event)
             else:
                 logger.debug(f"Unhandled event type: {event.event_type}")
-                
+
         except Exception as e:
             logger.error(f"Error displaying event {event.event_type}: {e}")
-    
+
     async def _display_text_event(self, event: TextEvent):
         """Display text content from LLM responses with enhanced formatting."""
         logger.debug(f"DisplayManager received TextEvent: {repr(event.content[:50])}")
@@ -140,13 +144,14 @@ class DisplayManager:
                 if self.last_status_line:
                     self.terminal_manager.write_above_prompt("\r\x1b[K")
                     self.last_status_line = ""
-                
+
                 # Display streaming content character by character for typing effect
                 for char in event.content:
                     self.terminal_manager.write_above_prompt(char)
                     # Small delay for typing effect (only for very short bursts)
                     if len(event.content) <= 5:  # Only for small chunks
                         import asyncio
+
                         await asyncio.sleep(0.01)
             else:
                 # Non-streaming content - display immediately
@@ -154,164 +159,156 @@ class DisplayManager:
                 # Apply markdown formatting if requested
                 if event.is_markdown and len(event.content.strip()) > 0:
                     # For markdown content, ensure proper line spacing
-                    if not event.content.startswith('\n'):
-                        content_to_display = '\n' + content_to_display
-                
+                    if not event.content.startswith("\n"):
+                        content_to_display = "\n" + content_to_display
+
                 self.terminal_manager.write_above_prompt(content_to_display)
-            
+
             logger.debug("Displayed text content to console")
-    
+
     async def _display_tool_execution_start(self, event: ToolExecutionStartEvent):
         """Display tool execution start notification."""
         if self.interactive:
             args_summary = self._format_tool_arguments(event.arguments)
             display_text = f"🔧 Executing {event.tool_name}({args_summary})\n"
-            
+
             # Clear any previous status line and display
             if self.last_status_line:
                 self.terminal_manager.write_above_prompt("\r\x1b[K")
                 self.last_status_line = ""
             self.terminal_manager.write_above_prompt(display_text)
-    
+
     async def _display_tool_result(self, event: ToolResultEvent):
         """Display tool execution results."""
         if self.interactive:
             status_icon = "❌" if event.is_error else "✅"
-            time_info = f" ({event.execution_time:.2f}s)" if event.execution_time else ""
-            
-            result_preview = event.result[:100] + "..." if len(event.result) > 100 else event.result
+            time_info = (
+                f" ({event.execution_time:.2f}s)" if event.execution_time else ""
+            )
+
+            result_preview = (
+                event.result[:100] + "..." if len(event.result) > 100 else event.result
+            )
             display_text = f"{status_icon} {event.tool_name} completed{time_info}: {result_preview}\n"
-            
+
             self.terminal_manager.write_above_prompt(display_text)
-    
+
     async def _display_status_event(self, event: StatusEvent):
         """Display status updates."""
         if self.interactive:
-            level_icons = {
-                "info": "ℹ️",
-                "warning": "⚠️", 
-                "error": "❌"
-            }
+            level_icons = {"info": "ℹ️", "warning": "⚠️", "error": "❌"}
             icon = level_icons.get(event.level, "📊")
-            
+
             display_text = f"{icon} {event.status}"
             if event.details:
                 display_text += f": {event.details}"
-            
+
             # All status messages now go above the prompt with newlines
             # This ensures the prompt stays at the bottom
             display_text += "\n"
             self.terminal_manager.write_above_prompt(display_text)
-    
+
     async def _display_error_event(self, event: ErrorEvent):
         """Display error notifications."""
         if self.interactive:
             error_type = f" ({event.error_type})" if event.error_type else ""
             display_text = f"❌ Error{error_type}: {event.error_message}\n"
-            
+
             self.terminal_manager.write_above_prompt(display_text)
-            
+
             # Optionally show stack trace in debug mode
             if event.stack_trace and logger.isEnabledFor(logging.DEBUG):
-                self.terminal_manager.write_above_prompt(f"Stack trace: {event.stack_trace}\n")
-    
+                self.terminal_manager.write_above_prompt(
+                    f"Stack trace: {event.stack_trace}\n"
+                )
+
     async def _display_system_message(self, event: SystemMessageEvent):
         """Display system messages like welcome, goodbye, thinking."""
         if self.interactive:
             emoji = event.emoji or self._get_default_emoji(event.message_type)
             display_text = f"{emoji} {event.message}"
-            
+
             # For permission requests, add extra spacing
             if event.message_type == "permission_request":
                 display_text = f"\n{display_text}\n"
             else:
                 # Regular system messages always get a new line
                 display_text += "\n"
-                
+
             self.terminal_manager.write_above_prompt(display_text)
-    
+
     async def _display_ui_status(self, event: UIStatusEvent):
         """Display UI status updates."""
         if self.interactive and not self.quiet_mode:
-            type_icons = {
-                "info": "ℹ️",
-                "progress": "⏳",
-                "completion": "✅"
-            }
+            type_icons = {"info": "ℹ️", "progress": "⏳", "completion": "✅"}
             icon = type_icons.get(event.status_type, "📊")
-            
+
             display_text = f"{icon} {event.status_text}\n"
-            
+
             # UI status goes above prompt
             self.terminal_manager.write_above_prompt(display_text)
-            
+
             if event.duration:
                 # Note: With persistent prompt, we don't need to clear status lines
                 # as they scroll up naturally
                 pass
-    
+
     async def _display_interrupt_event(self, event: InterruptEvent):
         """Display interrupt/cancellation notifications."""
         if self.interactive:
-            interrupt_icons = {
-                "user": "🛑",
-                "system": "⚠️",
-                "timeout": "⏰"
-            }
+            interrupt_icons = {"user": "🛑", "system": "⚠️", "timeout": "⏰"}
             icon = interrupt_icons.get(event.interrupt_type, "🚫")
-            
+
             reason_text = f": {event.reason}" if event.reason else ""
             display_text = f"\n{icon} Operation interrupted{reason_text}\n"
-            
+
             self.terminal_manager.write_above_prompt(display_text)
-    
+
     async def _display_tool_call_event(self, event: ToolCallEvent):
         """Display tool call request event."""
         if self.interactive:
             args_summary = self._format_tool_arguments(event.arguments)
             description = f" - {event.description}" if event.description else ""
-            display_text = f"🔗 Tool Call: {event.tool_name}({args_summary}){description}\n"
-            
+            display_text = (
+                f"🔗 Tool Call: {event.tool_name}({args_summary}){description}\n"
+            )
+
             self.terminal_manager.write_above_prompt(display_text)
-    
+
     async def _display_system_event(self, event: SystemEvent):
         """Display system-level events."""
         if self.interactive:
-            system_icons = {
-                "init": "🚀",
-                "shutdown": "🛑", 
-                "config_change": "⚙️"
-            }
+            system_icons = {"init": "🚀", "shutdown": "🛑", "config_change": "⚙️"}
             icon = system_icons.get(event.system_type, "🔧")
-            
+
             display_text = f"{icon} System: {event.system_type}"
             if event.data:
                 display_text += f" - {event.data}"
             display_text += "\n"
-            
+
             self.terminal_manager.write_above_prompt(display_text)
-    
+
     async def _display_user_input_event(self, event: UserInputEvent):
         """Display user input events (mainly for logging/debugging)."""
         if self.interactive and not self.quiet_mode:
-            input_icons = {
-                "chat": "💬",
-                "command": "⌨️",
-                "interrupt": "🛑"
-            }
+            input_icons = {"chat": "💬", "command": "⌨️", "interrupt": "🛑"}
             icon = input_icons.get(event.input_type, "📝")
-            
+
             # Only show first 50 chars of input for privacy
-            input_preview = event.input_text[:50] + "..." if len(event.input_text) > 50 else event.input_text
+            input_preview = (
+                event.input_text[:50] + "..."
+                if len(event.input_text) > 50
+                else event.input_text
+            )
             display_text = f"{icon} User Input ({event.input_type}): {input_preview}\n"
-            
+
             self.terminal_manager.write_above_prompt(display_text)
-    
+
     def _format_tool_arguments(self, arguments: Dict) -> str:
         """Format tool arguments for display."""
         if not arguments:
             return ""
-        
+
         # Show first few characters of each argument
         formatted_args = []
         for key, value in arguments.items():
@@ -319,9 +316,9 @@ class DisplayManager:
             if len(value_str) > 30:
                 value_str = value_str[:27] + "..."
             formatted_args.append(f"{key}={value_str}")
-        
+
         return ", ".join(formatted_args)
-    
+
     def _get_default_emoji(self, message_type: str) -> str:
         """Get default emoji for system message types."""
         emojis = {
@@ -329,59 +326,61 @@ class DisplayManager:
             "goodbye": "👋",
             "thinking": "💭",
             "status": "📊",
-            "info": "ℹ️"
+            "info": "ℹ️",
         }
         return emojis.get(message_type, "🔔")
-    
+
     async def _clear_status_after_delay(self, delay: float):
         """Clear status line after specified delay."""
         await asyncio.sleep(delay)
         # With persistent prompt, status lines scroll up naturally
         # No need to clear them manually
         pass
-    
+
     def shutdown(self):
         """Clean up display manager."""
         # Unsubscribe from all events
         for event_type in self.enabled_events:
             self.event_bus.unsubscribe(event_type, self._handle_event)
         self.enabled_events.clear()
-        
+
         # Stop the persistent prompt
         self.terminal_manager.stop_persistent_prompt()
-        
+
         logger.debug("DisplayManager shutdown complete")
 
 
 class JSONDisplayManager(DisplayManager):
     """
     Specialized display manager that outputs JSON events only.
-    
+
     Used for non-interactive mode where external tools consume events.
     """
-    
+
     def __init__(self, event_bus: EventBus, output_file=None):
         super().__init__(event_bus, interactive=False)
         self.output_file = output_file or sys.stdout
-        
+
         # JSON mode shows all events
-        self.enabled_events.update([
-            EventType.TEXT,
-            EventType.TOOL_CALL,
-            EventType.TOOL_EXECUTION_START,
-            EventType.TOOL_RESULT,
-            EventType.STATUS,
-            EventType.ERROR,
-            EventType.SYSTEM,
-            EventType.SYSTEM_MESSAGE,
-            EventType.UI_STATUS,
-            EventType.USER_INPUT,
-            EventType.INTERRUPT
-        ])
-        
+        self.enabled_events.update(
+            [
+                EventType.TEXT,
+                EventType.TOOL_CALL,
+                EventType.TOOL_EXECUTION_START,
+                EventType.TOOL_RESULT,
+                EventType.STATUS,
+                EventType.ERROR,
+                EventType.SYSTEM,
+                EventType.SYSTEM_MESSAGE,
+                EventType.UI_STATUS,
+                EventType.USER_INPUT,
+                EventType.INTERRUPT,
+            ]
+        )
+
         # Re-subscribe with updated events
         self._subscribe_to_events()
-    
+
     async def _handle_event(self, event: Event):
         """Output events as JSON instead of console display."""
         try:

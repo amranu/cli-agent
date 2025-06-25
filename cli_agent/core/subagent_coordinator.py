@@ -19,11 +19,12 @@ class SubagentCoordinator:
         """Initialize with reference to the parent agent."""
         self.agent = agent
         self.global_interrupt_manager = get_global_interrupt_manager()
-        
+
         # Initialize event emitter if event bus is available
         self.event_emitter = None
-        if hasattr(agent, 'event_bus') and agent.event_bus:
+        if hasattr(agent, "event_bus") and agent.event_bus:
             from cli_agent.core.event_system import EventEmitter
+
             self.event_emitter = EventEmitter(agent.event_bus)
 
     async def handle_subagent_permission_request(self, message, task_id):
@@ -57,44 +58,40 @@ class SubagentCoordinator:
                 if self.event_emitter:
                     # Force a clear line and add proper spacing
                     await self.event_emitter.emit_text(
-                        "\n\n" + "="*60 + "\n",
-                        is_markdown=False,
-                        is_streaming=False
+                        "\n\n" + "=" * 60 + "\n", is_markdown=False, is_streaming=False
                     )
                     await self.event_emitter.emit_system_message(
                         f"Subagent {task_id} is requesting tool permission:",
                         "permission_request",
-                        "🔐"
+                        "🔐",
                     )
                     await self.event_emitter.emit_text(
-                        f"\n{prompt_text}\n",
-                        is_markdown=False,
-                        is_streaming=False
+                        f"\n{prompt_text}\n", is_markdown=False, is_streaming=False
                     )
                     await self.event_emitter.emit_text(
-                        "="*60 + "\n",
-                        is_markdown=False,
-                        is_streaming=False
+                        "=" * 60 + "\n", is_markdown=False, is_streaming=False
                     )
-                    
+
                     # Wait for events to be processed and display to settle
                     import asyncio
+
                     await asyncio.sleep(0.5)
 
                 # Set up persistent prompt for permission choice
                 from cli_agent.core.terminal_manager import get_terminal_manager
+
                 terminal_manager = get_terminal_manager()
-                
+
                 # Start persistent prompt for the choice
                 terminal_manager.start_persistent_prompt("Choice [y/a/A/n/d]: ")
-                
+
                 # Get user choice using the proper input handler (no prompt since it's persistent)
                 user_choice = input_handler.get_input("")
-                
+
                 # Stop persistent prompt after input
                 terminal_manager.stop_persistent_prompt()
-                
-                # Handle None return (EOF/interrupt) 
+
+                # Handle None return (EOF/interrupt)
                 if user_choice is None:
                     logger.info(f"No input received for {task_id}, defaulting to deny")
                     response = "n"
@@ -151,7 +148,10 @@ class SubagentCoordinator:
             elif message.type == "permission_request":
                 # Handle permission requests asynchronously
                 import asyncio
-                asyncio.create_task(self.handle_subagent_permission_request(message, task_id))
+
+                asyncio.create_task(
+                    self.handle_subagent_permission_request(message, task_id)
+                )
                 return  # Don't display permission requests
             else:
                 formatted = f"📨 [SUBAGENT-{task_id}] {message.type}: {message.content}"
@@ -168,27 +168,24 @@ class SubagentCoordinator:
         try:
             # Emit as event - event system is always available
             import asyncio
-            from cli_agent.core.event_system import StatusEvent, ErrorEvent
-            
+
+            from cli_agent.core.event_system import ErrorEvent, StatusEvent
+
             # Add extra spacing for subagent messages to prevent overwriting
             formatted_with_spacing = f"\n{formatted}"
-            
+
             # Create appropriate event based on message type
             if message_type == "error":
                 event = ErrorEvent(
-                    error_message=formatted_with_spacing,
-                    error_type="subagent_error"
+                    error_message=formatted_with_spacing, error_type="subagent_error"
                 )
             else:
                 # Determine status level
                 level = "error" if message_type == "error" else "info"
-                event = StatusEvent(
-                    status=formatted_with_spacing,
-                    level=level
-                )
-            
+                event = StatusEvent(status=formatted_with_spacing, level=level)
+
             # Emit event synchronously (since this method isn't async)
-            if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+            if hasattr(self.agent, "event_bus") and self.agent.event_bus:
                 self.agent.event_bus.emit_sync(event)
         except Exception as e:
             logger.error(f"Error displaying message immediately: {e}")

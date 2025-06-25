@@ -88,21 +88,25 @@ class BaseLLMProvider(BaseMCPAgent):
                             messages,
                             interactive=interactive,
                         )
-                        
+
                         # Consume the generator and return the final content
                         final_content = ""
                         logger.info(f"Consuming streaming generator: {type(generator)}")
-                        
+
                         try:
                             async for content in generator:
-                                logger.info(f"Generator yielded: {type(content)} - {repr(content[:100] if isinstance(content, str) else content)}")
+                                logger.info(
+                                    f"Generator yielded: {type(content)} - {repr(content[:100] if isinstance(content, str) else content)}"
+                                )
                                 if isinstance(content, str):
                                     final_content = content
                         except Exception as e:
                             logger.error(f"Error consuming generator: {e}")
                             final_content = ""
-                        
-                        logger.info(f"Final content collected: {len(final_content)} chars")
+
+                        logger.info(
+                            f"Final content collected: {len(final_content)} chars"
+                        )
                         return final_content
             else:
                 # Non-streaming response

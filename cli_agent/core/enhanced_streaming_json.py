@@ -12,20 +12,22 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 from cli_agent.core.event_system import (
+    ErrorEvent,
     EventBus,
+    StatusEvent,
+    SystemEvent,
     TextEvent,
     ToolCallEvent,
     ToolResultEvent,
-    StatusEvent,
-    ErrorEvent,
-    SystemEvent,
 )
 
 
 class EnhancedStreamingJSONHandler:
     """Enhanced streaming JSON handler that integrates with the event system."""
 
-    def __init__(self, session_id: Optional[str] = None, event_bus: Optional[EventBus] = None):
+    def __init__(
+        self, session_id: Optional[str] = None, event_bus: Optional[EventBus] = None
+    ):
         self.session_id = session_id or str(uuid.uuid4())
         self.event_bus = event_bus
         self.output_format = "stream-json"
@@ -160,7 +162,9 @@ class EnhancedStreamingJSONHandler:
         self._output_json(msg)
         return tool_id
 
-    async def send_tool_result(self, tool_use_id: str, content: str, is_error: bool = False):
+    async def send_tool_result(
+        self, tool_use_id: str, content: str, is_error: bool = False
+    ):
         """Send tool execution result and emit tool result event."""
         # Emit tool result event to event bus
         if self.event_bus:
@@ -422,8 +426,9 @@ class EventDrivenJSONOutput:
 async def main():
     """Test the enhanced streaming JSON handler."""
     import os
-    from cli_agent.core.event_system import EventBus
+
     from cli_agent.core.display_manager import DisplayManager
+    from cli_agent.core.event_system import EventBus
 
     # Create event bus and display manager
     event_bus = EventBus()
@@ -460,7 +465,9 @@ async def main():
         )
 
         # Send status update
-        await handler.send_status_update("Operation completed", "All tools executed successfully")
+        await handler.send_status_update(
+            "Operation completed", "All tools executed successfully"
+        )
 
         # Wait a bit for processing
         await asyncio.sleep(1)
@@ -481,4 +488,5 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())

@@ -310,7 +310,9 @@ class HostConfig(BaseSettings):
             display_name=f"{provider_name}:{provider_config.model}",
         )
 
-    def create_host_from_provider_model(self, provider_model: Optional[str] = None, is_subagent: bool = False):
+    def create_host_from_provider_model(
+        self, provider_model: Optional[str] = None, is_subagent: bool = False
+    ):
         """Create MCPHost instance from provider-model configuration.
 
         Args:
@@ -413,7 +415,9 @@ class HostConfig(BaseSettings):
         elif hasattr(pm_config.provider_config, "max_output_tokens"):
             model.max_tokens = pm_config.provider_config.max_output_tokens
 
-        return MCPHost(provider=provider, model=model, config=self, is_subagent=is_subagent)
+        return MCPHost(
+            provider=provider, model=model, config=self, is_subagent=is_subagent
+        )
 
     def get_available_provider_models(self) -> Dict[str, List[str]]:
         """Get available provider-model combinations with caching.

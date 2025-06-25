@@ -112,7 +112,8 @@ def create_host(
     help="Enable debug logging (shows detailed tool execution info)",
 )
 @click.option(
-    "--verbose", "-v",
+    "--verbose",
+    "-v",
     is_flag=True,
     help="Enable verbose logging (shows more detailed info)",
 )
@@ -121,7 +122,7 @@ def cli(ctx, config_file, debug, verbose):
     """MCP Agent - Run AI models with MCP tool integration."""
     ctx.ensure_object(dict)
     ctx.obj["config_file"] = config_file
-    
+
     # Update logging level based on options
     if debug:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -570,7 +571,7 @@ async def execute_task_subprocess(task_file_path: str):
         permission_manager = ToolPermissionManager(permission_config)
         subagent.permission_manager = permission_manager
 
-        # Set up custom input handler for subagent that connects to main terminal  
+        # Set up custom input handler for subagent that connects to main terminal
         class SubagentInputHandler(InterruptibleInput):
             def __init__(self, task_id):
                 super().__init__()
@@ -585,7 +586,9 @@ async def execute_task_subprocess(task_file_path: str):
                 # For subagents in agent.py, permission requests should be auto-approved
                 # since this is the interactive chat interface where user has already
                 # initiated the subagent. Return default approval.
-                logger.info(f"Subagent {self.subagent_context} permission request: {prompt_text}")
+                logger.info(
+                    f"Subagent {self.subagent_context} permission request: {prompt_text}"
+                )
                 logger.info("Auto-approving for interactive subagent")
                 return "a"  # Auto-approve for session
 
@@ -614,35 +617,35 @@ async def execute_task_subprocess(task_file_path: str):
         # Execute the task
         messages = [{"role": "user", "content": task_prompt}]
 
-        print(
-            f"🤖 [SUBAGENT {task_id}] Executing task..."
-        )
+        print(f"🤖 [SUBAGENT {task_id}] Executing task...")
 
         # Use the interactive chat interface to handle tool execution properly
         # This ensures proper conversation flow and tool execution
         from cli_agent.core.input_handler import InterruptibleInput
-        
+
         # Create a mock input handler that provides the task prompt
         class MockInputHandler:
             def __init__(self, task_prompt):
                 self.task_prompt = task_prompt
                 self.used = False
                 self.interrupted = False
-            
+
             def get_multiline_input(self, prompt):
                 if not self.used:
                     self.used = True
                     return self.task_prompt
                 return None  # EOF after first input
-            
+
             def check_for_interrupt(self):
                 return False
-        
+
         mock_input = MockInputHandler(task_prompt)
-        
+
         # Use interactive chat which handles tool execution properly
-        final_messages = await subagent.interactive_chat(mock_input, existing_messages=[])
-        
+        final_messages = await subagent.interactive_chat(
+            mock_input, existing_messages=[]
+        )
+
         # Extract the final response from the conversation
         if final_messages and len(final_messages) > 0:
             # Get the last assistant message
@@ -654,7 +657,7 @@ async def execute_task_subprocess(task_file_path: str):
                 response = "Task completed successfully"
         else:
             response = "Task completed successfully"
-        
+
         print(response)
 
         # Clean up connections
@@ -1181,8 +1184,9 @@ async def handle_text_chat(
     display_manager = None
     if event_driven:
         from cli_agent.core.display_manager import JSONDisplayManager
+
         # Disable the interactive display manager to avoid dual output
-        if hasattr(host, 'display_manager'):
+        if hasattr(host, "display_manager"):
             host.display_manager.shutdown()
         # Use JSON-only display manager
         display_manager = JSONDisplayManager(host.event_bus)
@@ -1293,11 +1297,11 @@ async def handle_text_chat(
     finally:
         # Allow pending events to be processed before shutdown
         await asyncio.sleep(0.1)
-        
+
         # Clean up display manager
-        if display_manager and hasattr(display_manager, 'shutdown'):
+        if display_manager and hasattr(display_manager, "shutdown"):
             display_manager.shutdown()
-            
+
         if "host" in locals():
             host_instance = locals()["host"]
             if hasattr(
