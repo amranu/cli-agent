@@ -90,29 +90,25 @@ class TestTerminalManager:
             mock_write.assert_called()
             mock_flush.assert_called()
 
-    @patch("sys.stdout.write")
-    @patch("sys.stdout.flush")
-    def test_write_above_prompt_without_terminal(self, mock_flush, mock_write):
+    @patch("builtins.print")
+    def test_write_above_prompt_without_terminal(self, mock_print):
         """Test writing text above prompt in non-terminal environment."""
         with patch("sys.stdout.isatty", return_value=False):
             manager = TerminalManager()
             manager.write_above_prompt("Hello World\n")
 
-            # Should fall back to normal stdout.write
-            mock_write.assert_called_with("Hello World\n")
-            mock_flush.assert_called()
+            # Should fall back to print
+            mock_print.assert_called_with("Hello World\n", end="", flush=True)
 
-    @patch("sys.stdout.write")
-    @patch("sys.stdout.flush")
-    def test_write_above_prompt_without_active_prompt(self, mock_flush, mock_write):
+    @patch("builtins.print")
+    def test_write_above_prompt_without_active_prompt(self, mock_print):
         """Test writing text when no prompt is active."""
         with patch("sys.stdout.isatty", return_value=True):
             manager = TerminalManager()
             manager.write_above_prompt("Hello World\n")
 
-            # Should write normally when no prompt is active
-            mock_write.assert_called_with("Hello World\n")
-            mock_flush.assert_called()
+            # Should use print when no prompt is active
+            mock_print.assert_called_with("Hello World\n", end="", flush=True)
 
     @patch("sys.stdout.write")
     @patch("sys.stdout.flush")

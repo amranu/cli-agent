@@ -138,29 +138,33 @@ class DisplayManager:
         """Display text content from LLM responses with enhanced formatting."""
         logger.debug(f"DisplayManager received TextEvent: {repr(event.content[:50])}")
         if self.interactive and event.content:
-            # Handle streaming content with typing effect
+            # Handle streaming content immediately without delays
             if event.is_streaming:
                 # Clear any status line before streaming text
                 if self.last_status_line:
                     self.terminal_manager.write_above_prompt("\r\x1b[K")
                     self.last_status_line = ""
 
-                # Display streaming content character by character for typing effect
-                for char in event.content:
-                    self.terminal_manager.write_above_prompt(char)
-                    # Small delay for typing effect (only for very short bursts)
-                    if len(event.content) <= 5:  # Only for small chunks
-                        import asyncio
-
-                        await asyncio.sleep(0.01)
+                # Display streaming content immediately (no character delays for responsiveness)
+                self.terminal_manager.write_above_prompt(event.content)
             else:
                 # Non-streaming content - display immediately
                 content_to_display = event.content
                 # Apply markdown formatting if requested
                 if event.is_markdown and len(event.content.strip()) > 0:
-                    # For markdown content, ensure proper line spacing
-                    if not event.content.startswith("\n"):
-                        content_to_display = "\n" + content_to_display
+                    try:
+                        from cli_agent.core.formatting import ResponseFormatter
+
+                        formatter = ResponseFormatter()
+                        content_to_display = formatter.format_markdown(event.content)
+                        # For markdown content, ensure proper line spacing
+                        if not content_to_display.startswith("\n"):
+                            content_to_display = "\n" + content_to_display
+                    except Exception as e:
+                        logger.warning(f"Failed to format markdown: {e}")
+                        # Fallback to original content with line spacing
+                        if not event.content.startswith("\n"):
+                            content_to_display = "\n" + content_to_display
 
                 self.terminal_manager.write_above_prompt(content_to_display)
 

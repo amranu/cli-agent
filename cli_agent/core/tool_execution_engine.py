@@ -21,6 +21,11 @@ class ToolExecutionEngine:
         import sys
 
         try:
+            # Handle special case for emit:result calls from subagents
+            if tool_key == "emit:result" and self.agent.is_subagent:
+                # Return the emit_result tool name for subagents to use
+                return "emit_result"
+
             if tool_key not in self.agent.available_tools:
                 # Try reverse normalization: convert underscores back to colons
                 # This handles cases where LLM calls "ai-models_deepseek_chat" but tool is stored as "ai-models:deepseek_chat"

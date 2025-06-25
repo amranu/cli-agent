@@ -31,6 +31,9 @@ class ChatInterface:
         self.global_interrupt_manager = get_global_interrupt_manager()
         self.terminal_manager = get_terminal_manager()
 
+        # Queue for handling input received during LLM processing
+        self.input_queue = []
+
         # Initialize event emitter if event bus is available
         self.event_emitter = None
         if hasattr(agent, "event_bus") and agent.event_bus:
@@ -48,10 +51,6 @@ class ChatInterface:
         # Initialize messages from existing if provided
         messages = existing_messages[:] if existing_messages else []
 
-        # Display welcome message
-        if not existing_messages:
-            await self.display_welcome_message()
-
         # Set up signal handlers
         self.setup_signal_handlers()
         self.start_conversation()
@@ -59,6 +58,10 @@ class ChatInterface:
         # Start event bus processing if available
         if hasattr(self.agent, "event_bus") and self.agent.event_bus:
             await self.agent.event_bus.start_processing()
+
+        # Display welcome message (after event bus is running for immediate display)
+        if not existing_messages:
+            await self.display_welcome_message()
 
         current_task = None
 
@@ -79,6 +82,8 @@ class ChatInterface:
                     )
                     self.global_interrupt_manager.clear_interrupt()
                     input_handler.interrupted = False
+                    # Clear input queue on interruption
+                    self.input_queue.clear()
                     current_task = None
                     continue
 
@@ -90,6 +95,8 @@ class ChatInterface:
                             "Operation cancelled by user", "user"
                         )
                     input_handler.interrupted = False
+                    # Clear input queue on interruption
+                    self.input_queue.clear()
                     current_task = None
                     continue
 
@@ -105,13 +112,13 @@ class ChatInterface:
                         continue
 
                 # Start persistent prompt for user input
-                self.terminal_manager.start_persistent_prompt("You: ")
+                self.terminal_manager.start_persistent_prompt("> ")
 
                 # Get user input with smart multiline detection (without prompt since it's persistent)
                 user_input = input_handler.get_multiline_input("")
 
-                # Stop persistent prompt once input is received
-                self.terminal_manager.stop_persistent_prompt()
+                # Keep the prompt as "> " instead of changing it
+                # self.terminal_manager.update_prompt("Processing... ")
 
                 if user_input is None:  # Interrupted or EOF
                     if current_task and not current_task.done():
@@ -255,13 +262,15 @@ class ChatInterface:
                             f"Messages being sent to LLM: {len(messages)} messages"
                         )
 
-                        # Create a background task to monitor for escape key
-                        async def monitor_escape():
+                        # Create a background task to handle input during LLM output
+                        async def handle_concurrent_input():
                             import select
                             import termios
                             import tty
 
                             old_settings = None
+                            input_buffer = ""
+
                             try:
                                 while not current_task.done():
                                     try:
@@ -271,7 +280,7 @@ class ChatInterface:
                                                 0
                                             ]
                                         ):
-                                            # Set up raw mode for a single character read
+                                            # Set up raw mode for character-by-character input
                                             if old_settings is None:
                                                 old_settings = termios.tcgetattr(
                                                     sys.stdin.fileno()
@@ -279,10 +288,47 @@ class ChatInterface:
                                                 tty.setraw(sys.stdin.fileno())
 
                                             char = sys.stdin.read(1)
-                                            if char == "\x1b":  # Escape key
+
+                                            if char == "\x1b":  # Escape key - interrupt
                                                 input_handler.interrupted = True
                                                 return
-                                        await asyncio.sleep(0.1)
+                                            elif (
+                                                char == "\r" or char == "\n"
+                                            ):  # Enter key
+                                                if input_buffer.strip():
+                                                    # Process the queued input
+                                                    await self._handle_concurrent_input(
+                                                        input_buffer.strip()
+                                                    )
+                                                    input_buffer = ""
+                                                    # Keep the prompt as "> "
+                                                    # self.terminal_manager.update_prompt("Processing... ")
+                                            elif (
+                                                char == "\x7f" or char == "\x08"
+                                            ):  # Backspace
+                                                if input_buffer:
+                                                    input_buffer = input_buffer[:-1]
+                                                    # Update prompt to show current input
+                                                    display_prompt = (
+                                                        f"Queue: {input_buffer}"
+                                                        if input_buffer
+                                                        else "> "
+                                                    )
+                                                    self.terminal_manager.update_prompt(
+                                                        display_prompt
+                                                    )
+                                            elif (
+                                                char.isprintable()
+                                            ):  # Regular character
+                                                input_buffer += char
+                                                # Update prompt to show current input being typed
+                                                self.terminal_manager.update_prompt(
+                                                    f"Queue: {input_buffer}"
+                                                )
+
+                                        await asyncio.sleep(
+                                            0.05
+                                        )  # Shorter sleep for more responsive input
                                     except Exception:
                                         await asyncio.sleep(0.1)
                             finally:
@@ -293,7 +339,7 @@ class ChatInterface:
                                         old_settings,
                                     )
 
-                        monitor_task = asyncio.create_task(monitor_escape())
+                        monitor_task = asyncio.create_task(handle_concurrent_input())
 
                         # Wait for either completion or interruption
                         response = None
@@ -321,6 +367,8 @@ class ChatInterface:
                             )
                             input_handler.interrupted = False
                             self.global_interrupt_manager.clear_interrupt()
+                            # Clear input queue on interruption
+                            self.input_queue.clear()
                             current_task = None
                             continue
 
@@ -389,14 +437,24 @@ class ChatInterface:
 
                         reset_interrupt_count()
 
+                        # Reset prompt to ready state for next input
+                        self.terminal_manager.update_prompt("> ")
+
+                        # Process any queued input that was received during LLM processing
+                        await self._process_input_queue(messages)
+
                     except ToolDeniedReturnToPrompt as e:
                         await self._emit_error(
                             f"Tool access denied: {e.reason}", "tool_denied"
                         )
+                        # Reset prompt to ready state
+                        self.terminal_manager.update_prompt("> ")
                         continue  # Return to prompt without adding to conversation
                     except Exception as e:
                         logger.error(f"Error in chat: {e}")
                         await self._emit_error(f"Error: {str(e)}", "general")
+                        # Reset prompt to ready state
+                        self.terminal_manager.update_prompt("> ")
                         continue
 
             except KeyboardInterrupt:
@@ -405,6 +463,8 @@ class ChatInterface:
             except Exception as e:
                 error_msg = self.handle_conversation_error(e)
                 await self._emit_error(error_msg, "conversation_error")
+                # Reset prompt to ready state
+                self.terminal_manager.update_prompt("> ")
                 continue
 
         # Stop persistent prompt and display goodbye message
@@ -618,3 +678,86 @@ class ChatInterface:
                 await self._emit_text(content, is_markdown=True)
 
         return content
+
+    async def _handle_concurrent_input(self, input_text: str):
+        """Handle input received while LLM is processing."""
+        await self._emit_system_message(f"Queued input: {input_text}", "info", "📥")
+
+        # Add to input queue for processing after LLM response
+        self.input_queue.append(input_text)
+
+    async def _process_input_queue(self, messages: List[Dict[str, Any]]):
+        """Process any queued input received during LLM processing."""
+        if not self.input_queue:
+            return
+
+        await self._emit_system_message(
+            f"Processing {len(self.input_queue)} queued input(s)...", "info", "⚡"
+        )
+
+        # Process each queued input
+        for queued_input in self.input_queue:
+            # Handle slash commands
+            if queued_input.startswith("/"):
+                slash_result = await self.handle_slash_command(queued_input)
+                if slash_result:
+                    # Handle special command results
+                    if isinstance(slash_result, dict) and slash_result.get("quit"):
+                        await self._emit_system_message(
+                            slash_result.get("status", "Goodbye!"), "goodbye", "👋"
+                        )
+                        self.stop_conversation()
+                        return
+                    elif isinstance(slash_result, dict) and slash_result.get(
+                        "clear_messages"
+                    ):
+                        await self._emit_system_message(
+                            slash_result.get("status", "Messages cleared."),
+                            "status",
+                            "🗑️",
+                        )
+                        messages.clear()
+                    elif isinstance(slash_result, dict) and slash_result.get(
+                        "compacted_messages"
+                    ):
+                        await self._emit_system_message(
+                            slash_result.get("status", "Messages compacted."),
+                            "status",
+                            "🗃",
+                        )
+                        messages[:] = slash_result["compacted_messages"]
+                    elif isinstance(slash_result, dict) and slash_result.get(
+                        "send_to_llm"
+                    ):
+                        # Add the prompt as a user message
+                        messages.append(
+                            {"role": "user", "content": slash_result["send_to_llm"]}
+                        )
+                        await self._emit_system_message(
+                            f"Added to conversation: {slash_result['send_to_llm'][:50]}...",
+                            "info",
+                            "📝",
+                        )
+                    else:
+                        await self._emit_system_message(str(slash_result), "info")
+            else:
+                # Regular input - add to conversation
+                processed_input = self.handle_user_input(queued_input)
+                if processed_input and processed_input.strip():
+                    messages.append({"role": "user", "content": processed_input})
+                    await self._emit_system_message(
+                        f"Added to conversation: {processed_input[:50]}...",
+                        "info",
+                        "📝",
+                    )
+
+        # Clear the queue
+        self.input_queue.clear()
+
+        # If we have new messages, let the user know they can continue
+        if len([msg for msg in messages if msg.get("role") == "user"]) > 0:
+            await self._emit_system_message(
+                "Queued input processed. Continue the conversation or press Enter to send new messages to LLM.",
+                "info",
+                "✅",
+            )

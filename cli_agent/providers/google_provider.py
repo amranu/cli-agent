@@ -35,7 +35,7 @@ class GoogleProvider(BaseProvider):
                     ),
                 )
 
-                client = genai.Client(api_key=self.api_key, http_client=http_client)
+                client = genai.Client(api_key=self.api_key)
 
                 # Store reference for cleanup
                 self.http_client = http_client
@@ -145,11 +145,9 @@ class GoogleProvider(BaseProvider):
         accumulated_tool_calls = []
         metadata = {}
 
+        # Gemini returns a regular generator, not async generator
         for chunk in response:
-            if hasattr(chunk, "text") and chunk.text:
-                accumulated_content += chunk.text
-
-            # Check for function calls in chunk
+            # Check for function calls in chunk first to avoid accessing .text when function calls are present
             if hasattr(chunk, "candidates") and chunk.candidates:
                 if (
                     chunk.candidates[0]
@@ -163,8 +161,18 @@ class GoogleProvider(BaseProvider):
                     ):
 
                         for part in chunk.candidates[0].content.parts:
-                            if hasattr(part, "function_call") and part.function_call:
+                            if hasattr(part, "text") and part.text:
+                                accumulated_content += part.text
+                            elif hasattr(part, "function_call") and part.function_call:
                                 accumulated_tool_calls.append(part.function_call)
+            else:
+                # Fallback: if no candidates, try direct text access (for simple text chunks)
+                if (
+                    hasattr(chunk, "text")
+                    and chunk.text
+                    and not hasattr(chunk, "candidates")
+                ):
+                    accumulated_content += chunk.text
 
             # Extract usage metadata from final chunk
             if hasattr(chunk, "usage_metadata"):

@@ -242,8 +242,43 @@ class EventBus:
         if len(self._event_history) > self.max_history:
             self._event_history.pop(0)
 
-        # Queue for processing
-        await self.event_queue.put(event)
+        # For critical events that need immediate display (like streaming text),
+        # process them immediately instead of queuing
+        critical_event_types = {
+            EventType.TEXT,
+            EventType.TOOL_CALL,
+            EventType.TOOL_RESULT,
+            EventType.ERROR,
+            EventType.STATUS,
+            EventType.TOOL_EXECUTION_START,
+            EventType.SYSTEM_MESSAGE,
+            EventType.UI_STATUS,
+        }
+
+        if event.event_type in critical_event_types and self.is_running:
+            # Process immediately for better streaming responsiveness
+            subscribers = self.subscribers.get(event.event_type, [])
+            for callback in subscribers:
+                try:
+                    if asyncio.iscoroutinefunction(callback):
+                        await callback(event)
+                    else:
+                        callback(event)
+                except Exception as e:
+                    logger.error(f"Error in immediate event callback: {e}")
+                    # Emit error event (but queue it to avoid recursion)
+                    error_event = ErrorEvent(
+                        event_id="",
+                        timestamp=datetime.now(),
+                        error_message=str(e),
+                        error_type="callback_error",
+                    )
+                    # Queue the error event instead of immediate processing
+                    await self.event_queue.put(error_event)
+        else:
+            # Queue for processing (non-critical events or when not running)
+            await self.event_queue.put(event)
+
         logger.debug(f"Emitted event: {event.event_type.value} - {event.event_id}")
 
     def emit_sync(self, event: Event):

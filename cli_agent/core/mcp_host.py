@@ -1,5 +1,6 @@
 """Unified MCP Host that combines Provider with Model."""
 
+import asyncio
 import json
 import logging
 from types import SimpleNamespace
@@ -196,8 +197,24 @@ class MCPHost(BaseLLMProvider):
         )
 
         # Process chunks and accumulate content for proper markdown formatting
-        async for chunk in response:
+        # Handle both async and sync iterators (Gemini returns sync generator)
+        if hasattr(response, "__aiter__"):
+            # Async iterator (OpenAI, Anthropic, etc.)
+            chunks_iter = response
+        else:
+            # Sync iterator (Gemini) - convert to async with yield points for event processing
+            async def async_generator():
+                for chunk in response:
+                    yield chunk
+                    # Yield control to allow immediate event processing
+                    await asyncio.sleep(0)
+
+            chunks_iter = async_generator()
+
+        async for chunk in chunks_iter:
+            # Handle different provider chunk formats
             if hasattr(chunk, "choices") and chunk.choices:
+                # OpenAI/Anthropic format
                 delta = chunk.choices[0].delta
 
                 # Handle reasoning content (deepseek-reasoner)
@@ -249,11 +266,45 @@ class MCPHost(BaseLLMProvider):
                                         "function"
                                     ]["arguments"] += func.arguments
 
-        # Content accumulation complete - emit buffered response while event bus is still active
+            elif hasattr(chunk, "candidates") and chunk.candidates:
+                # Gemini format - only process through candidates to avoid .text warnings
+                chunk_text = ""
+                candidate = chunk.candidates[0] if chunk.candidates else None
+                if candidate and hasattr(candidate, "content") and candidate.content:
+                    if hasattr(candidate.content, "parts") and candidate.content.parts:
+                        for part in candidate.content.parts:
+                            if hasattr(part, "text") and part.text:
+                                chunk_text += part.text
+                                accumulated_content += part.text
+                            elif hasattr(part, "function_call") and part.function_call:
+                                # Convert Gemini function call to standard format
+                                fc = part.function_call
+                                tool_call = {
+                                    "id": getattr(fc, "id", None)
+                                    or f"call_{len(accumulated_tool_calls)}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": fc.name,
+                                        "arguments": json.dumps(
+                                            dict(fc.args) if fc.args else {}
+                                        ),
+                                    },
+                                }
+                                accumulated_tool_calls.append(tool_call)
+
+                                # Emit tool call discovered event
+                                await self.event_emitter.emit_status(
+                                    f"Tool call detected: {fc.name}", level="info"
+                                )
+
+                # Don't emit text immediately - buffer for proper markdown formatting
+
+        # Emit accumulated content as properly formatted markdown
         if accumulated_content:
             logger.debug(
-                f"Emitting buffered response during streaming: {len(accumulated_content)} characters"
+                f"Emitting buffered content: {len(accumulated_content)} characters"
             )
+            # Emit the complete response with markdown formatting
             await self.event_emitter.emit_text(
                 content=accumulated_content, is_streaming=False, is_markdown=True
             )
@@ -477,7 +528,7 @@ class MCPHost(BaseLLMProvider):
                     user_content = enhanced_messages[0]["content"]
                     enhanced_messages[0][
                         "content"
-                    ] = f"{system_prompt}\n\n---\n\nUser: {user_content}"
+                    ] = f"{system_prompt}\n\n---\n\n{user_content}"
             elif system_style == "none":
                 # Skip system prompt entirely (e.g., for o1 models that don't work well with instructions)
                 pass

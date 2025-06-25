@@ -26,19 +26,22 @@ class TerminalManager:
             except OSError:
                 self.terminal_height, self.terminal_width = 24, 80
 
+            # Initialize the hint line on startup
+            self._initialize_hint_line()
+
     def start_persistent_prompt(self, prompt_text: str):
         """Start displaying a persistent prompt at the bottom of the terminal."""
         if not self.is_terminal:
             return
 
+        # Refresh terminal size in case it changed
+        self._refresh_terminal_size()
+
         self.prompt_text = prompt_text
         self.prompt_active = True
 
-        # Save cursor position and move to bottom
-        self._save_cursor()
-        self._move_to_bottom()
-        self._clear_line()
-        sys.stdout.write(prompt_text)
+        # Move to bottom and display the two-line prompt
+        self._move_to_bottom_with_hint()
         sys.stdout.flush()
 
     def stop_persistent_prompt(self):
@@ -52,34 +55,28 @@ class TerminalManager:
         sys.stdout.flush()
 
     def write_above_prompt(self, text: str):
-        """Write text above the persistent prompt."""
-        if not self.is_terminal:
-            # Fallback for non-terminal environments
-            sys.stdout.write(text)
-            sys.stdout.flush()
+        """Write text above the persistent prompt using print for immediate display."""
+        if not self.is_terminal or not self.prompt_active:
+            # Fallback for non-terminal environments or no active prompt - use direct print
+            print(text, end="", flush=True)
             return
 
-        if self.prompt_active:
-            # Save current cursor position
-            self._save_cursor()
+        try:
+            # For terminal with active prompt, write to a safe position above the hint line
+            # Move to line above the hint (terminal_height - 2)
+            safe_line = max(1, self.terminal_height - 2)
+            sys.stdout.write(f"\033[{safe_line};1H")
 
-            # Move to the line above the prompt
-            self._move_cursor_up(1)
-
-            # Write the text and ensure it ends with newline
+            # Use print for immediate display, ensure newline handling
             if not text.endswith("\n"):
                 text += "\n"
-            sys.stdout.write(text)
+            print(text, end="", flush=True)
 
-            # Move to bottom and redraw prompt
-            self._move_to_bottom()
-            self._clear_line()
-            sys.stdout.write(self.prompt_text)
-            sys.stdout.flush()
-        else:
-            # No prompt active, write normally
-            sys.stdout.write(text)
-            sys.stdout.flush()
+            # Redraw the two-line prompt to ensure it stays visible
+            self._move_to_bottom_with_hint()
+        except Exception:
+            # If terminal positioning fails, fall back to simple print
+            print(text, end="", flush=True)
 
     def update_prompt(self, new_prompt_text: str):
         """Update the prompt text."""
@@ -88,9 +85,7 @@ class TerminalManager:
 
         self.prompt_text = new_prompt_text
         if self.prompt_active:
-            self._move_to_bottom()
-            self._clear_line()
-            sys.stdout.write(new_prompt_text)
+            self._move_to_bottom_with_hint()
             sys.stdout.flush()
 
     def _save_cursor(self):
@@ -106,6 +101,32 @@ class TerminalManager:
         sys.stdout.write(
             f"\033[{self.terminal_height};1H"
         )  # Move to bottom line, column 1
+
+    def _move_to_bottom_with_hint(self):
+        """Move to bottom and display the two-line prompt with hint."""
+        try:
+            # Ensure we have valid terminal dimensions
+            if self.terminal_height < 3:
+                self.terminal_height = 24  # Fallback
+
+            # Move to second-to-last line for the hint
+            hint_line = self.terminal_height - 1
+            sys.stdout.write(f"\033[{hint_line};1H")
+            self._clear_line()
+            sys.stdout.write(
+                "--- HINT HERE ---"
+            )  # Temporary debug: No color, distinct text
+
+            # Move to bottom line for the actual prompt
+            prompt_line = self.terminal_height
+            sys.stdout.write(f"\033[{prompt_line};1H")
+            self._clear_line()
+            sys.stdout.write(self.prompt_text)
+            sys.stdout.flush()
+        except Exception:
+            # If positioning fails, just write the prompt
+            sys.stdout.write(self.prompt_text)
+            sys.stdout.flush()
 
     def _move_cursor_up(self, lines: int):
         """Move cursor up by specified number of lines."""
@@ -151,6 +172,38 @@ class TerminalManager:
                 pass
             finally:
                 self.original_settings = None
+
+    def _initialize_hint_line(self):
+        """Initialize the hint line at the bottom of the terminal on startup."""
+        if not self.is_terminal:
+            return
+
+        try:
+            # Reserve the last two lines for our prompt
+            # Move to second-to-last line and display hint
+            sys.stdout.write(f"\033[{self.terminal_height - 1};1H")
+            self._clear_line()
+            sys.stdout.write(
+                "--- HINT HERE ---"
+            )  # Temporary debug: No color, distinct text
+
+            # Move to last line and clear it (prepare for prompt)
+            sys.stdout.write(f"\033[{self.terminal_height};1H")
+            self._clear_line()
+
+            sys.stdout.flush()
+        except Exception:
+            # If initialization fails, continue without hint
+            pass
+
+    def _refresh_terminal_size(self):
+        """Refresh terminal size in case window was resized."""
+        if self.is_terminal:
+            try:
+                self.terminal_height, self.terminal_width = os.get_terminal_size()
+            except OSError:
+                # Keep current values if refresh fails
+                pass
 
 
 # Global terminal manager instance
