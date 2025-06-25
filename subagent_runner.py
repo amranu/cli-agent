@@ -120,20 +120,12 @@ async def run_subagent_task(task_file_path: str):
                 emit_output_with_id(f"Created {config.default_provider_model} subagent")
 
         except Exception as e:
-            # Fallback to legacy for compatibility
+            # Provider-model creation failed - this is a critical error for subagents
+            emit_output_with_id(f"Provider-model creation failed: {e}")
             emit_output_with_id(
-                f"Provider-model creation failed: {e}, falling back to legacy"
+                "Subagent cannot start without valid provider-model configuration"
             )
-            if config.deepseek_model == "gemini":
-                from mcp_gemini_host import MCPGeminiHost
-
-                host = MCPGeminiHost(config, is_subagent=True)
-                emit_output_with_id("Created legacy Gemini subagent")
-            else:
-                from mcp_deepseek_host import MCPDeepseekHost
-
-                host = MCPDeepseekHost(config, is_subagent=True)
-                emit_output_with_id("Created legacy DeepSeek subagent")
+            raise RuntimeError(f"Failed to create subagent host: {e}")
 
         # Set up tool permission manager for subagent (inherits main agent settings)
         from cli_agent.core.input_handler import InterruptibleInput
