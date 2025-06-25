@@ -136,7 +136,22 @@ class BaseMCPAgent(ABC):
 
         # Initialize utility classes
         self.builtin_executor = BuiltinToolExecutor(self)
+
+        # Initialize event system first
+        from cli_agent.core.event_system import EventBus, EventEmitter
+        from cli_agent.core.display_manager import DisplayManager
+        
+        self.event_bus = EventBus()
+        self.event_emitter = EventEmitter(self.event_bus)
+        
+        # Initialize subagent coordinator after event system is available
         self.subagent_coordinator = SubagentCoordinator(self)
+        
+        # Initialize display manager for interactive mode
+        # For subagents, use non-interactive mode to avoid double display
+        self.display_manager = DisplayManager(self.event_bus, interactive=not is_subagent)
+        
+        logger.debug("Initialized event system with display manager")
 
         # Initialize modular components
         self.message_processor = MessageProcessor(self)
@@ -166,13 +181,15 @@ class BaseMCPAgent(ABC):
             # Remove subagent management tools for subagents to prevent recursion
             subagent_tools = [
                 "builtin:task",
-                "builtin:task_status",
+                "builtin:task_status", 
                 "builtin:task_results",
             ]
             for tool_key in subagent_tools:
                 if tool_key in builtin_tools:
                     del builtin_tools[tool_key]
                     logger.info(f"Removed {tool_key} from subagent tools")
+            # Ensure emit_result is available for subagents
+            logger.info(f"Subagent has emit_result tool: {'builtin:emit_result' in builtin_tools}")
         else:
             # Remove emit_result tool for main agents (subagents only)
             if "builtin:emit_result" in builtin_tools:
@@ -187,33 +204,40 @@ class BaseMCPAgent(ABC):
                 f"Subagent initialized with {len(self.available_tools)} tools: {list(self.available_tools.keys())}"
             )
 
+    def _normalize_tool_name(self, tool_name: str) -> str:
+        """Ensure tool name is fully qualified with prefix (e.g., builtin:)."""
+        if not tool_name.startswith("builtin:"):
+            return f"builtin:{tool_name}"
+        return tool_name
+
     async def _execute_builtin_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Execute a built-in tool."""
-        if tool_name == "bash_execute":
+        tool_name = self._normalize_tool_name(tool_name)
+        if tool_name == "builtin:bash_execute":
             return self.builtin_executor.bash_execute(args)
-        elif tool_name == "read_file":
+        elif tool_name == "builtin:read_file":
             return self.builtin_executor.read_file(args)
-        elif tool_name == "write_file":
+        elif tool_name == "builtin:write_file":
             return self.builtin_executor.write_file(args)
-        elif tool_name == "list_directory":
+        elif tool_name == "builtin:list_directory":
             return self.builtin_executor.list_directory(args)
-        elif tool_name == "get_current_directory":
+        elif tool_name == "builtin:get_current_directory":
             return self.builtin_executor.get_current_directory(args)
-        elif tool_name == "todo_read":
+        elif tool_name == "builtin:todo_read":
             return self.builtin_executor.todo_read(args)
-        elif tool_name == "todo_write":
+        elif tool_name == "builtin:todo_write":
             return self.builtin_executor.todo_write(args)
-        elif tool_name == "replace_in_file":
+        elif tool_name == "builtin:replace_in_file":
             return self.builtin_executor.replace_in_file(args)
-        elif tool_name == "webfetch":
+        elif tool_name == "builtin:webfetch":
             return self.builtin_executor.webfetch(args)
-        elif tool_name == "task":
+        elif tool_name == "builtin:task":
             return await self.builtin_executor.task(args)
-        elif tool_name == "task_status":
+        elif tool_name == "builtin:task_status":
             return self.builtin_executor.task_status(args)
-        elif tool_name == "task_results":
+        elif tool_name == "builtin:task_results":
             return self.builtin_executor.task_results(args)
-        elif tool_name == "emit_result":
+        elif tool_name == "builtin:emit_result":
             return await self._emit_result(args)
         else:
             return f"Unknown built-in tool: {tool_name}"
@@ -342,6 +366,11 @@ class BaseMCPAgent(ABC):
         """Shutdown all MCP connections."""
         logger.info("Shutting down MCP connections...")
 
+        # Stop event bus processing
+        if hasattr(self, "event_bus") and self.event_bus:
+            await self.event_bus.stop_processing()
+            logger.info("Event bus stopped")
+
         # Close FastMCP client sessions
         for server_name, client in self.mcp_clients.items():
             try:
@@ -387,9 +416,10 @@ class BaseMCPAgent(ABC):
                 formatted = f"✅ [SUBAGENT-{task_id}] Result: {message.content}"
             elif message.type == "permission_request":
                 # Handle permission request from subagent
-                self.subagent_coordinator.handle_subagent_permission_request(
+                import asyncio
+                asyncio.create_task(self.subagent_coordinator.handle_subagent_permission_request(
                     message, task_id
-                )
+                ))
                 return  # Don't display permission requests, handle them directly
             else:
                 formatted = f"[SUBAGENT-{task_id} {message.type}] {message.content}"
@@ -1774,6 +1804,33 @@ class BaseMCPAgent(ABC):
         if not interactive or not tool_calls:
             return
 
+        # Use event system if available
+        if hasattr(self, 'event_bus') and self.event_bus:
+            from cli_agent.core.event_system import ToolExecutionStartEvent
+            for tc in tool_calls:
+                tool_name = tc["function"]["name"].replace("_", ":", 1)
+                try:
+                    args = tc["function"]["arguments"]
+                    if isinstance(args, str):
+                        args = json.loads(args)
+                    event = ToolExecutionStartEvent(
+                        tool_name=tool_name,
+                        tool_id=tc.get("id", "unknown"),
+                        arguments=args,
+                        streaming_mode=streaming_mode
+                    )
+                    asyncio.create_task(self.event_bus.emit(event))
+                except Exception:
+                    event = ToolExecutionStartEvent(
+                        tool_name=tool_name,
+                        tool_id=tc.get("id", "unknown"),
+                        arguments={},
+                        streaming_mode=streaming_mode
+                    )
+                    asyncio.create_task(self.event_bus.emit(event))
+            return
+
+        # Fallback to direct printing
         if streaming_mode:
             print(f"\\n🔧 Executing {len(tool_calls)} tool(s)...", flush=True)
         else:

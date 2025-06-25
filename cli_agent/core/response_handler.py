@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, List, Optional, Union
 
 from cli_agent.core.global_interrupt import get_global_interrupt_manager
+from cli_agent.core.event_system import EventBus, TextEvent, ToolCallEvent, ToolResultEvent, StatusEvent
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,12 @@ class ResponseHandler:
         """Initialize with reference to the parent agent."""
         self.agent = agent
         self.global_interrupt_manager = get_global_interrupt_manager()
+        
+        # Initialize event emitter if event bus is available
+        self.event_emitter = None
+        if hasattr(agent, 'event_bus') and agent.event_bus:
+            from cli_agent.core.event_system import EventEmitter
+            self.event_emitter = EventEmitter(agent.event_bus)
 
     def _ensure_arguments_are_json_string(self, arguments: Any) -> str:
         """Ensure tool call arguments are formatted as JSON string.
@@ -56,8 +63,9 @@ class ResponseHandler:
             # Extract text that appears before tool calls
             text_before_tools = self.agent._extract_text_before_tool_calls(text_content)
             if text_before_tools:
-                formatted_text = self.agent.formatter.format_markdown(text_before_tools)
-                print(f"\n{formatted_text}", flush=True)
+                # Text formatting is handled by _process_streaming_chunks_with_events
+                # No display logic needed here
+                pass
 
         # Process tool calls if any
         if tool_calls:
@@ -99,32 +107,61 @@ class ResponseHandler:
         interactive: bool = True,
     ):
         """Generic handler for streaming responses from any LLM provider."""
+        
+        # Store updated messages that can be accessed after streaming completes
+        self._updated_messages = None
 
         async def async_stream_generator():
+            logger.info("Starting async_stream_generator")
             # Process streaming chunks to get full response
-            accumulated_content, tool_calls, provider_data = (
-                await self.agent._process_streaming_chunks(response)
-            )
+            try:
+                accumulated_content, tool_calls, provider_data = (
+                    await self.agent._process_streaming_chunks(response)
+                )
+                logger.info(f"Processed streaming chunks: content={len(accumulated_content)} chars, tools={len(tool_calls) if tool_calls else 0}")
+            except Exception as e:
+                logger.error(f"Error processing streaming chunks: {e}")
+                accumulated_content = ""
+                tool_calls = []
+                provider_data = {}
 
             # Handle provider-specific features (like reasoning content)
             self.agent._handle_provider_specific_features(provider_data)
 
-            # First, yield the accumulated content (the actual LLM response)
-            if accumulated_content:
-                yield accumulated_content
-
-            # If there are tool calls, check for subagent spawning first
+            # Check for subagent spawning BEFORE yielding any content
+            task_tools_executed = False
             if tool_calls:
                 # Check if any task tools will be executed (subagent spawning)
-                task_tools_executed = any(
-                    "task"
-                    in getattr(
-                        tc,
-                        "name",
-                        tc.function.name if hasattr(tc, "function") else "unknown",
-                    )
-                    for tc in tool_calls
-                )
+                for tc in tool_calls:
+                    tool_name = ""
+                    # Handle dictionary format (most common)
+                    if isinstance(tc, dict):
+                        if "function" in tc and isinstance(tc["function"], dict):
+                            tool_name = tc["function"].get("name", "")
+                        elif "name" in tc:
+                            tool_name = tc["name"]
+                    # Handle object format (backup)
+                    elif hasattr(tc, "name") and tc.name:
+                        tool_name = tc.name
+                    elif hasattr(tc, "function") and hasattr(tc.function, "name"):
+                        tool_name = tc.function.name
+                    
+                    # Check if this is a task spawning tool
+                    if "task" in tool_name:
+                        task_tools_executed = True
+                        logger.info(f"Detected task tool execution: {tool_name} - will not yield content until subagents complete")
+                        break
+
+            # If subagents will be spawned, DO NOT yield content yet - wait for subagent completion
+            if not task_tools_executed and accumulated_content:
+                # Only yield content if no subagents will be spawned
+                logger.debug("No task tools detected, yielding accumulated content")
+                yield accumulated_content
+            elif task_tools_executed:
+                logger.info("Task tools detected - suppressing content yield until subagent completion")
+
+            # Process tool calls
+            if tool_calls:
 
                 # Add assistant message with tool calls to conversation
                 current_messages = original_messages.copy() if original_messages else []
@@ -134,28 +171,18 @@ class ResponseHandler:
                         "content": accumulated_content or "",
                         "tool_calls": [
                             {
-                                "id": getattr(tc, "id", f"call_{i}"),
+                                "id": tc.get("id", f"call_{i}") if isinstance(tc, dict) else getattr(tc, "id", f"call_{i}"),
                                 "type": "function",
                                 "function": {
-                                    "name": getattr(
-                                        tc,
-                                        "name",
-                                        (
-                                            tc.function.name
-                                            if hasattr(tc, "function")
-                                            else "unknown"
-                                        ),
+                                    "name": (
+                                        tc["function"]["name"] if isinstance(tc, dict) and "function" in tc and isinstance(tc["function"], dict)
+                                        else tc.get("name", "unknown") if isinstance(tc, dict)
+                                        else getattr(tc, "name", getattr(tc.function, "name", "unknown") if hasattr(tc, "function") else "unknown")
                                     ),
                                     "arguments": self._ensure_arguments_are_json_string(
-                                        getattr(
-                                            tc,
-                                            "args",
-                                            (
-                                                tc.function.arguments
-                                                if hasattr(tc, "function")
-                                                else {}
-                                            ),
-                                        )
+                                        tc["function"]["arguments"] if isinstance(tc, dict) and "function" in tc and isinstance(tc["function"], dict)
+                                        else tc.get("args", {}) if isinstance(tc, dict)
+                                        else getattr(tc, "args", getattr(tc.function, "arguments", {}) if hasattr(tc, "function") else {})
                                     ),
                                 },
                             }
@@ -163,20 +190,20 @@ class ResponseHandler:
                         ],
                     }
                 )
+                
+                # Store updated messages for access after streaming
+                self._updated_messages = current_messages
 
-                if interactive:
-                    print(f"\n\n🔧 Executing {len(tool_calls)} tool(s)...", flush=True)
+                # Tool execution status is handled by _process_streaming_chunks_with_events
+                # Focus only on tool execution logic here
 
                 # Execute each tool and add results to conversation
                 for i, tool_call in enumerate(tool_calls):
                     try:
                         # Check for global interrupt before each tool execution
                         if self.global_interrupt_manager.is_interrupted():
-                            if interactive:
-                                print(
-                                    "\n🛑 Tool execution interrupted by user",
-                                    flush=True,
-                                )
+                            # Tool execution interrupted - no display logic needed here
+                            pass
                             break
 
                         # Also check input handler for additional interrupt detection
@@ -186,26 +213,43 @@ class ResponseHandler:
                         ):
                             # Check for pending interrupts (ESC/Ctrl+C)
                             if self.agent._input_handler.check_for_interrupt():
-                                if interactive:
-                                    print(
-                                        "\n🛑 Tool execution interrupted by user",
-                                        flush=True,
-                                    )
+                                # Tool execution interrupted - break without display
                                 break
 
-                        tool_name = getattr(
-                            tool_call,
-                            "name",
-                            (
-                                tool_call.function.name
-                                if hasattr(tool_call, "function")
-                                else "unknown"
-                            ),
-                        )
+                        # Extract tool name with better error handling for both dict and object formats
+                        tool_name = "unknown"
+                        
+                        # Handle dictionary format (most common)
+                        if isinstance(tool_call, dict):
+                            if "function" in tool_call and isinstance(tool_call["function"], dict):
+                                tool_name = tool_call["function"].get("name", "unknown")
+                            elif "name" in tool_call:
+                                tool_name = tool_call["name"]
+                        # Handle object format (backup)
+                        elif hasattr(tool_call, "name") and tool_call.name:
+                            tool_name = tool_call.name
+                        elif hasattr(tool_call, "function") and hasattr(tool_call.function, "name"):
+                            tool_name = tool_call.function.name
+                        
+                        logger.debug(f"Extracted tool_name: {tool_name} from tool_call: {type(tool_call)} - {tool_call}")
+                        # Extract tool call ID handling both dict and object formats
+                        if isinstance(tool_call, dict):
+                            tool_call_id = tool_call.get("id", f"call_{i}")
+                        else:
+                            tool_call_id = getattr(tool_call, "id", f"call_{i}")
 
-                        # Try to get args from different possible attributes
+                        # Try to get args from different possible formats
                         tool_args = None
-                        if hasattr(tool_call, "args"):
+                        if isinstance(tool_call, dict):
+                            if "function" in tool_call and isinstance(tool_call["function"], dict):
+                                tool_args = tool_call["function"].get("arguments", {})
+                            elif "args" in tool_call:
+                                tool_args = tool_call["args"]
+                            elif "input" in tool_call:
+                                tool_args = tool_call["input"]
+                            else:
+                                tool_args = {}
+                        elif hasattr(tool_call, "args"):
                             tool_args = tool_call.args
                         elif hasattr(tool_call, "input"):
                             tool_args = tool_call.input
@@ -233,6 +277,15 @@ class ResponseHandler:
                                     f"replace_in_file args - old_text: {repr(old_text)}, new_text: {repr(new_text)}"
                                 )
 
+                        # Emit tool execution start event if event bus is available
+                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                            await self.agent.event_emitter.emit_tool_execution_start(
+                                tool_name=tool_name,
+                                tool_id=tool_call_id,
+                                arguments=tool_args,
+                                streaming_mode=True
+                            )
+
                         # Execute the tool - map builtin tools correctly
                         builtin_tools = [
                             "todo_read",
@@ -253,17 +306,33 @@ class ResponseHandler:
                             tool_key = f"builtin:{tool_name}"
                         elif tool_name.startswith("builtin_"):
                             # Handle case where LLM uses builtin_ prefix
-                            actual_tool_name = tool_name.replace("builtin_", "")
-                            tool_key = f"builtin:{actual_tool_name}"
+                            actual_tool_name = tool_name.replace("builtin_", "", 1)
+                            if actual_tool_name in builtin_tools:
+                                tool_key = f"builtin:{actual_tool_name}"
+                            else:
+                                tool_key = tool_name
+                        elif tool_name.startswith("builtin:"):
+                            # Already properly formatted
+                            tool_key = tool_name
                         else:
                             tool_key = tool_name
+                        
+                        logger.debug(f"Final tool_key for execution: {tool_key} (original tool_name: {tool_name})")
                         result = (
                             await self.agent.tool_execution_engine.execute_mcp_tool(
                                 tool_key, tool_args
                             )
                         )
 
-                        if interactive:
+                        # Emit tool result event if event bus is available
+                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                            await self.agent.event_emitter.emit_tool_result(
+                                tool_id=tool_call_id,
+                                tool_name=tool_name,
+                                result=result,
+                                is_error=False
+                            )
+                        elif interactive:
                             # Use formatting utils to handle truncation
                             if hasattr(self.agent, "formatting_utils"):
                                 display_result = (
@@ -271,16 +340,19 @@ class ResponseHandler:
                                         result
                                     )
                                 )
-                                print(f"\n✅ {tool_name}: {display_result}", flush=True)
+                                # Tool results are handled by event system
+                                pass
                             else:
-                                print(f"\n✅ {tool_name}: {result}", flush=True)
+                                # Tool results are handled by event system
+                                pass
 
                         # Add tool result to conversation
                         current_messages.append(
                             {
                                 "role": "tool",
                                 "content": result,
-                                "tool_call_id": getattr(tool_call, "id", f"call_{i}"),
+                                "tool_call_id": tool_call_id,
+                                "name": tool_name,  # Add tool name for provider compatibility
                             }
                         )
 
@@ -295,7 +367,16 @@ class ResponseHandler:
                             raise
 
                         error_msg = f"Error executing {tool_name}: {str(e)}"
-                        if interactive:
+                        
+                        # Emit tool result error event if event bus is available
+                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                            await self.agent.event_emitter.emit_tool_result(
+                                tool_id=getattr(tool_call, "id", f"call_{i}"),
+                                tool_name=tool_name,
+                                result=error_msg,
+                                is_error=True
+                            )
+                        elif interactive:
                             # Use formatting utils to handle truncation for errors too
                             if hasattr(self.agent, "formatting_utils"):
                                 display_error = (
@@ -303,9 +384,11 @@ class ResponseHandler:
                                         error_msg
                                     )
                                 )
-                                print(f"\n❌ {display_error}", flush=True)
+                                # Tool errors are handled by event system
+                                pass
                             else:
-                                print(f"\n❌ {error_msg}", flush=True)
+                                # Tool errors are handled by event system
+                                pass
 
                         # Add error to conversation
                         current_messages.append(
@@ -322,11 +405,15 @@ class ResponseHandler:
                     and self.agent.subagent_manager
                     and self.agent.subagent_manager.get_active_count() > 0
                 ):
-                    if interactive:
-                        print(
-                            f"\n\n🔄 Subagents spawned - interrupting main stream to wait for completion...\n",
-                            flush=True,
+                    # Emit status event for subagent spawning
+                    if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                        await self.agent.event_emitter.emit_status(
+                            status="Subagents spawned",
+                            details="Interrupting main stream to wait for completion",
+                            level="info"
                         )
+                    # Subagent status messages handled by event system
+                    pass
 
                     # Wait for all subagents to complete and collect results
                     subagent_results = (
@@ -334,11 +421,15 @@ class ResponseHandler:
                     )
 
                     if subagent_results:
-                        if interactive:
-                            print(
-                                f"\n📋 Collected {len(subagent_results)} subagent result(s). Restarting with results...\n",
-                                flush=True,
+                        # Emit status event for subagent results collection
+                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                            await self.agent.event_emitter.emit_status(
+                                status=f"Collected {len(subagent_results)} subagent result(s)",
+                                details="Restarting with results",
+                                level="info"
                             )
+                        # Subagent collection status handled by event system
+                        pass
 
                         # Create continuation message with subagent results
                         original_request = (
@@ -350,15 +441,21 @@ class ResponseHandler:
                             original_request, subagent_results
                         )
 
-                        # Restart conversation with subagent results instead of continuing
-                        if interactive:
-                            print(
-                                f"\n🔄 Restarting conversation with subagent results...\n",
-                                flush=True,
+                        # Emit status event for conversation restart
+                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                            await self.agent.event_emitter.emit_status(
+                                status="Restarting conversation with subagent results",
+                                details="Processing continuation with collected results",
+                                level="info"
                             )
+                        # Subagent restart status handled by event system
+                        pass
 
+                        # Include the full conversation history plus the continuation message
+                        # This ensures the LLM has context of all previous tool calls and results
+                        continuation_messages = current_messages + [continuation_message]
                         restart_response = await self.agent.generate_response(
-                            [continuation_message], stream=True
+                            continuation_messages, stream=True
                         )
                         if hasattr(restart_response, "__aiter__"):
                             yield f"\n\n"
@@ -368,20 +465,63 @@ class ResponseHandler:
                             yield f"\n\n{str(restart_response)}"
                         return  # Exit - don't continue with original tool results
                     else:
-                        if interactive:
-                            print(
-                                f"\n⚠️ No results collected from subagents.\n",
-                                flush=True,
+                        # Emit warning event for no subagent results
+                        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                            await self.agent.event_emitter.emit_status(
+                                status="No results collected from subagents",
+                                details="Subagents completed without providing results",
+                                level="warning"
                             )
+                        # Subagent no-results status handled by event system
+                        pass
                         return
 
                 # Generate follow-up response with tool results (only if no subagents were spawned)
-                if interactive:
-                    print(f"\n\n💭 Processing tool results...", flush=True)
+                if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+                    await self.agent.event_emitter.emit_status(
+                        status="Processing tool results",
+                        details="Generating follow-up response based on tool outputs",
+                        level="info"
+                    )
+                # Tool result processing status handled by event system
+                pass
 
                 try:
+                    # Add instruction to prevent repeating identical tool calls (same tool + same arguments)
+                    final_messages = current_messages.copy()
+                    
+                    # Build a list of recently executed tool calls with their arguments
+                    recent_tool_calls = []
+                    for msg in current_messages[-10:]:  # Check last 10 messages
+                        if msg.get('role') == 'assistant' and 'tool_calls' in msg:
+                            for tc in msg['tool_calls']:
+                                # Handle both dict and object formats for tool calls
+                                if isinstance(tc, dict):
+                                    if 'function' in tc and isinstance(tc['function'], dict):
+                                        tool_name = tc['function'].get('name', 'unknown')
+                                        tool_args = tc['function'].get('arguments', '{}')
+                                    else:
+                                        tool_name = tc.get('name', 'unknown')
+                                        tool_args = tc.get('arguments', '{}')
+                                else:
+                                    tool_name = getattr(tc, 'name', getattr(tc.function, 'name', 'unknown') if hasattr(tc, 'function') else 'unknown')
+                                    tool_args = getattr(tc, 'arguments', getattr(tc.function, 'arguments', '{}') if hasattr(tc, 'function') else '{}')
+                                recent_tool_calls.append(f"{tool_name} with arguments {tool_args}")
+                    
+                    if recent_tool_calls:
+                        # Create specific instruction about not repeating identical calls
+                        final_messages.append({
+                            "role": "user",
+                            "content": f"You have already executed these exact tool calls in this conversation: {', '.join(recent_tool_calls)}. Please provide your response based on those results. Only make new tool calls if you need different tools or the same tools with different arguments."
+                        })
+                    else:
+                        final_messages.append({
+                            "role": "user", 
+                            "content": "Please provide your response based on the tool results above."
+                        })
+                    
                     follow_up_response = await self.agent.generate_response(
-                        current_messages, stream=True
+                        final_messages, stream=True
                     )
                     if hasattr(follow_up_response, "__aiter__"):
                         yield f"\n\n"
@@ -390,10 +530,14 @@ class ResponseHandler:
                     else:
                         yield f"\n\n{str(follow_up_response)}"
                 except Exception as e:
-                    if interactive:
-                        print(f"\n❌ Error generating follow-up: {str(e)}", flush=True)
+                    # Follow-up errors handled by event system
+                    pass
 
         return async_stream_generator()
+    
+    def get_updated_messages(self) -> Optional[List[Dict[str, Any]]]:
+        """Get the updated conversation messages after tool execution."""
+        return getattr(self, '_updated_messages', None)
 
     async def process_tool_calls_centralized(
         self,

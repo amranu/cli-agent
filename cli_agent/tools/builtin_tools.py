@@ -107,7 +107,7 @@ def get_current_directory_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "get_current_directory",
-        "description": "Get the current working directory path. This tool takes no parameters and returns the absolute path of the current working directory.",
+        "description": "Get the current working directory path. This tool takes no parameters and returns the absolute path of the current working directory. Use this tool only once per request - the result provides the complete directory path information needed.",
         "schema": {"type": "object", "properties": {}, "required": []},
         "client": None,
     }

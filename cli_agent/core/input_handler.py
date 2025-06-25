@@ -175,6 +175,7 @@ class InterruptibleInput:
             return None
         except EOFError:
             # Handle Ctrl+D gracefully
+            self.interrupted = True
             return None
         except Exception as e:
             logger.error(f"Error in prompt_toolkit input: {e}")
@@ -182,6 +183,9 @@ class InterruptibleInput:
             try:
                 return input(prompt_text)
             except KeyboardInterrupt:
+                self.interrupted = True
+                return None
+            except EOFError:
                 self.interrupted = True
                 return None
 

@@ -7,6 +7,14 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from cli_agent.core.global_interrupt import get_global_interrupt_manager
+from cli_agent.core.event_system import (
+    SystemMessageEvent,
+    InterruptEvent,
+    StatusEvent,
+    ErrorEvent,
+    TextEvent,
+    EventEmitter
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +28,11 @@ class ChatInterface:
         self.conversation_active = False
         self.interrupt_received = False
         self.global_interrupt_manager = get_global_interrupt_manager()
+        
+        # Initialize event emitter if event bus is available
+        self.event_emitter = None
+        if hasattr(agent, 'event_bus') and agent.event_bus:
+            self.event_emitter = EventEmitter(agent.event_bus)
 
     async def interactive_chat(
         self, input_handler, existing_messages: Optional[List[Dict[str, Any]]] = None
@@ -35,11 +48,15 @@ class ChatInterface:
 
         # Display welcome message
         if not existing_messages:
-            self.display_welcome_message()
+            await self.display_welcome_message()
 
         # Set up signal handlers
         self.setup_signal_handlers()
         self.start_conversation()
+        
+        # Start event bus processing if available
+        if hasattr(self.agent, 'event_bus') and self.agent.event_bus:
+            await self.agent.event_bus.start_processing()
 
         current_task = None
 
@@ -55,7 +72,7 @@ class ChatInterface:
                             pass
                         except Exception:
                             pass
-                    print("🛑 Operation cancelled, returning to prompt")
+                    await self._emit_interruption("Operation cancelled, returning to prompt", "global")
                     self.global_interrupt_manager.clear_interrupt()
                     input_handler.interrupted = False
                     current_task = None
@@ -65,18 +82,26 @@ class ChatInterface:
                 if input_handler.interrupted:
                     if current_task and not current_task.done():
                         current_task.cancel()
-                        print("🛑 Operation cancelled by user")
+                        await self._emit_interruption("Operation cancelled by user", "user")
                     input_handler.interrupted = False
                     current_task = None
                     continue
 
+                # Check if subagents are active - if so, don't prompt for input
+                if hasattr(self.agent, 'subagent_manager') and self.agent.subagent_manager:
+                    active_count = self.agent.subagent_manager.get_active_count()
+                    if active_count > 0:
+                        # Subagents are running, wait instead of prompting for input
+                        await asyncio.sleep(0.5)
+                        continue
+                
                 # Get user input with smart multiline detection
                 user_input = input_handler.get_multiline_input("You: ")
 
                 if user_input is None:  # Interrupted or EOF
                     if current_task and not current_task.done():
                         current_task.cancel()
-                        print("🛑 Operation cancelled by user")
+                        await self._emit_interruption("Operation cancelled by user", "user")
                     current_task = None
                     # If interrupted (EOF), exit the conversation
                     if input_handler.interrupted:
@@ -88,7 +113,7 @@ class ChatInterface:
                 if user_input == "":
                     # Empty input could indicate EOF in non-interactive mode
                     if not sys.stdin.isatty():
-                        print("🔚 End of input detected, exiting...")
+                        await self._emit_system_message("End of input detected, exiting...", "info", "🔚")
                         break
                     continue
 
@@ -99,13 +124,13 @@ class ChatInterface:
                     if slash_result:
                         # Check if it's a quit command
                         if isinstance(slash_result, dict) and slash_result.get("quit"):
-                            print(slash_result.get("status", "Goodbye!"))
+                            await self._emit_system_message(slash_result.get("status", "Goodbye!"), "goodbye", "👋")
                             break
                         # Check if it's a reload_host command
                         elif isinstance(slash_result, dict) and slash_result.get(
                             "reload_host"
                         ):
-                            print(slash_result.get("status", "Reloading..."))
+                            await self._emit_system_message(slash_result.get("status", "Reloading..."), "status", "🔄")
                             # Return dict with reload_host key and current messages
                             return {
                                 "reload_host": slash_result["reload_host"],
@@ -115,13 +140,13 @@ class ChatInterface:
                         elif isinstance(slash_result, dict) and slash_result.get(
                             "clear_messages"
                         ):
-                            print(slash_result.get("status", "Messages cleared."))
+                            await self._emit_system_message(slash_result.get("status", "Messages cleared."), "status", "🗑️")
                             messages.clear()  # Clear the messages list
                         # Check if it's a compacted_messages command
                         elif isinstance(slash_result, dict) and slash_result.get(
                             "compacted_messages"
                         ):
-                            print(slash_result.get("status", "Messages compacted."))
+                            await self._emit_system_message(slash_result.get("status", "Messages compacted."), "status", "🗃")
                             messages[:] = slash_result[
                                 "compacted_messages"
                             ]  # Replace messages with compacted ones
@@ -129,14 +154,14 @@ class ChatInterface:
                         elif isinstance(slash_result, dict) and slash_result.get(
                             "send_to_llm"
                         ):
-                            print(slash_result.get("status", "Sending to LLM..."))
+                            await self._emit_system_message(slash_result.get("status", "Sending to LLM..."), "status", "📤")
                             # Add the prompt as a user message and continue processing
                             messages.append(
                                 {"role": "user", "content": slash_result["send_to_llm"]}
                             )
                             # Don't continue, let it process the LLM prompt
                         else:
-                            print(slash_result)
+                            await self._emit_system_message(str(slash_result), "info")
                             continue
 
                     # If we got here, it means we have a send_to_llm command to process
@@ -162,22 +187,25 @@ class ChatInterface:
                     # Check if we should auto-compact before making the API call
                     if self.should_compact_conversation(messages):
                         tokens_before = self.agent._estimate_token_count(messages)
-                        print(
-                            f"\n🗜️  Auto-compacting conversation (was ~{tokens_before} tokens)..."
-                        )
+                        await self._emit_status(f"Auto-compacting conversation (was ~{tokens_before} tokens)...", "info")
                         try:
                             messages = self.agent.compact_conversation(messages)
                             tokens_after = self.agent._estimate_token_count(messages)
-                            print(f"✅ Compacted to ~{tokens_after} tokens")
+                            await self._emit_status(f"Compacted to ~{tokens_after} tokens", "info")
                         except Exception as e:
-                            print(f"⚠️  Auto-compact failed: {e}")
+                            await self._emit_error(f"Auto-compact failed: {e}", "compaction_error")
 
                     try:
                         # Make API call interruptible by running in a task
-                        print("\n💭 Thinking... (press ESC to interrupt)")
+                        # Emit thinking message via event system
+                        await self._emit_system_message("Thinking... (press ESC to interrupt)", "thinking", "💭")
+                        
+                        logger.info("Creating task for generate_response")
                         current_task = asyncio.create_task(
                             self.agent.generate_response(messages, stream=True)
                         )
+                        logger.info("Task created, waiting for completion")
+                        logger.info(f"Messages being sent to LLM: {len(messages)} messages")
 
                         # Create a background task to monitor for escape key
                         async def monitor_escape():
@@ -221,10 +249,12 @@ class ChatInterface:
 
                         # Wait for either completion or interruption
                         response = None
+                        logger.info("Waiting for task completion or interruption...")
                         done, pending = await asyncio.wait(
                             [current_task, monitor_task],
                             return_when=asyncio.FIRST_COMPLETED,
                         )
+                        logger.info(f"Task completed. Done: {len(done)}, Pending: {len(pending)}")
 
                         # Cancel any remaining tasks
                         for task in pending:
@@ -235,7 +265,8 @@ class ChatInterface:
                             input_handler.interrupted
                             or self.global_interrupt_manager.is_interrupted()
                         ):
-                            print("\n🛑 Request cancelled by user")
+                            # Try to emit as event if event bus is available
+                            await self._emit_interruption("Request cancelled by user", "user")
                             input_handler.interrupted = False
                             self.global_interrupt_manager.clear_interrupt()
                             current_task = None
@@ -246,69 +277,75 @@ class ChatInterface:
                             and current_task.done()
                             and not current_task.cancelled()
                         ):
+                            logger.info("Task completed successfully")
                             response = current_task.result()
+                            logger.info(f"Response received: {type(response)} - {repr(response[:100] if isinstance(response, str) else response)}")
                             current_task = None
                         else:
                             continue  # Request was cancelled, go back to input
 
                         # Handle the response
                         if hasattr(response, "__aiter__"):
-                            # Streaming response
-                            print("\nAssistant (press ESC to interrupt):")
-                            sys.stdout.flush()
-
-                            response_content = await self.handle_streaming_display(
-                                response, interactive=True
-                            )
-
-                            # Add newline after streaming response completes
-                            print()
-
-                            # Add response to messages
-                            if response_content:
-                                messages.append(
-                                    {"role": "assistant", "content": response_content}
-                                )
-
-                            # Reset interrupt count after successful operation
-                            from cli_agent.core.global_interrupt import (
-                                reset_interrupt_count,
-                            )
-
-                            reset_interrupt_count()
-
+                            # This shouldn't happen - generate_response should return final content
+                            # But handle it just in case
+                            response_content = await self._collect_response_content(response)
                         elif isinstance(response, str):
-                            # Non-streaming text response
-                            print(f"\nAssistant: {response}")
-                            messages.append({"role": "assistant", "content": response})
-
+                            # Direct string response - this is the normal case
+                            response_content = response
+                            logger.info(f"Got string response: {repr(response_content[:100])}")
+                            
+                            # Wait for event processing to complete before continuing
+                            await asyncio.sleep(0.1)
                         else:
-                            # Handle other response types
-                            response_str = str(response)
-                            print(f"\nAssistant: {response_str}")
+                            # Other response type - convert to string
+                            response_content = str(response)
+                            logger.info(f"Got non-string response: {type(response)} - {repr(response_content[:100])}")
+
+                        # Check if response handler has updated conversation history (with tool calls/results)
+                        updated_messages = None
+                        if hasattr(self.agent, 'response_handler'):
+                            updated_messages = self.agent.response_handler.get_updated_messages()
+                        
+                        if updated_messages:
+                            # Extract new messages (assistant message with tool calls + tool results)
+                            # Skip the original messages that were passed to the response handler
+                            original_length = len(messages)
+                            new_messages = updated_messages[original_length:]
+                            
+                            # Add the new messages (tool calls and results) to conversation
+                            messages.extend(new_messages)
+                        elif response_content:
+                            # Fallback: just add the assistant response if no tool execution occurred
                             messages.append(
-                                {"role": "assistant", "content": response_str}
+                                {"role": "assistant", "content": response_content}
                             )
+
+                        # Reset interrupt count after successful operation
+                        from cli_agent.core.global_interrupt import (
+                            reset_interrupt_count,
+                        )
+
+                        reset_interrupt_count()
 
                     except ToolDeniedReturnToPrompt as e:
-                        print(f"\n🚫 {e.reason}")
+                        await self._emit_error(f"Tool access denied: {e.reason}", "tool_denied")
                         continue  # Return to prompt without adding to conversation
                     except Exception as e:
                         logger.error(f"Error in chat: {e}")
-                        print(f"\n❌ Error: {str(e)}")
+                        await self._emit_error(f"Error: {str(e)}", "general")
                         continue
 
             except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
+                await self._emit_system_message("Goodbye!", "goodbye", "👋")
                 break
             except Exception as e:
                 error_msg = self.handle_conversation_error(e)
-                print(f"\n{error_msg}")
+                await self._emit_error(error_msg, "conversation_error")
                 continue
 
         # Display goodbye message
         if not existing_messages:
-            self.display_goodbye_message()
+            await self.display_goodbye_message()
 
         return messages
 
@@ -409,43 +446,21 @@ class ChatInterface:
         logger.error(f"Conversation error: {error}")
         return f"An error occurred: {str(error)}"
 
-    def display_welcome_message(self):
+    async def display_welcome_message(self):
         """Display welcome message at start of chat."""
         model_name = getattr(
             self.agent, "_get_current_runtime_model", lambda: "Unknown"
         )()
-        print(f"🤖 Starting interactive chat with {model_name}")
-        print("Type '/help' for available commands or '/quit' to exit.")
-        print("-" * 50)
+        
+        await self._emit_system_message(f"Starting interactive chat with {model_name}", "welcome", "🤖")
+        await self._emit_system_message("Type '/help' for available commands or '/quit' to exit.", "info")
+        await self._emit_system_message("-" * 50, "info")
 
-    def display_goodbye_message(self):
+    async def display_goodbye_message(self):
         """Display goodbye message at end of chat."""
-        print("\n" + "-" * 50)
-        print("Thanks for chatting! 👋")
+        await self._emit_system_message("\n" + "-" * 50, "info")
+        await self._emit_system_message("Thanks for chatting!", "goodbye", "👋")
 
-    async def handle_streaming_display(
-        self, response_generator, interactive: bool = True
-    ):
-        """Handle display of streaming responses."""
-        # Simplified approach - process the response directly for now
-        if hasattr(response_generator, "__aiter__"):
-            content = ""
-            async for chunk in response_generator:
-                # Check for global interrupt during streaming
-                if self.global_interrupt_manager.is_interrupted():
-                    print("\n🛑 Streaming interrupted by user")
-                    break
-
-                chunk_text = str(chunk)
-                content += chunk_text
-                if interactive:
-                    print(chunk_text, end="", flush=True)
-            return content
-        else:
-            content = str(response_generator)
-            if interactive:
-                print(content)
-            return content
 
     def clean_conversation_messages(
         self, messages: List[Dict[str, Any]]
@@ -483,3 +498,51 @@ class ChatInterface:
 
         # Fallback: compact if too many messages
         return len(messages) > 50
+
+    # Event emission helper methods
+    async def _emit_interruption(self, reason: str, interrupt_type: str = "user"):
+        """Emit interruption event instead of print statement."""
+        if self.event_emitter:
+            await self.event_emitter.emit_interrupt(interrupt_type, reason)
+    
+    async def _emit_system_message(self, message: str, message_type: str = "info", emoji: str = None):
+        """Emit system message event instead of print statement.""" 
+        if self.event_emitter:
+            await self.event_emitter.emit_system_message(message, message_type, emoji)
+    
+    async def _emit_status(self, message: str, level: str = "info"):
+        """Emit status event instead of print statement."""
+        if self.event_emitter:
+            await self.event_emitter.emit_status(message, level=level)
+    
+    async def _emit_error(self, message: str, error_type: str = "general"):
+        """Emit error event instead of print statement."""
+        if self.event_emitter:
+            await self.event_emitter.emit_error(message, error_type)
+    
+    async def _emit_text(self, content: str, is_markdown: bool = False):
+        """Emit text event instead of print statement."""
+        if self.event_emitter:
+            await self.event_emitter.emit_text(content, is_markdown=is_markdown)
+
+    async def _collect_response_content(self, response) -> str:
+        """Collect response content for conversation history without display logic."""
+        content = ""
+        if hasattr(response, "__aiter__"):
+            # Streaming response - content collection only
+            async for chunk in response:
+                # Check for global interrupt during content collection
+                if self.global_interrupt_manager.is_interrupted():
+                    await self._emit_interruption("Request cancelled during streaming", "user")
+                    break
+                
+                chunk_text = str(chunk)
+                content += chunk_text
+                # Display is handled by events in _process_streaming_chunks_with_events
+        else:
+            # Non-streaming response
+            content = str(response)
+            if content:
+                await self._emit_text(content, is_markdown=True)
+        
+        return content

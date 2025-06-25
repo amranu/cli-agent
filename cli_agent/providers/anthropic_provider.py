@@ -91,6 +91,7 @@ class AnthropicProvider(BaseProvider):
             f"Anthropic API request: {len(anthropic_messages)} messages, tools={len(tools) if tools else 0}"
         )
 
+
         try:
             if stream:
                 response = await self.client.post(
@@ -350,6 +351,17 @@ class AnthropicProvider(BaseProvider):
                     {"role": "user", "content": formatted_content}
                 )
                 continue
+
+            # Handle empty content messages
+            if not content or content.strip() == "":
+                # Skip empty user messages as they violate Anthropic API
+                if role != "assistant":
+                    continue
+                # For assistant messages, only allow empty content if it's the final message
+                is_last_message = msg == messages[-1]
+                if not is_last_message:
+                    # Replace empty assistant content with a minimal placeholder
+                    content = "."
 
             # Convert role names
             if role == "assistant":

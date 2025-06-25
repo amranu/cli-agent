@@ -106,6 +106,9 @@ class MCPHost(BaseLLMProvider):
                 call.id = getattr(tc, "id", None)
 
             else:  # Generic format
+                # Debug the tool call structure
+                logger.debug(f"Unknown tool call format: {type(tc)}, attributes: {dir(tc)}")
+                logger.debug(f"Tool call repr: {repr(tc)}")
                 call.name = getattr(tc, "name", "unknown")
                 call.args = getattr(tc, "args", {})
                 call.id = getattr(tc, "id", None)
@@ -159,16 +162,118 @@ class MCPHost(BaseLLMProvider):
         self, response
     ) -> Tuple[str, List[Any], Dict[str, Any]]:
         """Process provider's streaming response chunks."""
-        # Delegate to provider
-        text, tool_calls, metadata = await self.provider.process_streaming_response(
-            response
-        )
+        # Always use event-driven streaming when event system is available
+        if hasattr(self, 'event_bus') and self.event_bus and hasattr(self, 'event_emitter'):
+            return await self._process_streaming_chunks_with_events(response)
+        else:
+            # No event system - delegate to provider for basic processing
+            return await self.provider.process_streaming_response(response)
+    
+    async def _process_streaming_chunks_with_events(
+        self, response
+    ) -> Tuple[str, List[Any], Dict[str, Any]]:
+        """
+        Process streaming response chunks while emitting events for complete responses.
+        
+        This is the single source of truth for all response display via the event system.
+        Buffers full response for proper markdown formatting, handles tool execution, and status updates.
+        """
+        from cli_agent.core.event_system import TextEvent, ToolCallEvent, StatusEvent
+        
+        accumulated_content = ""
+        accumulated_reasoning_content = ""
+        accumulated_tool_calls = []
+        metadata = {}
 
-        # Parse model-specific content
-        special_content = self.model.parse_special_content(text)
+        logger.debug("Starting comprehensive event-driven streaming response processing")
+
+        # Process chunks and accumulate content for proper markdown formatting
+        async for chunk in response:
+            if hasattr(chunk, 'choices') and chunk.choices:
+                delta = chunk.choices[0].delta
+
+                # Handle reasoning content (deepseek-reasoner)
+                if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                    accumulated_reasoning_content += delta.reasoning_content
+
+                # Handle regular content - accumulate for final buffered emission
+                if hasattr(delta, 'content') and delta.content:
+                    accumulated_content += delta.content
+
+                # Handle tool calls in streaming with events
+                if hasattr(delta, "tool_calls") and delta.tool_calls:
+                    for tool_call_delta in delta.tool_calls:
+                        if hasattr(tool_call_delta, 'index') and tool_call_delta.index is not None:
+                            # Ensure we have enough space in our list
+                            while len(accumulated_tool_calls) <= tool_call_delta.index:
+                                accumulated_tool_calls.append({
+                                    "id": None,
+                                    "type": "function",
+                                    "function": {"name": None, "arguments": ""}
+                                })
+
+                            # Update the tool call at this index
+                            if hasattr(tool_call_delta, 'id') and tool_call_delta.id:
+                                accumulated_tool_calls[tool_call_delta.index]["id"] = tool_call_delta.id
+
+                            if hasattr(tool_call_delta, 'function') and tool_call_delta.function:
+                                func = tool_call_delta.function
+                                if hasattr(func, 'name') and func.name:
+                                    accumulated_tool_calls[tool_call_delta.index]["function"]["name"] = func.name
+                                    # Emit tool call discovered event
+                                    await self.event_emitter.emit_status(
+                                        f"Tool call detected: {func.name}", 
+                                        level="info"
+                                    )
+                                if hasattr(func, 'arguments') and func.arguments:
+                                    accumulated_tool_calls[tool_call_delta.index]["function"]["arguments"] += func.arguments
+
+        # Content accumulation complete - emit buffered response while event bus is still active
+        if accumulated_content:
+            logger.debug(f"Emitting buffered response during streaming: {len(accumulated_content)} characters")
+            await self.event_emitter.emit_text(
+                content=accumulated_content,
+                is_streaming=False,
+                is_markdown=True
+            )
+            # Add newline after LLM response
+            await self.event_emitter.emit_text(
+                content="\n",
+                is_streaming=False,
+                is_markdown=False
+            )
+
+        # Content accumulation complete - ready for final formatting
+
+        # Handle accumulated reasoning content
+        if accumulated_reasoning_content:
+            metadata["reasoning_content"] = accumulated_reasoning_content
+            
+        # Parse model-specific content  
+        special_content = self.model.parse_special_content(accumulated_content)
         metadata.update(special_content)
 
-        return text, tool_calls, metadata
+        # Response already emitted during streaming loop above
+
+        # Emit tool call events for any complete tool calls
+        for tool_call in accumulated_tool_calls:
+            if tool_call.get("id") and tool_call.get("function", {}).get("name"):
+                try:
+                    arguments = json.loads(tool_call["function"]["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    arguments = {"raw_arguments": tool_call["function"]["arguments"]}
+                
+                await self.event_emitter.emit_tool_call(
+                    tool_name=tool_call["function"]["name"],
+                    tool_id=tool_call["id"],
+                    arguments=arguments
+                )
+
+        # Response processing complete - no status message needed
+        
+        logger.debug(f"Streaming processing complete. Content: {len(accumulated_content)} chars, Tool calls: {len(accumulated_tool_calls)}")
+
+        return accumulated_content, accumulated_tool_calls, metadata
 
     async def _make_api_request(
         self,
@@ -271,12 +376,22 @@ class MCPHost(BaseLLMProvider):
         # Handle reasoning content from DeepSeek
         if "reasoning_content" in provider_data:
             reasoning_content = provider_data["reasoning_content"]
-            print(f"\n<reasoning>{reasoning_content}</reasoning>", flush=True)
+            if hasattr(self, 'event_emitter') and self.event_emitter:
+                import asyncio
+                asyncio.create_task(self.event_emitter.emit_text(
+                    f"\n<reasoning>{reasoning_content}</reasoning>",
+                    is_markdown=False
+                ))
 
         # Handle thinking content from Claude
         if "thinking" in provider_data:
             thinking_content = provider_data["thinking"]
-            print(f"\n<thinking>{thinking_content}</thinking>", flush=True)
+            if hasattr(self, 'event_emitter') and self.event_emitter:
+                import asyncio
+                asyncio.create_task(self.event_emitter.emit_text(
+                    f"\n<thinking>{thinking_content}</thinking>",
+                    is_markdown=False
+                ))
 
     def _format_provider_specific_content(self, provider_data: Dict[str, Any]) -> str:
         """Format provider-specific content for output."""

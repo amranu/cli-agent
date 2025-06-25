@@ -110,15 +110,11 @@ async def run_subagent_task(task_file_path: str):
                     provider_model = _get_default_provider_for_model(task_model)
 
                 # Create host using provider-model architecture
-                host = config.create_host_from_provider_model(provider_model)
-                if hasattr(host, "is_subagent"):
-                    host.is_subagent = True
+                host = config.create_host_from_provider_model(provider_model, is_subagent=True)
                 emit_output_with_id(f"Created {provider_model} subagent")
             else:
                 # Use current default provider-model
-                host = config.create_host_from_provider_model()
-                if hasattr(host, "is_subagent"):
-                    host.is_subagent = True
+                host = config.create_host_from_provider_model(is_subagent=True)
                 emit_output_with_id(f"Created {config.default_provider_model} subagent")
 
         except Exception as e:

@@ -301,26 +301,42 @@ class ToolPermissionManager:
 
         tool_description = self._format_tool_description(tool_name, arguments)
 
-        # Display tool execution request (no extra prefix since emit system handles subagent labeling)
-        print(f"\r\n🔧 Tool Execution Request:")
-        print(f"\rTool: {tool_name}")
-        print(f"\rAction: {tool_description}")
-
+        # Build complete permission prompt as a single message
+        prompt_lines = [
+            "🔧 Tool Execution Request:",
+            f"Tool: {tool_name}",
+            f"Action: {tool_description}"
+        ]
+        
         # Show arguments if they're not sensitive
         if tool_name != "bash_execute" or len(str(arguments)) < 100:
-            print(f"\rArguments: {arguments}")
-
-        print(f"\r\nAllow this tool to execute?")
-        print(f"\r[y] Yes, execute once")
-        print(f"\r[a] Yes, and allow '{tool_name}' for the rest of this session")
-        print(f"\r[A] Yes, and auto-approve ALL tools for this session")
-        print(f"\r[n] No, deny this execution")
-        print(f"\r[d] No, and deny '{tool_name}' for the rest of this session")
-
+            prompt_lines.append(f"Arguments: {arguments}")
+        
+        prompt_lines.extend([
+            "",  # Empty line
+            "Allow this tool to execute?",
+            "[y] Yes, execute once",
+            f"[a] Yes, and allow '{tool_name}' for the rest of this session",
+            "[A] Yes, and auto-approve ALL tools for this session",
+            "[n] No, deny this execution",
+            f"[d] No, and deny '{tool_name}' for the rest of this session"
+        ])
+        
+        # Send as single consolidated message
+        full_prompt = "\n".join(prompt_lines)
+        
         try:
-            # Get user response - add newline to fix cursor position
-            print()  # Add newline to fix cursor position
-            response = input_handler.get_input("Choice [y/a/A/n/d]: ")
+            # For subagents, pass the full prompt to the input handler
+            # For regular agents, display the prompt and ask for choice
+            if hasattr(input_handler, 'subagent_context'):
+                # Subagent: send full prompt via permission request message
+                choice_prompt = f"{full_prompt}\n\nChoice [y/a/A/n/d]: "
+                response = input_handler.get_input(choice_prompt)
+            else:
+                # Regular agent: display prompt and ask for choice
+                print(full_prompt)
+                print()  # Add newline to fix cursor position
+                response = input_handler.get_input("Choice [y/a/A/n/d]: ")
             if response is None:
                 return ToolPermissionResult(
                     allowed=False, reason="User interrupted input"
