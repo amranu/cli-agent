@@ -23,8 +23,8 @@ class ToolExecutionEngine:
         try:
             # Handle special case for emit:result calls from subagents
             if tool_key == "emit:result" and self.agent.is_subagent:
-                # Return the emit_result tool name for subagents to use
-                return "emit_result"
+                # Return the proper builtin tool name for subagents to use
+                return "builtin:emit_result"
 
             if tool_key not in self.agent.available_tools:
                 # Try reverse normalization: convert underscores back to colons
