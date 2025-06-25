@@ -109,7 +109,8 @@ Task Management Rules:
 - Use built-in tools for common operations
 - Leverage MCP tools for specialized functionality
 - NEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTANT to only commit when explicitly asked
-
+- Use TodoRead and TodoWrite to keep track of tasks
+- While working on a task, avoid prompting the user unless you DESPERATELY need clarification
 {subagent_strategy}
 
 # Resource Self-Management

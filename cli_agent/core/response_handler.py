@@ -602,7 +602,7 @@ class ResponseHandler:
                         final_messages.append(
                             {
                                 "role": "user",
-                                "content": f"You have already executed these exact tool calls in this conversation: {', '.join(recent_tool_calls)}. Please provide your response based on those results. Only make new tool calls if you need different tools or the same tools with different arguments.",
+                                "content": f"You have already executed these exact tool calls in this conversation: {', '.join(recent_tool_calls)}. Please continue your task with minimal prompting to the user or provide your response based on those results.",
                             }
                         )
                     else:
