@@ -7,6 +7,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from cli_agent.core.global_interrupt import get_global_interrupt_manager
+from cli_agent.core.terminal_manager import get_terminal_manager
 from cli_agent.core.event_system import (
     SystemMessageEvent,
     InterruptEvent,
@@ -28,6 +29,7 @@ class ChatInterface:
         self.conversation_active = False
         self.interrupt_received = False
         self.global_interrupt_manager = get_global_interrupt_manager()
+        self.terminal_manager = get_terminal_manager()
         
         # Initialize event emitter if event bus is available
         self.event_emitter = None
@@ -95,8 +97,14 @@ class ChatInterface:
                         await asyncio.sleep(0.5)
                         continue
                 
-                # Get user input with smart multiline detection
-                user_input = input_handler.get_multiline_input("You: ")
+                # Start persistent prompt for user input
+                self.terminal_manager.start_persistent_prompt("You: ")
+                
+                # Get user input with smart multiline detection (without prompt since it's persistent)
+                user_input = input_handler.get_multiline_input("")
+                
+                # Stop persistent prompt once input is received
+                self.terminal_manager.stop_persistent_prompt()
 
                 if user_input is None:  # Interrupted or EOF
                     if current_task and not current_task.done():
@@ -343,7 +351,8 @@ class ChatInterface:
                 await self._emit_error(error_msg, "conversation_error")
                 continue
 
-        # Display goodbye message
+        # Stop persistent prompt and display goodbye message
+        self.terminal_manager.stop_persistent_prompt()
         if not existing_messages:
             await self.display_goodbye_message()
 

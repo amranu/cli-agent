@@ -81,8 +81,18 @@ class SubagentCoordinator:
                     import asyncio
                     await asyncio.sleep(0.5)
 
-                # Get user choice using the proper input handler with consistent prompt
-                user_choice = input_handler.get_input("Choice [y/a/A/n/d]: ")
+                # Set up persistent prompt for permission choice
+                from cli_agent.core.terminal_manager import get_terminal_manager
+                terminal_manager = get_terminal_manager()
+                
+                # Start persistent prompt for the choice
+                terminal_manager.start_persistent_prompt("Choice [y/a/A/n/d]: ")
+                
+                # Get user choice using the proper input handler (no prompt since it's persistent)
+                user_choice = input_handler.get_input("")
+                
+                # Stop persistent prompt after input
+                terminal_manager.stop_persistent_prompt()
                 
                 # Handle None return (EOF/interrupt) 
                 if user_choice is None:

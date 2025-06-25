@@ -48,6 +48,7 @@ class DisplayManager:
         self.enabled_events: Set[EventType] = set()
         self.quiet_mode = False
         self.last_status_line = ""
+        self.terminal_manager = get_terminal_manager()
         
         # Default enabled events for interactive mode
         if interactive:
@@ -137,25 +138,26 @@ class DisplayManager:
             if event.is_streaming:
                 # Clear any status line before streaming text
                 if self.last_status_line:
-                    print("\r\x1b[K", end="")
+                    self.terminal_manager.write_above_prompt("\r\x1b[K")
                     self.last_status_line = ""
                 
                 # Display streaming content character by character for typing effect
                 for char in event.content:
-                    print(char, end="", flush=True)
+                    self.terminal_manager.write_above_prompt(char)
                     # Small delay for typing effect (only for very short bursts)
                     if len(event.content) <= 5:  # Only for small chunks
                         import asyncio
                         await asyncio.sleep(0.01)
             else:
                 # Non-streaming content - display immediately
+                content_to_display = event.content
                 # Apply markdown formatting if requested
                 if event.is_markdown and len(event.content.strip()) > 0:
                     # For markdown content, ensure proper line spacing
                     if not event.content.startswith('\n'):
-                        print()  # Add leading newline for markdown blocks
+                        content_to_display = '\n' + content_to_display
                 
-                print(event.content, end="", flush=True)
+                self.terminal_manager.write_above_prompt(content_to_display)
             
             logger.debug("Displayed text content to console")
     
@@ -163,12 +165,13 @@ class DisplayManager:
         """Display tool execution start notification."""
         if self.interactive:
             args_summary = self._format_tool_arguments(event.arguments)
-            display_text = f"🔧 Executing {event.tool_name}({args_summary})"
+            display_text = f"🔧 Executing {event.tool_name}({args_summary})\n"
             
             # Clear any previous status line and display
             if self.last_status_line:
-                print("\r\x1b[K", end="")
-            print(display_text, flush=True)
+                self.terminal_manager.write_above_prompt("\r\x1b[K")
+                self.last_status_line = ""
+            self.terminal_manager.write_above_prompt(display_text)
     
     async def _display_tool_result(self, event: ToolResultEvent):
         """Display tool execution results."""
@@ -177,9 +180,9 @@ class DisplayManager:
             time_info = f" ({event.execution_time:.2f}s)" if event.execution_time else ""
             
             result_preview = event.result[:100] + "..." if len(event.result) > 100 else event.result
-            display_text = f"{status_icon} {event.tool_name} completed{time_info}: {result_preview}"
+            display_text = f"{status_icon} {event.tool_name} completed{time_info}: {result_preview}\n"
             
-            print(f"\r\x1b[K{display_text}", flush=True)
+            self.terminal_manager.write_above_prompt(display_text)
     
     async def _display_status_event(self, event: StatusEvent):
         """Display status updates."""
@@ -195,29 +198,22 @@ class DisplayManager:
             if event.details:
                 display_text += f": {event.details}"
             
-            # For subagent-related status, use newlines to avoid overwriting
-            if "subagent" in event.status.lower() or "permission" in event.status.lower():
-                # Clear any previous status line first, then use a new line
-                if self.last_status_line:
-                    print("\r\x1b[K")
-                    self.last_status_line = ""
-                print(display_text, flush=True)
-            else:
-                # Regular status events can be overwritten
-                print(f"\r\x1b[K{display_text}", end="", flush=True)
-                self.last_status_line = display_text
+            # All status messages now go above the prompt with newlines
+            # This ensures the prompt stays at the bottom
+            display_text += "\n"
+            self.terminal_manager.write_above_prompt(display_text)
     
     async def _display_error_event(self, event: ErrorEvent):
         """Display error notifications."""
         if self.interactive:
             error_type = f" ({event.error_type})" if event.error_type else ""
-            display_text = f"❌ Error{error_type}: {event.error_message}"
+            display_text = f"❌ Error{error_type}: {event.error_message}\n"
             
-            print(f"\r\x1b[K{display_text}", flush=True)
+            self.terminal_manager.write_above_prompt(display_text)
             
             # Optionally show stack trace in debug mode
             if event.stack_trace and logger.isEnabledFor(logging.DEBUG):
-                print(f"Stack trace: {event.stack_trace}")
+                self.terminal_manager.write_above_prompt(f"Stack trace: {event.stack_trace}\n")
     
     async def _display_system_message(self, event: SystemMessageEvent):
         """Display system messages like welcome, goodbye, thinking."""
@@ -225,15 +221,14 @@ class DisplayManager:
             emoji = event.emoji or self._get_default_emoji(event.message_type)
             display_text = f"{emoji} {event.message}"
             
-            # For permission requests, clear any status line and add extra spacing
+            # For permission requests, add extra spacing
             if event.message_type == "permission_request":
-                if self.last_status_line:
-                    print("\r\x1b[K")
-                    self.last_status_line = ""
-                print(f"\n{display_text}", flush=True)
+                display_text = f"\n{display_text}\n"
             else:
                 # Regular system messages always get a new line
-                print(display_text, flush=True)
+                display_text += "\n"
+                
+            self.terminal_manager.write_above_prompt(display_text)
     
     async def _display_ui_status(self, event: UIStatusEvent):
         """Display UI status updates."""
@@ -245,14 +240,15 @@ class DisplayManager:
             }
             icon = type_icons.get(event.status_type, "📊")
             
-            display_text = f"{icon} {event.status_text}"
+            display_text = f"{icon} {event.status_text}\n"
             
-            # UI status can be temporary
-            print(f"\r\x1b[K{display_text}", end="", flush=True)
+            # UI status goes above prompt
+            self.terminal_manager.write_above_prompt(display_text)
             
             if event.duration:
-                # Schedule removal after duration
-                asyncio.create_task(self._clear_status_after_delay(event.duration))
+                # Note: With persistent prompt, we don't need to clear status lines
+                # as they scroll up naturally
+                pass
     
     async def _display_interrupt_event(self, event: InterruptEvent):
         """Display interrupt/cancellation notifications."""
@@ -267,16 +263,16 @@ class DisplayManager:
             reason_text = f": {event.reason}" if event.reason else ""
             display_text = f"\n{icon} Operation interrupted{reason_text}\n"
             
-            print(display_text, flush=True)
+            self.terminal_manager.write_above_prompt(display_text)
     
     async def _display_tool_call_event(self, event: ToolCallEvent):
         """Display tool call request event."""
         if self.interactive:
             args_summary = self._format_tool_arguments(event.arguments)
             description = f" - {event.description}" if event.description else ""
-            display_text = f"🔗 Tool Call: {event.tool_name}({args_summary}){description}"
+            display_text = f"🔗 Tool Call: {event.tool_name}({args_summary}){description}\n"
             
-            print(display_text, flush=True)
+            self.terminal_manager.write_above_prompt(display_text)
     
     async def _display_system_event(self, event: SystemEvent):
         """Display system-level events."""
@@ -291,8 +287,9 @@ class DisplayManager:
             display_text = f"{icon} System: {event.system_type}"
             if event.data:
                 display_text += f" - {event.data}"
+            display_text += "\n"
             
-            print(display_text, flush=True)
+            self.terminal_manager.write_above_prompt(display_text)
     
     async def _display_user_input_event(self, event: UserInputEvent):
         """Display user input events (mainly for logging/debugging)."""
@@ -306,9 +303,9 @@ class DisplayManager:
             
             # Only show first 50 chars of input for privacy
             input_preview = event.input_text[:50] + "..." if len(event.input_text) > 50 else event.input_text
-            display_text = f"{icon} User Input ({event.input_type}): {input_preview}"
+            display_text = f"{icon} User Input ({event.input_type}): {input_preview}\n"
             
-            print(display_text, flush=True)
+            self.terminal_manager.write_above_prompt(display_text)
     
     def _format_tool_arguments(self, arguments: Dict) -> str:
         """Format tool arguments for display."""
@@ -339,9 +336,9 @@ class DisplayManager:
     async def _clear_status_after_delay(self, delay: float):
         """Clear status line after specified delay."""
         await asyncio.sleep(delay)
-        if self.interactive:
-            print("\r\x1b[K", end="", flush=True)
-            self.last_status_line = ""
+        # With persistent prompt, status lines scroll up naturally
+        # No need to clear them manually
+        pass
     
     def shutdown(self):
         """Clean up display manager."""
@@ -350,9 +347,8 @@ class DisplayManager:
             self.event_bus.unsubscribe(event_type, self._handle_event)
         self.enabled_events.clear()
         
-        # Clear any remaining status line
-        if self.interactive and self.last_status_line:
-            print("\r\x1b[K", end="", flush=True)
+        # Stop the persistent prompt
+        self.terminal_manager.stop_persistent_prompt()
         
         logger.debug("DisplayManager shutdown complete")
 
