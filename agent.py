@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 def create_host(
     config: HostConfig, is_subagent: bool = False, provider_model: Optional[str] = None
 ) -> BaseMCPAgent:
-    """Create host using new provider-model architecture with fallback to legacy.
+    """Create host using provider-model architecture.
 
     Args:
         config: Host configuration
@@ -65,38 +65,22 @@ def create_host(
         provider_model: Optional provider:model string override
 
     Returns:
-        BaseMCPAgent instance (either MCPHost or legacy host)
+        BaseMCPAgent instance using provider-model architecture
     """
-    try:
-        # Try new provider-model architecture first
-        if provider_model:
-            host = config.create_host_from_provider_model(provider_model)
-        else:
-            host = config.create_host_from_provider_model()
+    # Use new provider-model architecture
+    if provider_model:
+        host = config.create_host_from_provider_model(provider_model)
+    else:
+        host = config.create_host_from_provider_model()
 
-        # Set subagent flag if needed
-        if is_subagent:
-            host.is_subagent = True
+    # Set subagent flag if needed
+    if is_subagent:
+        host.is_subagent = True
 
-        logger.info(
-            f"Created provider-model host: {getattr(config, 'default_provider_model', 'default')}"
-        )
-        return host
-
-    except Exception as e:
-        # Fallback to legacy host creation for backward compatibility
-        logger.warning(f"Provider-model creation failed: {e}")
-        logger.warning("Falling back to legacy host creation")
-
-        # Check if Gemini backend should be used
-        if config.deepseek_model == "gemini":
-            from mcp_gemini_host import MCPGeminiHost
-
-            return MCPGeminiHost(config, is_subagent)
-        else:
-            from mcp_deepseek_host import MCPDeepseekHost
-
-            return MCPDeepseekHost(config, is_subagent)
+    logger.info(
+        f"Created provider-model host: {getattr(config, 'default_provider_model', 'default')}"
+    )
+    return host
 
 
 # CLI functionality
@@ -356,6 +340,10 @@ async def chat(
     help="Output format (text or stream-json)",
 )
 @click.option(
+    "--model",
+    help="Provider-model to use (e.g. 'deepseek:deepseek-chat', 'anthropic:claude-3.5-sonnet')",
+)
+@click.option(
     "--allowed-tools",
     multiple=True,
     help='Comma or space-separated list of tool names to allow (e.g. "Bash(git:*) Edit")',
@@ -377,6 +365,7 @@ async def ask(
     server,
     input_format,
     output_format,
+    model,
     allowed_tools,
     disallowed_tools,
     auto_approve_tools,
@@ -404,7 +393,7 @@ async def ask(
 
         # Create host using helper function
         try:
-            host = create_host(config)
+            host = create_host(config, provider_model=model)
         except Exception as e:
             click.echo(f"Error creating host: {e}")
             return

@@ -1509,8 +1509,14 @@ class BaseMCPAgent(ABC):
         interactive: bool,
     ) -> Any:
         """Execute tool calls and continue the conversation."""
+        logger.error(
+            f"🔧 DEBUG: _execute_tools_and_continue called with {len(tool_calls)} tool calls"
+        )
+        logger.error(f"🔧 DEBUG: Current conversation has {len(messages)} messages")
+
         # Extract text content from response for assistant message
         response_content = self._extract_content_from_response(response)
+        logger.error(f"🔧 DEBUG: Response content: '{response_content}'")
 
         # Add assistant message with tool calls
         assistant_msg = {"role": "assistant", "content": response_content}

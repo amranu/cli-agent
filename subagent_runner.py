@@ -96,44 +96,27 @@ async def run_subagent_task(task_file_path: str):
         config = load_config()
 
         # Use new provider-model architecture for subagents
-        try:
-            # Check if task specifies a specific model to use
-            task_model = task_data.get("model", None)
+        # Check if task specifies a specific model to use
+        task_model = task_data.get("model", None)
 
-            if task_model:
-                # Use task-specific provider-model format
-                if ":" in task_model:
-                    # Already in provider:model format
-                    provider_model = task_model
-                else:
-                    # Map model name to its default provider
-                    provider_model = _get_default_provider_for_model(task_model)
-
-                # Create host using provider-model architecture
-                host = config.create_host_from_provider_model(
-                    provider_model, is_subagent=True
-                )
-                emit_output_with_id(f"Created {provider_model} subagent")
+        if task_model:
+            # Use task-specific provider-model format
+            if ":" in task_model:
+                # Already in provider:model format
+                provider_model = task_model
             else:
-                # Use current default provider-model
-                host = config.create_host_from_provider_model(is_subagent=True)
-                emit_output_with_id(f"Created {config.default_provider_model} subagent")
+                # Map model name to its default provider
+                provider_model = _get_default_provider_for_model(task_model)
 
-        except Exception as e:
-            # Fallback to legacy for compatibility
-            emit_output_with_id(
-                f"Provider-model creation failed: {e}, falling back to legacy"
+            # Create host using provider-model architecture
+            host = config.create_host_from_provider_model(
+                provider_model, is_subagent=True
             )
-            if config.deepseek_model == "gemini":
-                from mcp_gemini_host import MCPGeminiHost
-
-                host = MCPGeminiHost(config, is_subagent=True)
-                emit_output_with_id("Created legacy Gemini subagent")
-            else:
-                from mcp_deepseek_host import MCPDeepseekHost
-
-                host = MCPDeepseekHost(config, is_subagent=True)
-                emit_output_with_id("Created legacy DeepSeek subagent")
+            emit_output_with_id(f"Created {provider_model} subagent")
+        else:
+            # Use current default provider-model
+            host = config.create_host_from_provider_model(is_subagent=True)
+            emit_output_with_id(f"Created {config.default_provider_model} subagent")
 
         # Set up tool permission manager for subagent (inherits main agent settings)
         from cli_agent.core.input_handler import InterruptibleInput
