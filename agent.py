@@ -1203,7 +1203,7 @@ async def handle_text_chat(
 
     async def chat_session_loop():
         """Main chat session loop with continuous interrupt monitoring."""
-        nonlocal host, messages, permission_manager, display_manager, config, session_manager
+        nonlocal host, messages, display_manager, config
 
         from cli_agent.core.global_interrupt import get_global_interrupt_manager
 
