@@ -1,5 +1,6 @@
 """Built-in tool execution implementations for BaseMCPAgent."""
 
+import asyncio
 import json
 import os
 import subprocess
@@ -18,8 +19,8 @@ class BuiltinToolExecutor:
         """Initialize with reference to the parent agent."""
         self.agent = agent
 
-    def bash_execute(self, args: Dict[str, Any]) -> str:
-        """Execute bash commands and return output."""
+    async def bash_execute(self, args: Dict[str, Any]) -> str:
+        """Execute bash commands and return output with interrupt support."""
         command = args.get("command", "")
         timeout = args.get("timeout", 120)
 
@@ -27,12 +28,13 @@ class BuiltinToolExecutor:
             return "Error: No command provided"
 
         try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+            from cli_agent.core.interrupt_aware_streaming import (
+                InterruptAwareSubprocess,
+            )
+
+            # Use interrupt-aware subprocess execution
+            result = await InterruptAwareSubprocess.run_with_interrupt_checking(
+                command, timeout=timeout, operation_name=f"bash: {command[:50]}..."
             )
 
             output = ""
@@ -46,7 +48,9 @@ class BuiltinToolExecutor:
 
             return output or "Command completed with no output"
 
-        except subprocess.TimeoutExpired:
+        except KeyboardInterrupt:
+            return "Error: Command execution interrupted by user"
+        except asyncio.TimeoutError:
             return f"Error: Command timed out after {timeout} seconds"
         except Exception as e:
             return f"Error executing command: {str(e)}"

@@ -56,6 +56,8 @@ class TerminalManager:
 
     def write_above_prompt(self, text: str):
         """Write text above the persistent prompt using print for immediate display."""
+        # Let the global interrupt manager handle Ctrl+C - don't interfere here
+
         if not self.is_terminal or not self.prompt_active:
             # Fallback for non-terminal environments or no active prompt - use direct print
             print(text, end="", flush=True)

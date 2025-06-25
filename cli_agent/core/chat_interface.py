@@ -51,12 +51,15 @@ class ChatInterface:
         # Initialize messages from existing if provided
         messages = existing_messages[:] if existing_messages else []
 
-        # Set up signal handlers
-        self.setup_signal_handlers()
+        # Start conversation (let global interrupt manager handle signals)
         self.start_conversation()
 
-        # Start event bus processing if available
-        if hasattr(self.agent, "event_bus") and self.agent.event_bus:
+        # Start event bus processing if available and not already running
+        if (
+            hasattr(self.agent, "event_bus")
+            and self.agent.event_bus
+            and not self.agent.event_bus.is_running
+        ):
             await self.agent.event_bus.start_processing()
 
         # Display welcome message (after event bus is running for immediate display)
@@ -80,7 +83,8 @@ class ChatInterface:
                     await self._emit_interruption(
                         "Operation cancelled, returning to prompt", "global"
                     )
-                    self.global_interrupt_manager.clear_interrupt()
+                    # Don't clear interrupt state immediately - let user press Ctrl+C again to exit
+                    # self.global_interrupt_manager.clear_interrupt()
                     input_handler.interrupted = False
                     # Clear input queue on interruption
                     self.input_queue.clear()
@@ -153,7 +157,8 @@ class ChatInterface:
                             await self._emit_system_message(
                                 slash_result.get("status", "Goodbye!"), "goodbye", "👋"
                             )
-                            break
+                            # Return special quit indicator to the session loop
+                            return {"quit": True, "messages": messages}
                         # Check if it's a reload_host command
                         elif isinstance(slash_result, dict) and slash_result.get(
                             "reload_host"
@@ -366,7 +371,8 @@ class ChatInterface:
                                 "Request cancelled by user", "user"
                             )
                             input_handler.interrupted = False
-                            self.global_interrupt_manager.clear_interrupt()
+                            # Don't clear interrupt state immediately - let user press Ctrl+C again to exit
+                            # self.global_interrupt_manager.clear_interrupt()
                             # Clear input queue on interruption
                             self.input_queue.clear()
                             current_task = None
@@ -430,12 +436,13 @@ class ChatInterface:
                                 {"role": "assistant", "content": response_content}
                             )
 
-                        # Reset interrupt count after successful operation
+                        # Reset interrupt count and clear interrupt state after successful operation
                         from cli_agent.core.global_interrupt import (
                             reset_interrupt_count,
                         )
 
                         reset_interrupt_count()
+                        self.global_interrupt_manager.clear_interrupt()
 
                         # Reset prompt to ready state for next input
                         self.terminal_manager.update_prompt("> ")
@@ -497,8 +504,16 @@ class ChatInterface:
                             continue
 
             except KeyboardInterrupt:
-                await self._emit_system_message("Goodbye!", "goodbye", "👋")
-                break
+                # Check if this is the second interrupt (should exit app)
+                if self.global_interrupt_manager._interrupt_count >= 2:
+                    # Let the global manager handle the exit
+                    import sys
+
+                    sys.exit(0)
+                else:
+                    # First interrupt - return special interrupt indicator to prevent session restart
+                    await self._emit_system_message("Goodbye!", "goodbye", "👋")
+                    return {"interrupted": True, "messages": messages}
             except Exception as e:
                 error_msg = self.handle_conversation_error(e)
                 await self._emit_error(error_msg, "conversation_error")
@@ -515,14 +530,9 @@ class ChatInterface:
 
     def setup_signal_handlers(self):
         """Set up signal handlers for graceful interruption."""
-
-        def signal_handler(signum, frame):
-            logger.info("Interrupt signal received, stopping chat...")
-            self.interrupt_received = True
-            self.conversation_active = False
-
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
+        # NOTE: Signal handling is now done by the global interrupt manager
+        # to avoid conflicts. This method is kept for backward compatibility.
+        pass
 
     def start_conversation(self):
         """Mark conversation as active."""
@@ -743,7 +753,8 @@ class ChatInterface:
             ):
                 await self._emit_interruption("Retry cancelled by user", "user")
                 input_handler.interrupted = False
-                self.global_interrupt_manager.clear_interrupt()
+                # Don't clear interrupt state immediately - let user press Ctrl+C again to exit
+                # self.global_interrupt_manager.clear_interrupt()
                 return
 
             if current_task and current_task.done() and not current_task.cancelled():
@@ -782,6 +793,8 @@ class ChatInterface:
                 # Reset prompt to ready state for next input
                 self.terminal_manager.update_prompt("> ")
 
+                # Clear interrupt state after successful retry
+                self.global_interrupt_manager.clear_interrupt()
                 await self._emit_status("Retry successful!", "info")
 
         except Exception as e:

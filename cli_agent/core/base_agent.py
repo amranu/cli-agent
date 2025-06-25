@@ -218,7 +218,7 @@ class BaseMCPAgent(ABC):
         """Execute a built-in tool."""
         tool_name = self._normalize_tool_name(tool_name)
         if tool_name == "builtin:bash_execute":
-            return self.builtin_executor.bash_execute(args)
+            return await self.builtin_executor.bash_execute(args)
         elif tool_name == "builtin:read_file":
             return self.builtin_executor.read_file(args)
         elif tool_name == "builtin:write_file":

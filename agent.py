@@ -321,7 +321,19 @@ async def chat(
             )
 
     except KeyboardInterrupt:
-        pass
+        # Check if this is the second interrupt (user wants to exit)
+        from cli_agent.core.global_interrupt import get_global_interrupt_manager
+
+        interrupt_manager = get_global_interrupt_manager()
+
+        if interrupt_manager._interrupt_count >= 2:
+            # Second interrupt - user wants to exit, re-raise to exit the CLI
+            click.echo("\n👋 Exiting...")
+            raise
+        else:
+            # First interrupt - just return to exit this chat session
+            click.echo("\n👋 Chat interrupted by user")
+            return
 
 
 @cli.command()
@@ -1186,9 +1198,38 @@ async def handle_text_chat(
     # Start interactive chat with host reloading support
     input_handler = InterruptibleInput()
 
-    try:
+    # Start continuous background interrupt monitoring for the entire chat session
+    from cli_agent.core.interrupt_aware_streaming import run_with_interrupt_monitoring
+
+    async def chat_session_loop():
+        """Main chat session loop with continuous interrupt monitoring."""
+        nonlocal host, messages, permission_manager, display_manager, config, session_manager
+
+        from cli_agent.core.global_interrupt import get_global_interrupt_manager
+
+        interrupt_manager = get_global_interrupt_manager()
+
         while True:
+            # Check if user interrupted and wants to exit
+            if interrupt_manager.is_interrupted():
+                if interrupt_manager._interrupt_count >= 2:
+                    # Second interrupt - exit entirely
+                    import sys
+
+                    sys.exit(0)
+                # First interrupt - break out of session loop to prevent restart
+                break
+
             chat_result = await host.interactive_chat(input_handler, messages)
+
+            # Check if user quit the chat or interrupted
+            if isinstance(chat_result, dict) and (
+                chat_result.get("quit") or chat_result.get("interrupted")
+            ):
+                # Save final messages before quitting/breaking
+                if "messages" in chat_result:
+                    messages = chat_result["messages"]
+                break
 
             # Update messages from the interactive chat result
             if chat_result is not None:
@@ -1247,41 +1288,68 @@ async def handle_text_chat(
                             )
                             # Preserve session ID for session-specific todo files
                             host._session_id = session_id
-                            click.echo(f"Switched to legacy Gemini")
+                            click.echo("Switched to Google Gemini")
                         except Exception as e:
                             click.echo(f"Error switching to Gemini: {e}")
                             break
-                    else:  # deepseek
+                    elif reload_type == "gemini-pro":
+                        try:
+                            host = create_host(
+                                config, provider_model="google:gemini-1.5-pro"
+                            )
+                            # Preserve session ID for session-specific todo files
+                            host._session_id = session_id
+                            click.echo("Switched to Google Gemini Pro")
+                        except Exception as e:
+                            click.echo(f"Error switching to Gemini Pro: {e}")
+                            break
+                    elif reload_type == "chat":
                         try:
                             host = create_host(
                                 config, provider_model="deepseek:deepseek-chat"
                             )
                             # Preserve session ID for session-specific todo files
                             host._session_id = session_id
-                            click.echo(f"Switched to legacy DeepSeek")
+                            click.echo("Switched to DeepSeek Chat")
                         except Exception as e:
-                            click.echo(f"Error switching to DeepSeek: {e}")
+                            click.echo(f"Error switching to DeepSeek Chat: {e}")
                             break
-
-                # Reconnect to MCP servers
-                for server_name, server_config in config.mcp_servers.items():
-                    click.echo(f"Reconnecting to MCP server: {server_name}")
-                    success = await host.start_mcp_server(server_name, server_config)
-                    if success:
-                        click.echo(f"✅ Reconnected to MCP server: {server_name}")
+                    elif reload_type == "reason":
+                        try:
+                            host = create_host(
+                                config, provider_model="deepseek:deepseek-reasoner"
+                            )
+                            # Preserve session ID for session-specific todo files
+                            host._session_id = session_id
+                            click.echo("Switched to DeepSeek Reasoner")
+                        except Exception as e:
+                            click.echo(f"Error switching to DeepSeek Reasoner: {e}")
+                            break
                     else:
-                        click.echo(
-                            f"⚠️  Failed to reconnect to MCP server: {server_name}"
-                        )
+                        click.echo(f"Unknown model type: {reload_type}")
+                        break
 
-                # Continue with the same input handler and preserved messages
-                print(
-                    f"\n🔄 Continuing chat with {len(messages)} preserved messages...\n"
-                )
-                continue
-            else:
-                # Normal exit from chat
-                break
+                # Re-initialize permission manager for new host
+                host.permission_manager = permission_manager
+
+                # Reconnect to MCP servers with new host
+                for server_name, server_config in config.mcp_servers.items():
+                    success = await host.start_mcp_server(server_name, server_config)
+                    if not success:
+                        click.echo(f"Failed to reconnect to server: {server_name}")
+
+                # Update display manager if needed
+                if event_driven:
+                    display_manager.shutdown()
+                    from cli_agent.core.display_manager import JSONDisplayManager
+
+                    display_manager = JSONDisplayManager(host.event_bus)
+                else:
+                    display_manager = host.display_manager
+
+    try:
+        # Run the chat session loop - let the global interrupt manager handle Ctrl+C
+        await chat_session_loop()
 
     finally:
         # Allow pending events to be processed before shutdown

@@ -77,6 +77,26 @@ def emit_error_with_id(error: str, details: str = ""):
 async def run_subagent_task(task_file_path: str):
     """Run a subagent task from a task file."""
     global current_task_id
+
+    # Set up signal handlers for subagent process
+    try:
+        from cli_agent.core.global_interrupt import get_global_interrupt_manager
+
+        interrupt_manager = get_global_interrupt_manager()
+
+        # Add subagent-specific interrupt callback
+        def subagent_interrupt_callback():
+            if current_task_id:
+                emit_status_with_id("interrupted", "Task interrupted by user")
+                emit_error_with_id(
+                    "Task execution interrupted", "User requested interrupt"
+                )
+
+        interrupt_manager.add_interrupt_callback(subagent_interrupt_callback)
+    except Exception as e:
+        # Continue without interrupt handling if setup fails
+        print(f"Warning: Could not set up subagent interrupt handling: {e}")
+
     try:
         # Load task data
         with open(task_file_path, "r") as f:

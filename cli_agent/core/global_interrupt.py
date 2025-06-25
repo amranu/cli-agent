@@ -46,7 +46,9 @@ class GlobalInterruptManager:
         self._interrupt_count = 0
         self._last_interrupt_time = 0
         self._interrupt_timeout = 2.0  # Reset count after 2 seconds
-        self._interrupt_lock = threading.Lock()
+        self._interrupt_lock = (
+            threading.RLock()
+        )  # Use reentrant lock to prevent deadlock
         self._callbacks: List[Callable[[], None]] = []
         self._original_handlers = {}
         self._setup_signal_handlers()
@@ -84,7 +86,9 @@ class GlobalInterruptManager:
 
                 elif self._interrupt_count >= 2:
                     # Second Ctrl+C: exit application
-                    print("\n👋 Exiting...", flush=True)
+                    print(
+                        f"\n👋 Exiting... (count: {self._interrupt_count})", flush=True
+                    )
                     import sys
 
                     sys.exit(0)
@@ -142,6 +146,15 @@ class GlobalInterruptManager:
             self._interrupt_count = 0
             self._last_interrupt_time = 0
 
+    def get_interrupt_count(self) -> int:
+        """Get the current interrupt count.
+
+        Returns:
+            int: The number of interrupts received within the timeout window
+        """
+        with self._interrupt_lock:
+            return self._interrupt_count
+
     def check_and_raise_if_interrupted(self, message: str = "Operation interrupted"):
         """Check for interrupt and raise KeyboardInterrupt if found.
 
@@ -149,10 +162,15 @@ class GlobalInterruptManager:
             message: Custom message for the exception
 
         Raises:
-            KeyboardInterrupt: If an interrupt has been received
+            KeyboardInterrupt: If an interrupt has been received and it's the second interrupt
         """
         if self.is_interrupted():
-            raise KeyboardInterrupt(message)
+            # Only raise on second interrupt to allow graceful return to prompt on first
+            if self._interrupt_count >= 2:
+                raise KeyboardInterrupt(message)
+            else:
+                # First interrupt - don't raise, just return gracefully
+                return
 
     def add_callback(self, callback: Callable[[], None]):
         """Add a callback to be called when an interrupt is received.

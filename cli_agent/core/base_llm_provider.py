@@ -51,8 +51,15 @@ class BaseLLMProvider(BaseMCPAgent):
 
         try:
             if stream:
-                # Make API request with streaming requested
-                response = await self._make_api_request(messages, tools, stream=True)
+                # Make API request with streaming and aggressive interrupt monitoring
+                from cli_agent.core.interrupt_aware_streaming import (
+                    run_with_interrupt_monitoring,
+                )
+
+                response = await run_with_interrupt_monitoring(
+                    self._make_api_request(messages, tools, stream=True),
+                    "LLM streaming API request",
+                )
 
                 # Check if provider actually disabled streaming (e.g., for o1 models)
                 streaming_disabled = getattr(
@@ -82,35 +89,64 @@ class BaseLLMProvider(BaseMCPAgent):
                             interactive=interactive,
                         )
                     else:
-                        # Handle streaming response and return final content
-                        generator = self._handle_streaming_response_generic(
-                            response,
-                            messages,
-                            interactive=interactive,
-                        )
+                        # Handle streaming response and return final content with interrupt monitoring
+                        async def consume_streaming_response():
+                            generator = self._handle_streaming_response_generic(
+                                response,
+                                messages,
+                                interactive=interactive,
+                            )
 
-                        # Consume the generator and return the final content
-                        final_content = ""
-                        logger.info(f"Consuming streaming generator: {type(generator)}")
-
-                        try:
-                            async for content in generator:
-                                logger.info(
-                                    f"Generator yielded: {type(content)} - {repr(content[:100] if isinstance(content, str) else content)}"
-                                )
-                                if isinstance(content, str):
-                                    final_content = content
-                        except Exception as e:
-                            logger.error(f"Error consuming generator: {e}")
+                            # Consume the generator and return the final content
                             final_content = ""
+                            logger.info(
+                                f"Consuming streaming generator: {type(generator)}"
+                            )
 
-                        logger.info(
-                            f"Final content collected: {len(final_content)} chars"
+                            try:
+                                async for content in generator:
+                                    # Check for interrupts during streaming processing
+                                    from cli_agent.core.global_interrupt import (
+                                        get_global_interrupt_manager,
+                                    )
+
+                                    interrupt_manager = get_global_interrupt_manager()
+                                    if interrupt_manager.is_interrupted():
+                                        logger.info(
+                                            "Streaming response interrupted by user"
+                                        )
+                                        raise KeyboardInterrupt(
+                                            "Streaming response interrupted"
+                                        )
+
+                                    logger.info(
+                                        f"Generator yielded: {type(content)} - {repr(content[:100] if isinstance(content, str) else content)}"
+                                    )
+                                    if isinstance(content, str):
+                                        final_content = content
+                            except Exception as e:
+                                logger.error(f"Error consuming generator: {e}")
+                                final_content = ""
+
+                            logger.info(
+                                f"Final content collected: {len(final_content)} chars"
+                            )
+                            return final_content
+
+                        return await run_with_interrupt_monitoring(
+                            consume_streaming_response(),
+                            "LLM streaming response processing",
                         )
-                        return final_content
             else:
-                # Non-streaming response
-                response = await self._make_api_request(messages, tools, stream=False)
+                # Non-streaming response with interrupt monitoring
+                from cli_agent.core.interrupt_aware_streaming import (
+                    run_with_interrupt_monitoring,
+                )
+
+                response = await run_with_interrupt_monitoring(
+                    self._make_api_request(messages, tools, stream=False),
+                    "LLM API request",
+                )
                 logger.info(f"Non-streaming response received: {type(response)}")
                 result = await self._handle_complete_response_generic(
                     response, messages, interactive=interactive

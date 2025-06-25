@@ -1,7 +1,10 @@
 """Google Gemini API provider implementation."""
 
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
+
+import httpx
 
 from cli_agent.core.base_provider import BaseProvider
 
@@ -10,6 +13,12 @@ logger = logging.getLogger(__name__)
 
 class GoogleProvider(BaseProvider):
     """Google Gemini API provider."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._models_cache = None
+        self._models_cache_time = 0
+        self._cache_duration = 3600  # 1 hour cache
 
     @property
     def name(self) -> str:
@@ -146,7 +155,12 @@ class GoogleProvider(BaseProvider):
         metadata = {}
 
         # Gemini returns a regular generator, not async generator
-        for chunk in response:
+        # Wrap with interrupt checking
+        interruptible_response = self.make_sync_streaming_interruptible(
+            response, "Gemini streaming"
+        )
+
+        for chunk in interruptible_response:
             # Check for function calls in chunk first to avoid accessing .text when function calls are present
             if hasattr(chunk, "candidates") and chunk.candidates:
                 if (
@@ -445,4 +459,253 @@ class GoogleProvider(BaseProvider):
             return gemini_tools
         except Exception as e:
             logger.error(f"Failed to convert tools to Gemini objects: {e}")
+            return []
+
+    async def get_available_models(self) -> List[Dict[str, Any]]:
+        """Get list of available models from Google Gemini API.
+
+        Returns:
+            List of model dictionaries with id, name, context_length, and description
+        """
+        # Check cache first
+        current_time = time.time()
+        if (
+            self._models_cache is not None
+            and current_time - self._models_cache_time < self._cache_duration
+        ):
+            logger.debug("Returning cached Google models")
+            return self._models_cache
+
+        try:
+            # Use httpx for the models API call since it's a simple GET request
+            async with httpx.AsyncClient() as http_client:
+                # Add retry logic for robustness
+                from cli_agent.utils.retry import retry_with_backoff
+
+                async def fetch_models():
+                    return await http_client.get(
+                        f"{self.base_url}/models",
+                        params={"key": self.api_key},
+                        timeout=10.0,
+                    )
+
+                response = await retry_with_backoff(
+                    fetch_models,
+                    max_retries=2,
+                    base_delay=1.0,
+                    retryable_errors=[
+                        "timeout",
+                        "connection",
+                        "500",
+                        "502",
+                        "503",
+                        "504",
+                    ],
+                )
+
+                if response.status_code != 200:
+                    error_msg = (
+                        f"Google models API returned status {response.status_code}"
+                    )
+                    try:
+                        error_data = response.json()
+                        if "error" in error_data:
+                            error_msg = f"{error_msg}: {error_data['error']['message']}"
+                    except:
+                        error_msg = f"{error_msg}: {response.text}"
+                    logger.error(error_msg)
+                    return self._get_fallback_models()
+
+                data = response.json()
+                models = data.get("models", [])
+
+                # Process models to extract essential info
+                processed_models = []
+                for model in models:
+                    model_name = model.get("name", "")
+                    model_id = model_name.replace("models/", "") if model_name else ""
+
+                    # Only include generative models (filter out embedding, etc.)
+                    supported_methods = model.get("supportedGenerationMethods", [])
+                    if "generateContent" not in supported_methods:
+                        continue
+
+                    # Filter for Gemini models
+                    if not model_id.lower().startswith("gemini"):
+                        continue
+
+                    # Extract context length
+                    input_token_limit = model.get("inputTokenLimit", 0)
+                    output_token_limit = model.get("outputTokenLimit", 0)
+                    context_length = (
+                        input_token_limit
+                        if input_token_limit > 0
+                        else self._estimate_context_length(model_id)
+                    )
+
+                    model_info = {
+                        "id": model_id,
+                        "name": model.get(
+                            "displayName", model_id.replace("-", " ").title()
+                        ),
+                        "context_length": context_length,
+                        "description": model.get(
+                            "description", f"Google Gemini model: {model_id}"
+                        ),
+                        "input_token_limit": input_token_limit,
+                        "output_token_limit": output_token_limit,
+                        "supported_methods": supported_methods,
+                        "version": model.get("version", ""),
+                    }
+
+                    processed_models.append(model_info)
+
+                # Sort by name for consistency
+                processed_models.sort(key=lambda x: x["name"].lower())
+
+                # Update cache
+                self._models_cache = processed_models
+                self._models_cache_time = current_time
+
+                logger.info(f"Google provider found {len(processed_models)} models")
+                return processed_models
+
+        except Exception as e:
+            logger.error(f"Failed to fetch Google models: {e}")
+            return self._get_fallback_models()
+
+    def _estimate_context_length(self, model_id: str) -> int:
+        """Estimate context length based on model ID."""
+        model_id_lower = model_id.lower()
+
+        # Estimate based on known Gemini model patterns
+        if "2.5" in model_id_lower:
+            if "flash" in model_id_lower:
+                return 1000000  # Gemini 2.5 Flash typically has 1M context
+            elif "pro" in model_id_lower:
+                return 2000000  # Gemini 2.5 Pro has 2M context
+        elif "1.5" in model_id_lower:
+            if "flash" in model_id_lower:
+                return 1000000  # Gemini 1.5 Flash has 1M context
+            elif "pro" in model_id_lower:
+                return 2000000  # Gemini 1.5 Pro has 2M context
+
+        return 32000  # Conservative default
+
+    def _get_fallback_models(self) -> List[Dict[str, Any]]:
+        """Return hardcoded fallback models if API fails."""
+        fallback_models = [
+            {
+                "id": "gemini-2.5-flash",
+                "name": "Gemini 2.5 Flash",
+                "context_length": 1000000,
+                "description": "Google's fastest and most cost-effective model",
+                "input_token_limit": 1000000,
+                "output_token_limit": 8192,
+            },
+            {
+                "id": "gemini-2.5-pro",
+                "name": "Gemini 2.5 Pro",
+                "context_length": 2000000,
+                "description": "Google's most capable model for complex reasoning tasks",
+                "input_token_limit": 2000000,
+                "output_token_limit": 8192,
+            },
+            {
+                "id": "gemini-1.5-pro",
+                "name": "Gemini 1.5 Pro",
+                "context_length": 2000000,
+                "description": "Google's powerful model with large context window",
+                "input_token_limit": 2000000,
+                "output_token_limit": 8192,
+            },
+            {
+                "id": "gemini-1.5-flash",
+                "name": "Gemini 1.5 Flash",
+                "context_length": 1000000,
+                "description": "Fast and efficient model for everyday tasks",
+                "input_token_limit": 1000000,
+                "output_token_limit": 8192,
+            },
+        ]
+
+        logger.info(f"Using fallback Google models: {len(fallback_models)} models")
+        return fallback_models
+
+    async def get_available_models_summary(self) -> List[str]:
+        """Get a simple list of model IDs from Google.
+
+        Returns:
+            List of model ID strings
+        """
+        models = await self.get_available_models()
+        return [model["id"] for model in models]
+
+    @staticmethod
+    async def fetch_available_models_static(api_key: str) -> List[Dict[str, Any]]:
+        """Static method to fetch models without persisting client state.
+
+        Args:
+            api_key: Google API key
+
+        Returns:
+            List of model dictionaries
+        """
+        try:
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    params={"key": api_key},
+                    timeout=10.0,
+                )
+
+                if response.status_code != 200:
+                    logger.error(
+                        f"Google models API returned status {response.status_code}"
+                    )
+                    return []
+
+                data = response.json()
+                models = data.get("models", [])
+
+                # Process models to extract essential info
+                processed_models = []
+                for model in models:
+                    model_name = model.get("name", "")
+                    model_id = model_name.replace("models/", "") if model_name else ""
+
+                    # Only include generative models and Gemini models
+                    supported_methods = model.get("supportedGenerationMethods", [])
+                    if (
+                        "generateContent" not in supported_methods
+                        or not model_id.lower().startswith("gemini")
+                    ):
+                        continue
+
+                    input_token_limit = model.get("inputTokenLimit", 0)
+                    context_length = (
+                        input_token_limit if input_token_limit > 0 else 32000
+                    )
+
+                    model_info = {
+                        "id": model_id,
+                        "name": model.get(
+                            "displayName", model_id.replace("-", " ").title()
+                        ),
+                        "context_length": context_length,
+                        "description": model.get(
+                            "description", f"Google Gemini model: {model_id}"
+                        ),
+                    }
+
+                    processed_models.append(model_info)
+
+                # Sort by name for consistency
+                processed_models.sort(key=lambda x: x["name"].lower())
+
+                logger.info(f"Google static fetch found {len(processed_models)} models")
+                return processed_models
+
+        except Exception as e:
+            logger.error(f"Failed to fetch Google models (static): {e}")
             return []

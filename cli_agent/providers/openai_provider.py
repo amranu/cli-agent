@@ -242,7 +242,12 @@ class OpenAIProvider(BaseProvider):
         accumulated_tool_calls = []
         metadata = {}
 
-        async for chunk in response:
+        # Wrap response with interrupt checking
+        interruptible_response = self.make_streaming_interruptible(
+            response, "OpenAI streaming"
+        )
+
+        async for chunk in interruptible_response:
             if chunk.choices:
                 delta = chunk.choices[0].delta
 

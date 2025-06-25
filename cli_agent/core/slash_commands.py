@@ -70,7 +70,7 @@ class SlashCommandManager:
         elif command == "model":
             return self._handle_model(args)
         elif command == "models":
-            return self._handle_models()
+            return self._handle_models(args)
         elif command == "provider":
             return self._handle_provider(args)
         elif command == "review":
@@ -87,6 +87,8 @@ class SlashCommandManager:
             return self._handle_truncate(args)
         elif command == "refresh-models":
             return self._handle_refresh_models()
+        elif command == "switch":
+            return self._handle_switch(args)
         elif command == "switch-deepseek" or command == "switch-chat":
             return self._handle_switch_deepseek()
         elif command == "switch-reason":
@@ -118,7 +120,8 @@ Built-in Commands:
   /compact        - Compact conversation history into a summary
   /tokens         - Show current token usage statistics
   /model [name]   - Show current model or switch to model (e.g. /model deepseek-reasoner)
-  /models         - List all available models with their providers
+  /models [provider] - List all available models, optionally filtered by provider (e.g. /models anthropic)
+  /switch <provider>:<model> - Switch to any provider-model combination (e.g. /switch anthropic:claude-3.5-sonnet)
   /provider [name]- Show current provider or switch provider (e.g. /provider openrouter)
   /review [file]  - Request code review
   /tools          - List all available tools
@@ -237,6 +240,64 @@ Custom Commands:"""
 
         return result
 
+    def _handle_switch(self, args: str) -> Dict[str, Any]:
+        """Handle /switch command for provider-model combinations.
+
+        Args:
+            args: Provider-model combination in format "provider:model"
+        """
+        if not args.strip():
+            return "❌ Usage: /switch <provider>:<model>\nExample: /switch anthropic:claude-3.5-sonnet\nUse /models to see available options."
+
+        provider_model = args.strip()
+
+        # Validate format
+        if ":" not in provider_model:
+            return "❌ Invalid format. Use: /switch <provider>:<model>\nExample: /switch anthropic:claude-3.5-sonnet"
+
+        try:
+            from config import load_config
+
+            config = load_config()
+
+            # Parse and validate the provider-model combination
+            try:
+                provider_name, model_name = config.parse_provider_model_string(
+                    provider_model
+                )
+            except Exception as e:
+                return f"❌ Invalid provider-model format: {str(e)}\nExample: /switch anthropic:claude-3.5-sonnet"
+
+            # Check if the provider-model combination is available
+            available_models = config.get_available_provider_models()
+
+            if provider_name not in available_models:
+                available_providers = ", ".join(available_models.keys())
+                return f"❌ Provider '{provider_name}' not available. Available providers: {available_providers}"
+
+            if model_name not in available_models[provider_name]:
+                available_models_for_provider = ", ".join(
+                    available_models[provider_name][:10]
+                )  # Show first 10
+                more_models = (
+                    f" (and {len(available_models[provider_name]) - 10} more)"
+                    if len(available_models[provider_name]) > 10
+                    else ""
+                )
+                return f"❌ Model '{model_name}' not available for provider '{provider_name}'.\nAvailable models: {available_models_for_provider}{more_models}\nUse '/models {provider_name}' to see all options."
+
+            # Update configuration
+            config.default_provider_model = provider_model
+            config.save_persistent_config()
+
+            return {
+                "status": f"✅ Switched to: {provider_model} (Provider: {provider_name}, Model: {model_name})",
+                "reload_host": "provider-model",
+            }
+
+        except Exception as e:
+            return f"❌ Failed to switch model: {str(e)}"
+
     def _handle_switch_deepseek(self) -> Dict[str, Any]:
         """Handle /switch-deepseek command."""
         try:
@@ -346,8 +407,12 @@ Custom Commands:"""
             except Exception as e:
                 return f"❌ Failed to switch model: {str(e)}"
 
-    def _handle_models(self) -> str:
-        """Handle /models command - list all available models with their providers."""
+    def _handle_models(self, args: str = "") -> str:
+        """Handle /models command - list all available models with their providers.
+
+        Args:
+            args: Optional provider name to filter by (e.g., "anthropic", "openai")
+        """
         try:
             from config import load_config
 
@@ -357,8 +422,24 @@ Custom Commands:"""
             if not available_models:
                 return "❌ No models available. Configure API keys via environment variables (ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY)."
 
+            # Filter by provider if specified
+            filter_provider = args.strip().lower() if args.strip() else None
+            if filter_provider:
+                # Check if the provider exists
+                if filter_provider not in available_models:
+                    available_providers = ", ".join(available_models.keys())
+                    return f"❌ Provider '{filter_provider}' not found. Available providers: {available_providers}"
+
+                # Filter to only the specified provider
+                available_models = {filter_provider: available_models[filter_provider]}
+
             output = []
-            output.append("📋 **Available Models:**\n")
+            if filter_provider:
+                output.append(
+                    f"📋 **Available Models for {filter_provider.upper()}:**\n"
+                )
+            else:
+                output.append("📋 **Available Models:**\n")
 
             total_models = 0
             for provider, models in available_models.items():
@@ -370,10 +451,15 @@ Custom Commands:"""
                     output.append(f"  • `{model}` → `/switch {usage_format}`")
                 output.append("")  # Empty line between providers
 
-            output.append(
-                f"**Total:** {total_models} models across {len(available_models)} providers"
-            )
+            if filter_provider:
+                output.append(f"**Total:** {total_models} models for {filter_provider}")
+            else:
+                output.append(
+                    f"**Total:** {total_models} models across {len(available_models)} providers"
+                )
+
             output.append("\n💡 Use `/switch <provider>:<model>` to switch models")
+            output.append("💡 Use `/models <provider>` to filter by provider")
             output.append("💡 Use `/model` to see current model")
 
             return "\n".join(output)

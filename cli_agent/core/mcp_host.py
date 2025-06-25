@@ -200,11 +200,23 @@ class MCPHost(BaseLLMProvider):
         # Handle both async and sync iterators (Gemini returns sync generator)
         if hasattr(response, "__aiter__"):
             # Async iterator (OpenAI, Anthropic, etc.)
-            chunks_iter = response
+            # Wrap with interrupt checking
+            from cli_agent.core.interrupt_aware_streaming import make_interruptible
+
+            chunks_iter = make_interruptible(
+                response, f"{self.provider.name} event streaming"
+            )
         elif hasattr(response, "__iter__"):
             # Sync iterator (Gemini) - convert to async with yield points for event processing
+            # and wrap with interrupt checking
+            from cli_agent.core.interrupt_aware_streaming import make_sync_interruptible
+
             async def async_generator():
-                for chunk in response:
+                # Wrap sync iterator with interrupt checking
+                interruptible_iter = make_sync_interruptible(
+                    response, f"{self.provider.name} event streaming"
+                )
+                for chunk in interruptible_iter:
                     yield chunk
                     # Yield control to allow immediate event processing
                     await asyncio.sleep(0)

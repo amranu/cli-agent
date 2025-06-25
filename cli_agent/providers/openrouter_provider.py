@@ -2,7 +2,10 @@
 
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
+
+import httpx
 
 from cli_agent.core.base_provider import BaseProvider
 
@@ -11,6 +14,13 @@ logger = logging.getLogger(__name__)
 
 class OpenRouterProvider(BaseProvider):
     """OpenRouter API provider for accessing multiple models through one API."""
+
+    def __init__(self, api_key: str, base_url: Optional[str] = None, **kwargs):
+        """Initialize OpenRouter provider with caching for model list."""
+        super().__init__(api_key, base_url, **kwargs)
+        self._models_cache = None
+        self._models_cache_time = 0
+        self._cache_duration = 3600  # Cache for 1 hour
 
     @property
     def name(self) -> str:
@@ -127,7 +137,12 @@ class OpenRouterProvider(BaseProvider):
         accumulated_tool_calls = []
         metadata = {}
 
-        async for chunk in response:
+        # Wrap response with interrupt checking
+        interruptible_response = self.make_streaming_interruptible(
+            response, "OpenRouter streaming"
+        )
+
+        async for chunk in interruptible_response:
             if chunk.choices:
                 delta = chunk.choices[0].delta
 
@@ -272,3 +287,179 @@ class OpenRouterProvider(BaseProvider):
         self.app_name = app_name
         self.site_url = site_url
         logger.debug(f"Set OpenRouter app info: {app_name} - {site_url}")
+
+    async def get_available_models(self) -> List[Dict[str, Any]]:
+        """Get list of available models from OpenRouter API.
+
+        Returns:
+            List of model dictionaries with id, name, context_length, and description
+        """
+        # Check cache first
+        current_time = time.time()
+        if (
+            self._models_cache is not None
+            and current_time - self._models_cache_time < self._cache_duration
+        ):
+            logger.debug("Returning cached OpenRouter models")
+            return self._models_cache
+
+        try:
+            # Import httpx for direct API call
+            import httpx
+
+            # Create a temporary httpx client for this request
+            async with httpx.AsyncClient() as http_client:
+                # Add retry logic for robustness
+                from cli_agent.utils.retry import retry_with_backoff
+
+                async def fetch_models():
+                    return await http_client.get(
+                        f"{self.base_url}/models",
+                        headers={
+                            "Authorization": f"Bearer {self.api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        timeout=10.0,
+                    )
+
+                response = await retry_with_backoff(
+                    fetch_models,
+                    max_retries=2,
+                    base_delay=1.0,
+                    retryable_errors=[
+                        "timeout",
+                        "connection",
+                        "500",
+                        "502",
+                        "503",
+                        "504",
+                    ],
+                )
+
+                if response.status_code != 200:
+                    error_msg = (
+                        f"OpenRouter models API returned status {response.status_code}"
+                    )
+                    try:
+                        error_data = response.json()
+                        if "error" in error_data:
+                            error_msg = f"{error_msg}: {error_data['error']}"
+                    except:
+                        error_msg = f"{error_msg}: {response.text}"
+                    logger.error(error_msg)
+                    return []
+
+                data = response.json()
+                models = data.get("data", [])
+
+                # Process models to extract essential info
+                processed_models = []
+                for model in models:
+                    model_info = {
+                        "id": model.get("id"),
+                        "name": model.get("name", model.get("id", "Unknown")),
+                        "context_length": model.get("context_length", 4096),
+                        "description": model.get("description", ""),
+                        "pricing": model.get("pricing", {}),
+                        "top_provider": model.get("top_provider", {}),
+                    }
+
+                    # Only include models that have an ID
+                    if model_info["id"]:
+                        processed_models.append(model_info)
+
+                # Sort by name for consistency
+                processed_models.sort(key=lambda x: x["name"].lower())
+
+                # Update cache
+                self._models_cache = processed_models
+                self._models_cache_time = current_time
+
+                logger.info(f"OpenRouter provider found {len(processed_models)} models")
+                return processed_models
+
+        except ImportError:
+            logger.error(
+                "httpx package is required for OpenRouter model discovery. Install with: pip install httpx"
+            )
+            return []
+        except httpx.ConnectError as e:
+            logger.error(f"Failed to connect to OpenRouter API: {e}")
+            return []
+        except httpx.TimeoutException:
+            logger.error("OpenRouter API request timed out")
+            return []
+        except Exception as e:
+            logger.error(f"Failed to fetch OpenRouter models: {e}")
+            return []
+
+    async def get_available_models_summary(self) -> List[str]:
+        """Get a simple list of model IDs from OpenRouter.
+
+        Returns:
+            List of model ID strings
+        """
+        models = await self.get_available_models()
+        return [model["id"] for model in models]
+
+    @staticmethod
+    async def fetch_available_models_static(api_key: str) -> List[Dict[str, Any]]:
+        """Static method to fetch models without persisting client state.
+
+        Args:
+            api_key: OpenRouter API key
+
+        Returns:
+            List of model dictionaries
+        """
+        try:
+            import httpx
+
+            # Create a temporary httpx client for this request
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.get(
+                    "https://openrouter.ai/api/v1/models",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=10.0,
+                )
+
+                if response.status_code != 200:
+                    logger.error(
+                        f"OpenRouter models API returned status {response.status_code}"
+                    )
+                    return []
+
+                data = response.json()
+                models = data.get("data", [])
+
+                # Process models to extract essential info
+                processed_models = []
+                for model in models:
+                    model_info = {
+                        "id": model.get("id"),
+                        "name": model.get("name", model.get("id", "Unknown")),
+                        "context_length": model.get("context_length", 4096),
+                        "description": model.get("description", ""),
+                    }
+
+                    # Only include models that have an ID
+                    if model_info["id"]:
+                        processed_models.append(model_info)
+
+                # Sort by name for consistency
+                processed_models.sort(key=lambda x: x["name"].lower())
+
+                logger.info(
+                    f"OpenRouter static fetch found {len(processed_models)} models"
+                )
+                return processed_models
+
+        except ImportError:
+            logger.error("httpx package is required for OpenRouter model discovery")
+            return []
+        except Exception as e:
+            logger.error(f"Failed to fetch OpenRouter models (static): {e}")
+            return []

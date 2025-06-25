@@ -441,13 +441,78 @@ class HostConfig(BaseSettings):
         available = {}
 
         if self.anthropic_api_key:
-            available["anthropic"] = [
-                "claude-opus-4-20250514",
-                "claude-sonnet-4-20250514",
-                "claude-3-5-sonnet-20241022",
-                "claude-3-5-haiku-20241022",
-                "claude-3-opus-20240229",
-            ]
+            # Try to get dynamic model list from Anthropic API with caching
+            anthropic_cache_key = f"anthropic_models_{hash(self.anthropic_api_key)}"
+
+            # Check Anthropic-specific cache first
+            if (
+                anthropic_cache_key in self._model_cache
+                and current_time
+                - self._model_cache[anthropic_cache_key].get("timestamp", 0)
+                < self._cache_ttl
+            ):
+                available["anthropic"] = self._model_cache[anthropic_cache_key]["data"]
+                logger.debug("Using cached Anthropic models")
+            else:
+                try:
+                    import asyncio
+
+                    from cli_agent.providers.anthropic_provider import AnthropicProvider
+
+                    # Use static method to avoid client lifecycle issues
+                    # Check if we're already in an event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # We're in an async context, create a new thread to run the async call
+                        import concurrent.futures
+
+                        def run_in_thread():
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                models_data = new_loop.run_until_complete(
+                                    AnthropicProvider.fetch_available_models_static(
+                                        self.anthropic_api_key
+                                    )
+                                )
+                                return [model["id"] for model in models_data]
+                            finally:
+                                new_loop.close()
+
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(run_in_thread)
+                            models = future.result(timeout=15)  # 15 second timeout
+
+                    except RuntimeError:
+                        # No event loop running, we can use asyncio.run
+                        models_data = asyncio.run(
+                            AnthropicProvider.fetch_available_models_static(
+                                self.anthropic_api_key
+                            )
+                        )
+                        models = [model["id"] for model in models_data]
+
+                    if models:  # Only add if we got models
+                        available["anthropic"] = models
+                        # Cache the Anthropic models separately
+                        self._model_cache[anthropic_cache_key] = {
+                            "data": models,
+                            "timestamp": current_time,
+                        }
+                        logger.info(
+                            f"Successfully fetched and cached {len(models)} Anthropic models dynamically"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"Failed to get dynamic Anthropic models: {e}")
+                    # Fallback to static list if API fails
+                    fallback_models = [
+                        "claude-3-5-sonnet-20241022",
+                        "claude-3-5-haiku-20241022",
+                        "claude-3-opus-20240229",
+                    ]
+                    available["anthropic"] = fallback_models
+                    logger.info(f"Using fallback Anthropic models: {fallback_models}")
 
         if self.openai_api_key:
             # Try to get dynamic model list from OpenAI API with caching
@@ -524,24 +589,226 @@ class HostConfig(BaseSettings):
                     logger.info(f"Using fallback OpenAI models: {fallback_models}")
 
         if self.openrouter_api_key:
-            available["openrouter"] = [
-                "anthropic/claude-3.5-sonnet",
-                "openai/gpt-4-turbo-preview",
-                "google/gemini-pro-1.5",
-                "meta-llama/llama-3.1-405b-instruct",
-                "deepseek/deepseek-chat",
-            ]
+            # Try to get dynamic model list from OpenRouter API with caching
+            openrouter_cache_key = f"openrouter_models_{hash(self.openrouter_api_key)}"
+
+            # Check OpenRouter-specific cache first
+            if (
+                openrouter_cache_key in self._model_cache
+                and current_time
+                - self._model_cache[openrouter_cache_key].get("timestamp", 0)
+                < self._cache_ttl
+            ):
+                available["openrouter"] = self._model_cache[openrouter_cache_key][
+                    "data"
+                ]
+                logger.debug("Using cached OpenRouter models")
+            else:
+                try:
+                    import asyncio
+
+                    from cli_agent.providers.openrouter_provider import (
+                        OpenRouterProvider,
+                    )
+
+                    # Use static method to avoid client lifecycle issues
+                    # Check if we're already in an event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # We're in an async context, create a new thread to run the async call
+                        import concurrent.futures
+
+                        def run_in_thread():
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                models_data = new_loop.run_until_complete(
+                                    OpenRouterProvider.fetch_available_models_static(
+                                        self.openrouter_api_key
+                                    )
+                                )
+                                return [model["id"] for model in models_data]
+                            finally:
+                                new_loop.close()
+
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(run_in_thread)
+                            models = future.result(timeout=15)  # 15 second timeout
+
+                    except RuntimeError:
+                        # No event loop running, we can use asyncio.run
+                        models_data = asyncio.run(
+                            OpenRouterProvider.fetch_available_models_static(
+                                self.openrouter_api_key
+                            )
+                        )
+                        models = [model["id"] for model in models_data]
+
+                    if models:  # Only add if we got models
+                        available["openrouter"] = models
+                        # Cache the OpenRouter models separately
+                        self._model_cache[openrouter_cache_key] = {
+                            "data": models,
+                            "timestamp": current_time,
+                        }
+                        logger.info(
+                            f"Successfully fetched and cached {len(models)} OpenRouter models dynamically"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"Failed to get dynamic OpenRouter models: {e}")
+                    # Fallback to static list if API fails
+                    fallback_models = [
+                        "anthropic/claude-3.5-sonnet",
+                        "openai/gpt-4-turbo-preview",
+                        "google/gemini-pro-1.5",
+                        "meta-llama/llama-3.1-405b-instruct",
+                        "deepseek/deepseek-chat",
+                    ]
+                    available["openrouter"] = fallback_models
+                    logger.info(f"Using fallback OpenRouter models: {fallback_models}")
 
         if self.deepseek_api_key:
-            available["deepseek"] = ["deepseek-chat", "deepseek-reasoner"]
+            # Try to get dynamic model list from DeepSeek API with caching
+            deepseek_cache_key = f"deepseek_models_{hash(self.deepseek_api_key)}"
+
+            # Check DeepSeek-specific cache first
+            if (
+                deepseek_cache_key in self._model_cache
+                and current_time
+                - self._model_cache[deepseek_cache_key].get("timestamp", 0)
+                < self._cache_ttl
+            ):
+                available["deepseek"] = self._model_cache[deepseek_cache_key]["data"]
+                logger.debug("Using cached DeepSeek models")
+            else:
+                try:
+                    import asyncio
+
+                    from cli_agent.providers.deepseek_provider import DeepSeekProvider
+
+                    # Use static method to avoid client lifecycle issues
+                    # Check if we're already in an event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # We're in an async context, create a new thread to run the async call
+                        import concurrent.futures
+
+                        def run_in_thread():
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                # Create temporary provider to use get_available_models
+                                provider = DeepSeekProvider(self.deepseek_api_key)
+                                models_data = new_loop.run_until_complete(
+                                    provider.get_available_models()
+                                )
+                                return [model["id"] for model in models_data]
+                            finally:
+                                new_loop.close()
+
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(run_in_thread)
+                            models = future.result(timeout=15)  # 15 second timeout
+
+                    except RuntimeError:
+                        # No event loop running, we can use asyncio.run
+                        provider = DeepSeekProvider(self.deepseek_api_key)
+                        models_data = asyncio.run(provider.get_available_models())
+                        models = [model["id"] for model in models_data]
+
+                    if models:  # Only add if we got models
+                        available["deepseek"] = models
+                        # Cache the DeepSeek models separately
+                        self._model_cache[deepseek_cache_key] = {
+                            "data": models,
+                            "timestamp": current_time,
+                        }
+                        logger.info(
+                            f"Successfully fetched and cached {len(models)} DeepSeek models dynamically"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"Failed to get dynamic DeepSeek models: {e}")
+                    # Fallback to static list if API fails
+                    fallback_models = ["deepseek-chat", "deepseek-reasoner"]
+                    available["deepseek"] = fallback_models
+                    logger.info(f"Using fallback DeepSeek models: {fallback_models}")
 
         if self.gemini_api_key:
-            available["google"] = [
-                "gemini-2.5-flash",
-                "gemini-2.5-pro",
-                "gemini-1.5-pro",
-                "gemini-1.5-flash",
-            ]
+            # Try to get dynamic model list from Google API with caching
+            google_cache_key = f"google_models_{hash(self.gemini_api_key)}"
+
+            # Check Google-specific cache first
+            if (
+                google_cache_key in self._model_cache
+                and current_time
+                - self._model_cache[google_cache_key].get("timestamp", 0)
+                < self._cache_ttl
+            ):
+                available["google"] = self._model_cache[google_cache_key]["data"]
+                logger.debug("Using cached Google models")
+            else:
+                try:
+                    import asyncio
+
+                    from cli_agent.providers.google_provider import GoogleProvider
+
+                    # Use static method to avoid client lifecycle issues
+                    # Check if we're already in an event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # We're in an async context, create a new thread to run the async call
+                        import concurrent.futures
+
+                        def run_in_thread():
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                models_data = new_loop.run_until_complete(
+                                    GoogleProvider.fetch_available_models_static(
+                                        self.gemini_api_key
+                                    )
+                                )
+                                return [model["id"] for model in models_data]
+                            finally:
+                                new_loop.close()
+
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(run_in_thread)
+                            models = future.result(timeout=15)  # 15 second timeout
+
+                    except RuntimeError:
+                        # No event loop running, we can use asyncio.run
+                        models_data = asyncio.run(
+                            GoogleProvider.fetch_available_models_static(
+                                self.gemini_api_key
+                            )
+                        )
+                        models = [model["id"] for model in models_data]
+
+                    if models:  # Only add if we got models
+                        available["google"] = models
+                        # Cache the Google models separately
+                        self._model_cache[google_cache_key] = {
+                            "data": models,
+                            "timestamp": current_time,
+                        }
+                        logger.info(
+                            f"Successfully fetched and cached {len(models)} Google models dynamically"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"Failed to get dynamic Google models: {e}")
+                    # Fallback to static list if API fails
+                    fallback_models = [
+                        "gemini-2.5-flash",
+                        "gemini-2.5-pro",
+                        "gemini-1.5-pro",
+                        "gemini-1.5-flash",
+                    ]
+                    available["google"] = fallback_models
+                    logger.info(f"Using fallback Google models: {fallback_models}")
 
         # Cache the complete result
         self._model_cache[cache_key] = {"data": available, "timestamp": current_time}

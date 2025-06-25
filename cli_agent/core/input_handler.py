@@ -119,6 +119,13 @@ class InterruptibleInput:
                 return input(prompt_text)
             except KeyboardInterrupt:
                 self.interrupted = True
+                # Manually trigger the global interrupt manager since basic input intercepted the signal
+                import os
+                import signal
+
+                os.kill(
+                    os.getpid(), signal.SIGINT
+                )  # Re-send SIGINT to trigger our global handler
                 return None
             except EOFError:
                 # End of input (e.g., pipe closed)
@@ -172,6 +179,13 @@ class InterruptibleInput:
 
         except KeyboardInterrupt:
             self.interrupted = True
+            # Manually trigger the global interrupt manager since prompt_toolkit intercepted the signal
+            import os
+            import signal
+
+            os.kill(
+                os.getpid(), signal.SIGINT
+            )  # Re-send SIGINT to trigger our global handler
             return None
         except EOFError:
             # Handle Ctrl+D gracefully

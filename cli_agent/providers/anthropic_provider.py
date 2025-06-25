@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -13,6 +14,12 @@ logger = logging.getLogger(__name__)
 
 class AnthropicProvider(BaseProvider):
     """Anthropic API provider for Claude models."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._models_cache = None
+        self._models_cache_time = 0
+        self._cache_duration = 3600  # 1 hour cache
 
     @property
     def name(self) -> str:
@@ -177,8 +184,12 @@ class AnthropicProvider(BaseProvider):
         metadata = {}
         current_tool_use = None
 
-        # Process server-sent events
-        async for line in response.aiter_lines():
+        # Process server-sent events with interrupt checking
+        interruptible_response = self.make_streaming_interruptible(
+            response.aiter_lines(), "Anthropic streaming"
+        )
+
+        async for line in interruptible_response:
             if not line.strip():
                 continue
 
@@ -411,7 +422,12 @@ class AnthropicProvider(BaseProvider):
             current_tool_use = None
             tool_index = 0  # Track tool call index for OpenAI compatibility
 
-            async for line in response.aiter_lines():
+            # Wrap with interrupt checking
+            interruptible_response = self.make_streaming_interruptible(
+                response.aiter_lines(), "Anthropic stream iterator"
+            )
+
+            async for line in interruptible_response:
                 if not line.strip():
                     continue
 
@@ -565,3 +581,197 @@ class AnthropicProvider(BaseProvider):
                             current_tool_use = None
 
         return anthropic_stream_iterator()
+
+    async def get_available_models(self) -> List[Dict[str, Any]]:
+        """Get list of available models from Anthropic API.
+
+        Returns:
+            List of model dictionaries with id, name, context_length, and description
+        """
+        # Check cache first
+        current_time = time.time()
+        if (
+            self._models_cache is not None
+            and current_time - self._models_cache_time < self._cache_duration
+        ):
+            logger.debug("Returning cached Anthropic models")
+            return self._models_cache
+
+        try:
+            # Add retry logic for robustness
+            from cli_agent.utils.retry import retry_with_backoff
+
+            async def fetch_models():
+                return await self.client.get(
+                    "/v1/models",
+                    headers={
+                        "x-api-key": self.api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                )
+
+            response = await retry_with_backoff(
+                fetch_models,
+                max_retries=2,
+                base_delay=1.0,
+                retryable_errors=["timeout", "connection", "500", "502", "503", "504"],
+            )
+
+            if response.status_code != 200:
+                error_msg = (
+                    f"Anthropic models API returned status {response.status_code}"
+                )
+                try:
+                    error_data = response.json()
+                    if "error" in error_data:
+                        error_msg = f"{error_msg}: {error_data['error']['message']}"
+                except:
+                    error_msg = f"{error_msg}: {response.text}"
+                logger.error(error_msg)
+                return self._get_fallback_models()
+
+            data = response.json()
+            models = data.get("data", [])
+
+            # Process models to extract essential info
+            processed_models = []
+            for model in models:
+                # Extract context length from model name or use defaults
+                context_length = self._estimate_context_length(model.get("id", ""))
+
+                model_info = {
+                    "id": model.get("id"),
+                    "name": model.get("display_name", model.get("id", "Unknown")),
+                    "context_length": context_length,
+                    "description": f"Claude model: {model.get('display_name', model.get('id', 'Unknown'))}",
+                    "created_at": model.get("created_at"),
+                    "type": model.get("type", "model"),
+                }
+
+                # Only include models that have an ID
+                if model_info["id"]:
+                    processed_models.append(model_info)
+
+            # Sort by name for consistency
+            processed_models.sort(key=lambda x: x["name"].lower())
+
+            # Update cache
+            self._models_cache = processed_models
+            self._models_cache_time = current_time
+
+            logger.info(f"Anthropic provider found {len(processed_models)} models")
+            return processed_models
+
+        except Exception as e:
+            logger.error(f"Failed to fetch Anthropic models: {e}")
+            return self._get_fallback_models()
+
+    def _estimate_context_length(self, model_id: str) -> int:
+        """Estimate context length based on model ID."""
+        model_id_lower = model_id.lower()
+
+        # Estimate based on known Claude model patterns
+        if "opus" in model_id_lower:
+            return 200000  # Claude Opus typically has 200k context
+        elif "sonnet" in model_id_lower:
+            return 200000  # Claude 3.5 Sonnet has 200k context
+        elif "haiku" in model_id_lower:
+            return 200000  # Claude 3.5 Haiku has 200k context
+        else:
+            return 200000  # Default to 200k for Claude models
+
+    def _get_fallback_models(self) -> List[Dict[str, Any]]:
+        """Return hardcoded fallback models if API fails."""
+        fallback_models = [
+            {
+                "id": "claude-3-5-sonnet-20241022",
+                "name": "Claude 3.5 Sonnet",
+                "context_length": 200000,
+                "description": "Anthropic's most intelligent model, with top-level performance on most tasks",
+                "type": "model",
+            },
+            {
+                "id": "claude-3-5-haiku-20241022",
+                "name": "Claude 3.5 Haiku",
+                "context_length": 200000,
+                "description": "Fast and cost-effective model for simple tasks",
+                "type": "model",
+            },
+            {
+                "id": "claude-3-opus-20240229",
+                "name": "Claude 3 Opus",
+                "context_length": 200000,
+                "description": "Most powerful model for highly complex tasks",
+                "type": "model",
+            },
+        ]
+
+        logger.info(f"Using fallback Anthropic models: {len(fallback_models)} models")
+        return fallback_models
+
+    async def get_available_models_summary(self) -> List[str]:
+        """Get a simple list of model IDs from Anthropic.
+
+        Returns:
+            List of model ID strings
+        """
+        models = await self.get_available_models()
+        return [model["id"] for model in models]
+
+    @staticmethod
+    async def fetch_available_models_static(api_key: str) -> List[Dict[str, Any]]:
+        """Static method to fetch models without persisting client state.
+
+        Args:
+            api_key: Anthropic API key
+
+        Returns:
+            List of model dictionaries
+        """
+        try:
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    timeout=10.0,
+                )
+
+                if response.status_code != 200:
+                    logger.error(
+                        f"Anthropic models API returned status {response.status_code}"
+                    )
+                    return []
+
+                data = response.json()
+                models = data.get("data", [])
+
+                # Process models to extract essential info
+                processed_models = []
+                for model in models:
+                    model_info = {
+                        "id": model.get("id"),
+                        "name": model.get("display_name", model.get("id", "Unknown")),
+                        "context_length": 200000,  # Default for Claude models
+                        "description": f"Claude model: {model.get('display_name', model.get('id', 'Unknown'))}",
+                    }
+
+                    # Only include models that have an ID
+                    if model_info["id"]:
+                        processed_models.append(model_info)
+
+                # Sort by name for consistency
+                processed_models.sort(key=lambda x: x["name"].lower())
+
+                logger.info(
+                    f"Anthropic static fetch found {len(processed_models)} models"
+                )
+                return processed_models
+
+        except Exception as e:
+            logger.error(f"Failed to fetch Anthropic models (static): {e}")
+            return []

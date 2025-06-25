@@ -105,6 +105,8 @@ class DisplayManager:
         ]:
             return
 
+        # Let the global interrupt manager handle Ctrl+C - don't interfere here
+
         try:
             if event.event_type == EventType.TEXT:
                 await self._display_text_event(event)
@@ -137,6 +139,9 @@ class DisplayManager:
     async def _display_text_event(self, event: TextEvent):
         """Display text content from LLM responses with enhanced formatting."""
         logger.debug(f"DisplayManager received TextEvent: {repr(event.content[:50])}")
+
+        # Let the global interrupt manager handle Ctrl+C - don't interfere here
+
         if self.interactive and event.content:
             # Handle streaming content immediately without delays
             if event.is_streaming:

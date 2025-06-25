@@ -44,6 +44,67 @@ class DeepSeekProvider(BaseProvider):
     def supports_streaming(self) -> bool:
         return True
 
+    async def get_available_models(self) -> List[Dict[str, Any]]:
+        """Get list of available models from DeepSeek API.
+
+        Note: DeepSeek uses OpenAI-compatible API, so this attempts to use
+        the standard /v1/models endpoint. If DeepSeek doesn't support this
+        endpoint, it will return a hardcoded list of known models.
+
+        Returns:
+            List of model dictionaries with id, name, context_length, and description
+        """
+        try:
+            response = await self.client.models.list()
+            # Extract model information
+            models = []
+            for model in response.data:
+                model_id = model.id
+                # Filter for DeepSeek models
+                if "deepseek" in model_id.lower():
+                    model_info = {
+                        "id": model_id,
+                        "name": model_id.replace("-", " ").title(),
+                        "context_length": getattr(
+                            model, "context_length", 32000
+                        ),  # DeepSeek default
+                        "description": f"DeepSeek {model_id.replace('deepseek-', '').replace('-', ' ').title()} model",
+                    }
+                    models.append(model_info)
+
+            logger.info(f"DeepSeek provider found {len(models)} models")
+            return sorted(models, key=lambda x: x["name"])
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to fetch DeepSeek models (may not support /v1/models endpoint): {e}"
+            )
+            # Return known DeepSeek models as fallback
+            fallback_models = [
+                {
+                    "id": "deepseek-chat",
+                    "name": "DeepSeek Chat",
+                    "context_length": 32000,
+                    "description": "DeepSeek's general-purpose chat model",
+                },
+                {
+                    "id": "deepseek-reasoner",
+                    "name": "DeepSeek Reasoner",
+                    "context_length": 32000,
+                    "description": "DeepSeek's reasoning-focused model with Chain of Thought",
+                },
+                {
+                    "id": "deepseek-coder",
+                    "name": "DeepSeek Coder",
+                    "context_length": 32000,
+                    "description": "DeepSeek's code-specialized model",
+                },
+            ]
+            logger.info(
+                f"Using fallback DeepSeek models: {len(fallback_models)} models"
+            )
+            return fallback_models
+
     async def make_request(
         self,
         messages: List[Dict[str, Any]],
@@ -138,7 +199,12 @@ class DeepSeekProvider(BaseProvider):
         accumulated_tool_calls = []
         metadata = {}
 
-        async for chunk in response:
+        # Wrap response with interrupt checking
+        interruptible_response = self.make_streaming_interruptible(
+            response, "DeepSeek streaming"
+        )
+
+        async for chunk in interruptible_response:
             if chunk.choices:
                 delta = chunk.choices[0].delta
 

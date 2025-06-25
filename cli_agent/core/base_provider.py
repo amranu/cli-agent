@@ -96,6 +96,44 @@ class BaseProvider(ABC):
         """
         pass
 
+    def make_streaming_interruptible(
+        self, response: Any, operation_name: str = None
+    ) -> Any:
+        """Wrap streaming response with interrupt checking.
+
+        Args:
+            response: Provider's streaming response object
+            operation_name: Name for logging (defaults to provider name)
+
+        Returns:
+            InterruptAwareStream wrapper
+        """
+        from cli_agent.core.interrupt_aware_streaming import make_interruptible
+
+        if operation_name is None:
+            operation_name = f"{self.name} streaming response"
+
+        return make_interruptible(response, operation_name)
+
+    def make_sync_streaming_interruptible(
+        self, response: Any, operation_name: str = None
+    ) -> Any:
+        """Wrap synchronous streaming response with interrupt checking.
+
+        Args:
+            response: Provider's synchronous streaming response object
+            operation_name: Name for logging (defaults to provider name)
+
+        Returns:
+            Generator with interrupt checking
+        """
+        from cli_agent.core.interrupt_aware_streaming import make_sync_interruptible
+
+        if operation_name is None:
+            operation_name = f"{self.name} sync streaming response"
+
+        return make_sync_interruptible(response, operation_name)
+
     @abstractmethod
     async def process_streaming_response(
         self, response: Any
