@@ -355,6 +355,10 @@ Please continue with your task.""",
         ):
             return None
 
+        # Skip auto-injection if BACKGROUND_SUBAGENTS is enabled
+        if self.agent.config.background_subagents:
+            return None
+
         # Prepare status messages for centralized handling
         interrupt_msg = "\r\n🔄 Subagents spawned - interrupting main stream to wait for completion...\r\n"
 

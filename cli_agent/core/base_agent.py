@@ -58,10 +58,6 @@ class BaseMCPAgent(ABC):
         # Communication socket for subagent forwarding (set by parent process)
         self.comm_socket = None
 
-        # Streaming callbacks for JSON output mode
-        self.streaming_json_callback = None
-        self.streaming_json_tool_use_callback = None
-        self.streaming_json_tool_result_callback = None
 
         # Centralized subagent management system
         if not is_subagent:
@@ -143,6 +139,9 @@ class BaseMCPAgent(ABC):
 
         self.event_bus = EventBus()
         self.event_emitter = EventEmitter(self.event_bus)
+
+        # Start the event bus so it processes events
+        asyncio.create_task(self.event_bus.start_processing())
 
         # Initialize subagent coordinator after event system is available
         self.subagent_coordinator = SubagentCoordinator(self)
@@ -416,15 +415,27 @@ class BaseMCPAgent(ABC):
                 else "unknown"
             )
 
-            if message.type == "output":
-                formatted = f"🤖 [SUBAGENT-{task_id}] {message.content}"
-            elif message.type == "status":
-                formatted = f"📋 [SUBAGENT-{task_id}] {message.content}"
-            elif message.type == "error":
-                formatted = f"❌ [SUBAGENT-{task_id}] {message.content}"
-            elif message.type == "result":
-                formatted = f"✅ [SUBAGENT-{task_id}] Result: {message.content}"
-            elif message.type == "permission_request":
+            if self.config.background_subagents:
+                # Background mode: minimal display
+                if message.type == "result":
+                    formatted = f"🔔 [BACKGROUND-{task_id}] Task completed: {message.content[:50]}..."
+                elif message.type == "error":
+                    formatted = f"❌ [BACKGROUND-{task_id}] Error: {message.content}"
+                else:
+                    # Suppress output/status messages in background mode
+                    return
+            else:
+                # Foreground mode: full display (current behavior)
+                if message.type == "output":
+                    formatted = f"🤖 [SUBAGENT-{task_id}] {message.content}"
+                elif message.type == "status":
+                    formatted = f"📋 [SUBAGENT-{task_id}] {message.content}"
+                elif message.type == "error":
+                    formatted = f"❌ [SUBAGENT-{task_id}] {message.content}"
+                elif message.type == "result":
+                    formatted = f"✅ [SUBAGENT-{task_id}] Result: {message.content}"
+
+            if message.type == "permission_request":
                 # Handle permission request from subagent
                 import asyncio
 
@@ -528,30 +539,18 @@ class BaseMCPAgent(ABC):
             # Store tool info for processing
             tool_info_list.append((i, tool_name, arguments))
 
-            # Display tool execution step (skip in streaming JSON mode)
-            if not (
-                hasattr(self, "streaming_json_callback")
-                and self.streaming_json_callback
-            ):
-                tool_execution_msg = self.formatter.display_tool_execution_step(
-                    i, tool_name, arguments, self.is_subagent, interactive=interactive
+            # Emit tool call event
+            if hasattr(self, "event_emitter"):
+                await self.event_emitter.emit_tool_call(
+                    tool_name=tool_name,
+                    tool_id=f"toolu_{i}_{tool_name}",
+                    arguments=arguments,
                 )
-                if interactive and not streaming_mode:
-                    print(f"\r\x1b[K{tool_execution_msg}", flush=True)
-                elif interactive and streaming_mode:
-                    print(f"\r\x1b[K{tool_execution_msg}", flush=True)
-                else:
-                    all_tool_output.append(tool_execution_msg)
 
-            # Emit tool use if streaming JSON callback is set
+            # Generate tool use ID for tracking
             import uuid
 
             tool_use_id = f"toolu_{i}_{uuid.uuid4().hex[:16]}"
-            if (
-                hasattr(self, "streaming_json_tool_use_callback")
-                and self.streaming_json_tool_use_callback
-            ):
-                self.streaming_json_tool_use_callback(tool_name, arguments, tool_use_id)
 
             # Create coroutine for parallel execution with tool_use_id tracking
             tool_coroutines.append(
@@ -602,32 +601,16 @@ class BaseMCPAgent(ABC):
                         result_content += "\n⚠️  Command failed - take this into account for your next action."
                     function_results.append(result_content)
 
-                    # Emit tool result if streaming JSON callback is set
-                    if (
-                        hasattr(self, "streaming_json_tool_result_callback")
-                        and self.streaming_json_tool_result_callback
-                    ):
-                        self.streaming_json_tool_result_callback(
-                            tool_use_id, str(tool_result), not tool_success
-                        )
+                    # Tool result handling via events (unified for all modes)
 
-                    # Use unified tool result display (skip in streaming JSON mode)
-                    if not (
-                        hasattr(self, "streaming_json_callback")
-                        and self.streaming_json_callback
-                    ):
-                        tool_result_msg = self.formatter.display_tool_execution_result(
-                            tool_result,
-                            not tool_success,
-                            self.is_subagent,
-                            interactive=interactive,
+                    # Emit tool result event
+                    if hasattr(self, "event_emitter"):
+                        await self.event_emitter.emit_tool_result(
+                            tool_name=tool_name,
+                            tool_id=tool_use_id,
+                            result=str(tool_result),
+                            is_error=not tool_success,
                         )
-                        if interactive and not streaming_mode:
-                            print(f"\r\x1b[K{tool_result_msg}\n", flush=True)
-                        elif interactive and streaming_mode:
-                            print(f"\r\x1b[K{tool_result_msg}\n", flush=True)
-                        else:
-                            all_tool_output.append(tool_result_msg)
 
             except Exception as e:
                 # Handle any errors during parallel execution
@@ -924,10 +907,17 @@ class BaseMCPAgent(ABC):
         for tool_call in tool_calls:
             # Extract tool info from different formats
             if hasattr(tool_call, "get"):
-                # Dictionary format (DeepSeek)
-                tool_name = tool_call.get("function", {}).get("name", "")
-                tool_input = tool_call.get("function", {}).get("arguments", {})
-                tool_id = tool_call.get("id", f"toolu_{uuid.uuid4().hex[:20]}")
+                # Check if it's a parsed tool call format (direct name/arguments keys)
+                if "name" in tool_call and "arguments" in tool_call:
+                    # Parsed tool call format from parse_tool_calls
+                    tool_name = tool_call.get("name", "")
+                    tool_input = tool_call.get("arguments", {})
+                    tool_id = tool_call.get("id", f"toolu_{uuid.uuid4().hex[:20]}")
+                else:
+                    # Dictionary format (DeepSeek original format)
+                    tool_name = tool_call.get("function", {}).get("name", "")
+                    tool_input = tool_call.get("function", {}).get("arguments", {})
+                    tool_id = tool_call.get("id", f"toolu_{uuid.uuid4().hex[:20]}")
             else:
                 # SimpleNamespace format (DeepSeek/Gemini)
                 tool_name = (
@@ -1419,10 +1409,8 @@ class BaseMCPAgent(ABC):
                 tool_calls = self._extract_tool_calls_from_content(full_content)
 
             if tool_calls:
-                # Execute tools and continue conversation
-                return await self._execute_tools_and_continue(
-                    messages, full_content, tool_calls, True, interactive
-                )
+                # Tools will be executed by ResponseHandler - just return content
+                return full_content
             else:
                 # No tool calls, return the full content
                 return full_content
@@ -1446,10 +1434,8 @@ class BaseMCPAgent(ABC):
         tool_calls = self.parse_tool_calls(response)
 
         if tool_calls:
-            # Execute tools and continue conversation
-            return await self._execute_tools_and_continue(
-                messages, response, tool_calls, False, interactive
-            )
+            # Tools will be executed by ResponseHandler - just return content
+            return self._extract_content_from_response(response)
         else:
             # No tool calls, return the response
             return self._extract_content_from_response(response)
@@ -1506,130 +1492,7 @@ class BaseMCPAgent(ABC):
 
         return str(response)
 
-    async def _execute_tools_and_continue(
-        self,
-        messages: List[Dict[str, Any]],
-        response: Any,
-        tool_calls: List[Dict[str, Any]],
-        stream: bool,
-        interactive: bool,
-    ) -> Any:
-        """Execute tool calls and continue the conversation."""
-        logger.error(
-            f"🔧 DEBUG: _execute_tools_and_continue called with {len(tool_calls)} tool calls"
-        )
-        logger.error(f"🔧 DEBUG: Current conversation has {len(messages)} messages")
 
-        # Extract text content from response for assistant message
-        response_content = self._extract_content_from_response(response)
-        logger.error(f"🔧 DEBUG: Response content: '{response_content}'")
-
-        # Add assistant message with tool calls
-        assistant_msg = {"role": "assistant", "content": response_content}
-        if tool_calls:
-            assistant_msg["tool_calls"] = tool_calls
-        messages.append(assistant_msg)
-
-        # For streaming JSON, send combined Claude Code format message and handle tools
-        if hasattr(self, "streaming_json_callback") and self.streaming_json_callback:
-            self._send_claude_code_assistant_message(response_content, tool_calls)
-
-            # Execute tools and send results in Claude Code format
-            if tool_calls:
-                tool_results = await asyncio.gather(
-                    *[self._execute_single_tool(tool_call) for tool_call in tool_calls],
-                    return_exceptions=True,
-                )
-
-                # Convert results to strings
-                string_results = []
-                for result in tool_results:
-                    if isinstance(result, Exception):
-                        string_results.append(f"Error: {str(result)}")
-                    else:
-                        string_results.append(str(result))
-
-                # Send tool results
-                self._send_claude_code_tool_results(
-                    tool_calls, string_results, tool_results
-                )
-
-            # Return final response
-            return self._extract_content_from_response(response)
-
-        # Execute tools in parallel (normal flow)
-        tool_results = await asyncio.gather(
-            *[self._execute_single_tool(tool_call) for tool_call in tool_calls],
-            return_exceptions=True,
-        )
-
-        # Convert results to strings
-        string_results = []
-        for result in tool_results:
-            if isinstance(result, Exception):
-                string_results.append(f"Error: {str(result)}")
-            else:
-                string_results.append(str(result))
-
-        # For streaming JSON, send tool results in Claude Code format
-        if hasattr(self, "streaming_json_callback") and self.streaming_json_callback:
-            self._send_claude_code_tool_results(
-                tool_calls, string_results, tool_results
-            )
-
-        # Let the model-specific implementation handle how to add tool results to conversation
-        messages = self._add_tool_results_to_conversation(
-            messages, tool_calls, string_results
-        )
-
-        # Generate next completion with tool results
-        tools = self.convert_tools_to_llm_format() if self.available_tools else None
-        next_response = await self._generate_completion(messages, tools, stream)
-
-        # Check for more tool calls
-        next_tool_calls = self.parse_tool_calls(next_response)
-
-        if next_tool_calls:
-            # Continue recursively if there are more tool calls
-            return await self._execute_tools_and_continue(
-                messages, next_response, next_tool_calls, stream, interactive
-            )
-        else:
-            # No more tool calls, return final response
-            return self._extract_content_from_response(next_response)
-
-    async def _execute_single_tool(self, tool_call: Any) -> str:
-        """Execute a single tool call."""
-        try:
-            # Handle different tool call formats (dict vs SimpleNamespace)
-            if hasattr(tool_call, "get"):
-                # Dictionary format (DeepSeek)
-                function_name = tool_call.get("function", {}).get("name", "")
-                arguments = tool_call.get("function", {}).get("arguments", {})
-            else:
-                # SimpleNamespace format (Gemini)
-                function_name = getattr(tool_call, "name", "")
-                arguments = getattr(tool_call, "args", {})
-
-            if isinstance(arguments, str):
-                import json
-
-                arguments = json.loads(arguments)
-
-            # Create a simple namespace object that execute_function_calls expects
-            from types import SimpleNamespace
-
-            function_call = SimpleNamespace()
-            function_call.name = function_name
-            function_call.args = arguments
-
-            # Use centralized tool execution
-            results, outputs = await self.execute_function_calls([function_call])
-            return results[0] if results else ""
-
-        except Exception as e:
-            logger.error(f"Error executing tool {function_name}: {e}")
-            return f"Error executing tool: {str(e)}"
 
     async def interactive_chat(
         self, input_handler, existing_messages: List[Dict[str, Any]] = None
@@ -1816,9 +1679,6 @@ class BaseMCPAgent(ABC):
         streaming_mode: bool,
     ) -> None:
         """Display tool execution information to user."""
-        # Skip output if in streaming JSON mode
-        if hasattr(self, "streaming_json_callback") and self.streaming_json_callback:
-            return
 
         if not interactive or not tool_calls:
             return

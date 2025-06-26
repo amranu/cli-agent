@@ -685,5 +685,4 @@ class BuiltinToolExecutor:
 
         # Terminate the subagent process
         import sys
-
         sys.exit(0)

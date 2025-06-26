@@ -41,13 +41,16 @@ class DisplayManager:
     Supports both interactive and non-interactive modes.
     """
 
-    def __init__(self, event_bus: EventBus, interactive: bool = True):
+    def __init__(
+        self, event_bus: EventBus, interactive: bool = True, json_handler=None
+    ):
         self.event_bus = event_bus
         self.interactive = interactive
         self.enabled_events: Set[EventType] = set()
         self.quiet_mode = False
         self.last_status_line = ""
         self.terminal_manager = get_terminal_manager()
+        self.json_handler = json_handler  # For JSON streaming mode
 
         # Default enabled events for interactive mode
         if interactive:
@@ -142,7 +145,12 @@ class DisplayManager:
 
         # Let the global interrupt manager handle Ctrl+C - don't interfere here
 
-        if self.interactive and event.content:
+        if self.json_handler and event.content:
+            # JSON streaming mode - emit assistant text message
+            # Only send final complete text (not streaming chunks)
+            if not event.is_streaming:
+                self.json_handler.send_assistant_text(event.content)
+        elif self.interactive and event.content:
             # Handle streaming content immediately without delays
             if event.is_streaming:
                 # Clear any status line before streaming text
@@ -189,7 +197,12 @@ class DisplayManager:
 
     async def _display_tool_result(self, event: ToolResultEvent):
         """Display tool execution results."""
-        if self.interactive:
+        if self.json_handler:
+            # JSON streaming mode - emit tool result message
+            self.json_handler.send_tool_result(
+                tool_use_id=event.tool_id, content=event.result, is_error=event.is_error
+            )
+        elif self.interactive:
             status_icon = "❌" if event.is_error else "✅"
             time_info = (
                 f" ({event.execution_time:.2f}s)" if event.execution_time else ""
@@ -275,7 +288,14 @@ class DisplayManager:
 
     async def _display_tool_call_event(self, event: ToolCallEvent):
         """Display tool call request event."""
-        if self.interactive:
+        if self.json_handler:
+            # JSON streaming mode - emit tool use message
+            self.json_handler.send_assistant_tool_use(
+                tool_name=event.tool_name,
+                tool_input=event.arguments,
+                tool_use_id=event.tool_id,
+            )
+        elif self.interactive:
             args_summary = self._format_tool_arguments(event.arguments)
             description = f" - {event.description}" if event.description else ""
             display_text = (

@@ -1044,7 +1044,7 @@ async def handle_streaming_json_chat(
                             processed_message = True
 
                             if output_format == "stream-json":
-                                # Stream response in JSON format
+                                # Stream response in JSON format with proper tool call/result messages
                                 await stream_json_response(
                                     host, handler, messages, model_name
                                 )
@@ -1091,72 +1091,24 @@ async def handle_streaming_json_chat(
 
 
 async def stream_json_response(host, handler, messages, model_name):
-    """Stream response in JSON format using buffer emission events."""
-    import sys
+    """Stream response in JSON format using unified event system."""
 
-    # Track current response state
-    current_text = ""
-    current_tool_calls = []
-
-    # Set up streaming JSON callback to emit events when content is ready
-    def on_streaming_content(content):
-        nonlocal current_text
-        current_text = content
-        # Don't send immediately - we'll send combined message at the end
-
-    # Set up tool execution callbacks to emit tool use/result messages
-    def on_tool_use(tool_name, tool_input, tool_use_id):
-        current_tool_calls.append(
-            {"id": tool_use_id, "name": tool_name, "input": tool_input}
-        )
-
-    def on_tool_result(tool_use_id, content, is_error=False):
-        handler.send_tool_result(tool_use_id, content, is_error)
-
-    # Set session info for proper Claude Code format
-    host._current_session_id = handler.session_id
-    host._current_model = model_name
-    host._streaming_json_mode = True  # Flag to prevent normal tool execution
-
-    # Register the callbacks with the host
-    host.streaming_json_callback = on_streaming_content
-    host.streaming_json_tool_use_callback = on_tool_use
-    host.streaming_json_tool_result_callback = on_tool_result
+    # Set up DisplayManager to emit JSON instead of console output
+    if hasattr(host, "display_manager"):
+        host.display_manager.json_handler = handler
 
     try:
-        # Generate response - this will handle the complete flow including tool calls
-        response = await host.generate_response(messages, stream=True)
+        # Use normal generate_response - unified tool execution will happen
+        # Events will be automatically converted to JSON by DisplayManager
+        response = await host.generate_response(messages, stream=False)
 
-        # The buffered response contains everything we need
+        # Send final response if it's text (for cases without tool calls)
         if isinstance(response, str):
-            # Text-only responses are handled by streaming callback during generation
-            pass
-        elif hasattr(response, "__aiter__"):
-            # Fallback: consume any remaining async iterator
-            async for chunk in response:
-                pass
-        elif hasattr(response, "choices"):
-            # This is a mock response object with tool calls - process it manually
-            # since we're in streaming JSON mode and bypassed the normal flow
-
-            # Extract content and tool calls
-            message = response.choices[0].message
-            response_content = getattr(message, "content", "")
-            tool_calls = getattr(message, "tool_calls", [])
-
-            if response_content or tool_calls:
-                # Send combined Claude Code format message
-                host._send_claude_code_assistant_message(response_content, tool_calls)
-
-                # Tools are executed automatically during the response generation
-                # The results are already sent via the centralized Claude Code format
-
+            handler.send_assistant_text(response)
     finally:
-        # Clean up callbacks
-        host.streaming_json_callback = None
-        host.streaming_json_tool_use_callback = None
-        host.streaming_json_tool_result_callback = None
-        host._streaming_json_mode = False
+        # Clean up
+        if hasattr(host, "display_manager"):
+            host.display_manager.json_handler = None
 
 
 async def handle_text_chat(

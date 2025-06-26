@@ -185,6 +185,9 @@ class HostConfig(BaseSettings):
     truncate_tool_results: bool = Field(default=True, alias="TRUNCATE_TOOL_RESULTS")
     tool_result_max_length: int = Field(default=1000, alias="TOOL_RESULT_MAX_LENGTH")
 
+    # Background subagent configuration
+    background_subagents: bool = Field(default=False, alias="BACKGROUND_SUBAGENTS")
+
     # MCP Server settings
     mcp_server_enabled: bool = Field(default=False, alias="MCP_SERVER_ENABLED")
     mcp_server_port: int = Field(default=3000, alias="MCP_SERVER_PORT")

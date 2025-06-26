@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 class ResponseHandler:
     """Handles response processing, streaming, and tool execution coordination."""
 
+
     def __init__(self, agent):
         """Initialize with reference to the parent agent."""
         self.agent = agent

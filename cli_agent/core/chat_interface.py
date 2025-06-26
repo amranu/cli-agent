@@ -105,9 +105,11 @@ class ChatInterface:
                     continue
 
                 # Check if subagents are active - if so, don't prompt for input
+                # Unless BACKGROUND_SUBAGENTS is enabled, then allow parallel input
                 if (
                     hasattr(self.agent, "subagent_manager")
                     and self.agent.subagent_manager
+                    and not self.agent.config.background_subagents
                 ):
                     active_count = self.agent.subagent_manager.get_active_count()
                     if active_count > 0:
@@ -507,8 +509,6 @@ class ChatInterface:
                 # Check if this is the second interrupt (should exit app)
                 if self.global_interrupt_manager._interrupt_count >= 2:
                     # Let the global manager handle the exit
-                    import sys
-
                     sys.exit(0)
                 else:
                     # First interrupt - return special interrupt indicator to prevent session restart

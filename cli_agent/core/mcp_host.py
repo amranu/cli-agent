@@ -441,14 +441,31 @@ class MCPHost(BaseLLMProvider):
                 text_block = type("TextBlock", (), {"type": "text", "text": content})()
                 mock_response.content.append(text_block)
             for tc in tool_calls:
+                # Handle different tool call formats
+                if isinstance(tc, dict):
+                    tool_id = tc.get("id", "mock_id")
+                    tool_name = tc.get("function", {}).get("name", "mock_tool")
+                    tool_input = tc.get("function", {}).get("arguments", "{}")
+                    if isinstance(tool_input, str):
+                        import json
+
+                        try:
+                            tool_input = json.loads(tool_input)
+                        except:
+                            tool_input = {}
+                else:
+                    tool_id = getattr(tc, "id", "mock_id")
+                    tool_name = getattr(tc, "name", "mock_tool")
+                    tool_input = getattr(tc, "args", {})
+
                 tool_block = type(
                     "ToolBlock",
                     (),
                     {
                         "type": "tool_use",
-                        "id": getattr(tc, "id", "mock_id"),
-                        "name": getattr(tc, "name", "mock_tool"),
-                        "input": getattr(tc, "args", {}),
+                        "id": tool_id,
+                        "name": tool_name,
+                        "input": tool_input,
                     },
                 )()
                 mock_response.content.append(tool_block)
@@ -456,7 +473,28 @@ class MCPHost(BaseLLMProvider):
             mock_response.choices = [type("MockChoice", (), {})()]
             mock_response.choices[0].message = type("MockMessage", (), {})()
             mock_response.choices[0].message.content = content
-            mock_response.choices[0].message.tool_calls = tool_calls
+
+            # Convert tool calls to proper object format for parsing
+            mock_tool_calls = []
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    # Convert dict to object format expected by parsing
+                    mock_tc = type("MockToolCall", (), {})()
+                    mock_tc.id = tc.get("id")
+                    mock_tc.type = tc.get("type", "function")
+
+                    # Create function object
+                    mock_tc.function = type("MockFunction", (), {})()
+                    mock_tc.function.name = tc.get("function", {}).get("name")
+                    mock_tc.function.arguments = tc.get("function", {}).get(
+                        "arguments", "{}"
+                    )
+
+                    mock_tool_calls.append(mock_tc)
+                else:
+                    mock_tool_calls.append(tc)
+
+            mock_response.choices[0].message.tool_calls = mock_tool_calls
 
         return mock_response
 

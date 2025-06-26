@@ -2,12 +2,14 @@
 
 import asyncio
 import json
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from cli_agent.core.base_agent import BaseMCPAgent
 from cli_agent.tools.builtin_tools import get_all_builtin_tools
+from config import load_config
 
 
 @pytest.mark.unit
@@ -285,3 +287,42 @@ class TestBaseMCPAgent:
         """Test subagent flag setting."""
         # Mock agent should be main agent (not subagent)
         assert mock_base_agent.is_subagent is False
+
+    def test_background_subagents_config_default(self):
+        """Test that background_subagents defaults to False."""
+        # Ensure no environment variable is set
+        if "BACKGROUND_SUBAGENTS" in os.environ:
+            del os.environ["BACKGROUND_SUBAGENTS"]
+
+        config = load_config()
+        assert config.background_subagents is False
+
+    def test_background_subagents_config_enabled(self):
+        """Test that BACKGROUND_SUBAGENTS=true enables background mode."""
+        original_value = os.environ.get("BACKGROUND_SUBAGENTS")
+
+        try:
+            os.environ["BACKGROUND_SUBAGENTS"] = "true"
+            config = load_config()
+            assert config.background_subagents is True
+        finally:
+            # Restore original value
+            if original_value is not None:
+                os.environ["BACKGROUND_SUBAGENTS"] = original_value
+            elif "BACKGROUND_SUBAGENTS" in os.environ:
+                del os.environ["BACKGROUND_SUBAGENTS"]
+
+    def test_background_subagents_config_disabled(self):
+        """Test that BACKGROUND_SUBAGENTS=false disables background mode."""
+        original_value = os.environ.get("BACKGROUND_SUBAGENTS")
+
+        try:
+            os.environ["BACKGROUND_SUBAGENTS"] = "false"
+            config = load_config()
+            assert config.background_subagents is False
+        finally:
+            # Restore original value
+            if original_value is not None:
+                os.environ["BACKGROUND_SUBAGENTS"] = original_value
+            elif "BACKGROUND_SUBAGENTS" in os.environ:
+                del os.environ["BACKGROUND_SUBAGENTS"]
