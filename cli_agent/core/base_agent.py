@@ -138,8 +138,7 @@ class BaseMCPAgent(ABC):
         self.event_bus = EventBus()
         self.event_emitter = EventEmitter(self.event_bus)
 
-        # Start the event bus so it processes events
-        asyncio.create_task(self.event_bus.start_processing())
+        # Event bus will be started when interactive_chat() is called
 
         # Initialize subagent coordinator after event system is available
         self.subagent_coordinator = SubagentCoordinator(self)
