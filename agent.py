@@ -352,7 +352,7 @@ async def chat(
         # Handle streaming JSON mode
         if input_format == "stream-json" or output_format == "stream-json":
             return await handle_streaming_json_chat(
-                server, input_format, output_format, session_manager
+                model, server, input_format, output_format, session_manager
             )
 
         # Handle text mode (default behavior)
@@ -963,7 +963,7 @@ def remove(name):
 
 
 async def handle_streaming_json_chat(
-    server, input_format, output_format, session_manager=None
+    model, server, input_format, output_format, session_manager=None
 ):
     """Handle streaming JSON chat mode compatible with Claude Code."""
     import os

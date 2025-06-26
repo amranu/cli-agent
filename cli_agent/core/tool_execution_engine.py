@@ -45,7 +45,7 @@ class ToolExecutionEngine:
             tool_info = self.agent.available_tools[tool_key]
             tool_name = tool_info["name"]
 
-            # Show diff preview for replace_in_file before permission check
+            # Show diff preview for replace_in_file and multiedit before permission check
             if tool_name == "replace_in_file" and not self.agent.is_subagent:
                 try:
                     from cli_agent.utils.diff_display import ColoredDiffDisplay
@@ -62,6 +62,58 @@ class ToolExecutionEngine:
                 except Exception as e:
                     # Don't fail tool execution if diff display fails
                     logger.warning(f"Failed to display diff preview: {e}")
+
+            # Show diff previews for multiedit before permission check
+            elif tool_name == "multiedit" and not self.agent.is_subagent:
+                try:
+                    from cli_agent.utils.diff_display import ColoredDiffDisplay
+
+                    file_path = arguments.get("file_path", "")
+                    edits = arguments.get("edits", [])
+
+                    if file_path and edits:
+                        # Read file content once for all diff previews
+                        try:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                current_content = f.read()
+                        except FileNotFoundError:
+                            print(
+                                f"Warning: File not found for diff preview: {file_path}"
+                            )
+                            current_content = ""
+                        except Exception as e:
+                            print(f"Warning: Could not read file for diff preview: {e}")
+                            current_content = ""
+
+                        if current_content:
+                            # Show preview for each edit
+                            for i, edit in enumerate(edits):
+                                old_string = edit.get("old_string", "")
+                                new_string = edit.get("new_string", "")
+
+                                if old_string:
+                                    print(f"\n--- Edit {i+1} Preview ---")
+                                    ColoredDiffDisplay.show_replace_diff(
+                                        file_path=file_path,
+                                        old_text=old_string,
+                                        new_text=new_string,
+                                        file_content=current_content,
+                                        context_lines=3,
+                                    )
+                                    # Update content for next edit preview
+                                    if old_string in current_content:
+                                        replace_all = edit.get("replace_all", False)
+                                        if replace_all:
+                                            current_content = current_content.replace(
+                                                old_string, new_string
+                                            )
+                                        else:
+                                            current_content = current_content.replace(
+                                                old_string, new_string, 1
+                                            )
+                except Exception as e:
+                    # Don't fail tool execution if diff display fails
+                    logger.warning(f"Failed to display multiedit diff preview: {e}")
 
             # Check tool permissions (both main agent and subagents)
             if (

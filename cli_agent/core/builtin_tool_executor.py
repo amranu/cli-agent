@@ -306,6 +306,7 @@ class BuiltinToolExecutor:
 
             original_content = content
             edit_results = []
+            current_content = content
 
             # Apply each edit in sequence
             for i, edit in enumerate(edits):
@@ -317,10 +318,10 @@ class BuiltinToolExecutor:
                     return f"Error: Edit {i+1} has no old_string"
 
                 # Check if old_string exists in current content
-                if old_string not in content:
+                if old_string not in current_content:
                     # Provide helpful debugging
                     stripped_old = old_string.strip()
-                    if stripped_old and stripped_old in content:
+                    if stripped_old and stripped_old in current_content:
                         return f"Error: Edit {i+1} - text found but whitespace doesn't match in {file_path}. Check for exact indentation, tabs vs spaces, and trailing whitespace."
                     return f"Error: Edit {i+1} - text to replace not found in {file_path}. Current edits may have changed the text. Use read_file to check current state."
 
@@ -330,32 +331,35 @@ class BuiltinToolExecutor:
                     if old_string == new_string:
                         return f"Error: Edit {i+1} - old_string and new_string are identical"
 
-                    count = content.count(old_string)
-                    content = content.replace(old_string, new_string)
+                    count = current_content.count(old_string)
+                    current_content = current_content.replace(old_string, new_string)
                     edit_results.append(f"Edit {i+1}: Replaced {count} occurrence(s)")
                 else:
                     # Replace first occurrence only
                     if old_string == new_string:
                         return f"Error: Edit {i+1} - old_string and new_string are identical"
 
-                    if content.count(old_string) > 1:
+                    if current_content.count(old_string) > 1:
                         # Find-and-replace for first occurrence
-                        new_content = content.replace(old_string, new_string, 1)
-                        content = new_content
+                        current_content = current_content.replace(
+                            old_string, new_string, 1
+                        )
                         edit_results.append(
-                            f"Edit {i+1}: Replaced first occurrence (found {content.count(old_string) + 1} total)"
+                            f"Edit {i+1}: Replaced first occurrence (found {current_content.count(old_string) + 1} total)"
                         )
                     else:
-                        content = content.replace(old_string, new_string)
+                        current_content = current_content.replace(
+                            old_string, new_string
+                        )
                         edit_results.append(f"Edit {i+1}: Replaced 1 occurrence")
 
             # Validate that something actually changed
-            if content == original_content:
+            if current_content == original_content:
                 return f"Warning: No changes made to {file_path}. All edits resulted in no changes."
 
             # Write back to file
             with open(file_path, "w", encoding="utf-8") as f:
-                f.write(content)
+                f.write(current_content)
 
             result = (
                 f"Successfully applied {len(edits)} edits to {file_path}:\n"

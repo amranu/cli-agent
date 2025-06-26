@@ -210,15 +210,7 @@ Connect external MCP servers to add functionality like:
 
 ### AI Model Tools (via MCP Server)
 
-Each AI model is exposed as an MCP tool with persistent conversation support:
-
--   **anthropic_claude_3_5_sonnet**: Anthropic's flagship model for complex reasoning
--   **openai_gpt_4_turbo_preview**: OpenAI's most capable model
--   **deepseek_deepseek_chat**: DeepSeek's standard chat model
--   **deepseek_deepseek_reasoner**: DeepSeek's reasoning-focused model
--   **gemini_gemini_2_5_flash**: Google's fast, efficient model
--   **gemini_gemini_2_5_pro**: Google's most capable model
--   And 5 more models across all providers
+Each AI model is exposed as an MCP tool with persistent conversation support.
 
 All model tools support:
 - **Persistent Conversations**: Maintain context across calls
@@ -369,7 +361,7 @@ Please read our [CONTRIBUTING.md](CONTRIBUTING.md) file for more details on our 
 
 ## 🔒 Security
 
--   **API Keys**: Stored as environment variables, never committed to git
+-   **API Keys**: Stored as environment variables
 -   **Configuration**: Automatically managed in user home directory (`~/.config/agent/`)
 -   **MCP Servers**: Local configurations with session-based tool permissions
 -   **Tool Execution**: Built-in permission system for sensitive operations
