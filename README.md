@@ -242,28 +242,6 @@ Within the interactive chat, use these slash commands:
 
 ## 📚 Examples
 
-### Example: MCP Model Server Usage
-
-Using AI models via MCP (requires MCP client):
-
-```json
-// Start conversation with Claude
-{
-  "tool": "anthropic_claude_3_5_sonnet",
-  "arguments": {
-    "messages": [{"role": "user", "content": "Explain quantum computing"}]
-  }
-}
-
-// Continue conversation
-{
-  "tool": "anthropic_claude_3_5_sonnet", 
-  "arguments": {
-    "conversation_id": "abc123",
-    "messages": [{"role": "user", "content": "How does it compare to classical computing?"}]
-  }
-}
-```
 
 ### Example: Basic File Operations
 
