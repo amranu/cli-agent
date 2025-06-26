@@ -288,42 +288,51 @@ Subagents work independently and automatically return results to the main conver
 ### Provider-Model Architecture
 
 ```
-┌─────────────────┐    ┌──────────────────────┐    ┌─────────────────────┐
-│   CLI Interface │────│   BaseMCPAgent       │────│  Provider-Model     │
-│                 │    │   (Centralized)      │    │  Architecture       │
-└─────────────────┘    └──────────────────────┘    │ ┌─────────────────┐ │
-                               │                    │ │ MCPHost         │ │
-                    ┌─────────────────┐              │ │ (Provider +     │ │
-                    │ MCP Model Server│              │ │  Model)         │ │
-                    │                 │              │ └─────────────────┘ │
-                    │ ┌─────────────┐ │              │ ┌─────────────────┐ │
-                    │ │11 AI Models │ │              │ │ AnthropicProvider│ │
-                    │ │Conversations│ │              │ │ OpenAIProvider  │ │
-                    │ │FastMCP Proto│ │              │ │ DeepSeekProvider│ │
-                    │ └─────────────┘ │              │ │ GoogleProvider  │ │
-                    └─────────────────┘              │ │ OpenRouterProvider│ │
-                               │                     │ └─────────────────┘ │
-                    ┌─────────────────┐              └─────────────────────┘
-                    │  Subagent Mgr   │                        │
-                    │                 │              ┌─────────────────┐
-                    │ ┌─────────────┐ │              │  MCP Servers    │
-                    │ │Focused Tasks│ │              │                 │
-                    │ │Auto Cleanup │ │              │ ┌─────────────┐ │
-                    │ │Parallel Exec│ │              │ │ AI Models   │ │
-                    │ └─────────────┘ │              │ │ File System │ │
-                    └─────────────────┘              │ │ APIs        │ │
-                               │                     │ │ Database    │ │
-                    ┌─────────────────┐              │ │ Custom Tools│ │
-                    │ Built-in Tools  │              │ └─────────────┘ │
-                    │                 │              └─────────────────┘
-                    │ ┌─────────────┐ │
-                    │ │File Ops     │ │
-                    │ │Bash Execute │ │
-                    │ │Todo Mgmt    │ │
-                    │ │Web Fetch    │ │
-                    │ │Task Spawn   │ │
-                    │ └─────────────┘ │
-                    └─────────────────┘
+┌─────────────────┐
+│   CLI Interface │    
+│   (agent.py)    │    
+└─────────┬───────┘    
+          │            
+          ▼            
+┌─────────────────────┐    ┌─────────────────────────────────────────┐
+│      MCPHost        │◄───│              Provider + Model           │
+│ (BaseLLMProvider)   │    │                Composition              │
+└─────────┬───────────┘    │ ┌─────────────────┐ ┌─────────────────┐ │
+          │                │ │   BaseProvider  │ │   ModelConfig   │ │
+          ▼                │ │   Subclasses:   │ │   Subclasses:   │ │
+┌─────────────────────┐    │ │ • Anthropic     │ │ • ClaudeModel   │ │
+│   BaseLLMProvider   │    │ │ • OpenAI        │ │ • GPTModel      │ │
+│  (Centralized LLM   │    │ │ • DeepSeek      │ │ • GeminiModel   │ │
+│   functionality)    │    │ │ • Google        │ │ • DeepSeekModel │ │
+└─────────┬───────────┘    │ │ • OpenRouter    │ │                 │ │
+          │                │ └─────────────────┘ └─────────────────┘ │
+          ▼                └─────────────────────────────────────────┘
+┌─────────────────────┐                         │
+│   BaseMCPAgent      │                         ▼
+│  (Abstract base)    │               ┌─────────────────┐
+└─────────┬───────────┘               │ Tool Converters │
+          │                           │ • OpenAI Format │
+┌─────────▼───────────┐               │ • Anthropic     │
+│ Core Components:    │               │ • Gemini        │
+│ • SubagentCoordinator│              └─────────────────┘
+│ • BuiltinToolExecutor│                
+│ • ChatInterface     │                ┌─────────────────┐
+│ • SlashCommands     │◄───────────────│ Built-in Tools  │
+│ • ToolExecutionEngine│               │ • File Ops      │
+│ • TokenManager      │               │ • Bash Execute  │
+│ • SystemPromptBuilder│               │ • Web Fetch     │
+│ • MessageProcessor  │               │ • Todo Mgmt     │
+└─────────┬───────────┘               │ • Task Spawn    │
+          │                           │ • Glob/Grep     │
+          ▼                           │ • MultiEdit     │
+┌─────────────────────┐               └─────────────────┘
+│ External MCP Servers │                      
+│ • AI Model Server   │               ┌─────────────────┐
+│ • File System       │               │ Subagent System │
+│ • APIs & Databases  │               │ • Focused Tasks │
+│ • Custom Tools      │               │ • Auto Cleanup  │
+└─────────────────────┘               │ • Event-Driven  │
+                                      └─────────────────┘
 ```
 
 ### Key Architectural Benefits
