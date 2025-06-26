@@ -58,7 +58,6 @@ class BaseMCPAgent(ABC):
         # Communication socket for subagent forwarding (set by parent process)
         self.comm_socket = None
 
-
         # Centralized subagent management system
         if not is_subagent:
             try:
@@ -144,10 +143,16 @@ class BaseMCPAgent(ABC):
 
         # Initialize subagent coordinator after event system is available
         self.subagent_coordinator = SubagentCoordinator(self)
-        
+
         # Register subagent message callback after coordinator is initialized
-        if not is_subagent and hasattr(self, 'subagent_manager') and self.subagent_manager:
-            self.subagent_manager.add_message_callback(self.subagent_coordinator.on_subagent_message)
+        if (
+            not is_subagent
+            and hasattr(self, "subagent_manager")
+            and self.subagent_manager
+        ):
+            self.subagent_manager.add_message_callback(
+                self.subagent_coordinator.on_subagent_message
+            )
 
         # Initialize display manager for interactive mode
         # For subagents, use non-interactive mode to avoid double display
@@ -1494,8 +1499,6 @@ class BaseMCPAgent(ABC):
                     return "".join(text_parts)
 
         return str(response)
-
-
 
     async def interactive_chat(
         self, input_handler, existing_messages: List[Dict[str, Any]] = None
