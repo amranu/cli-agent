@@ -68,11 +68,11 @@ agent mcp serve
 agent mcp serve --port 3000 --host localhost
 ```
 
-The model server exposes 11 AI models across 5 providers:
-- **Anthropic**: claude-3.5-sonnet, claude-3.5-haiku, claude-3-opus
-- **OpenAI**: gpt-4-turbo, gpt-3.5-turbo, o1-preview  
-- **DeepSeek**: deepseek-chat, deepseek-reasoner
-- **Gemini**: gemini-2.5-flash, gemini-2.5-pro, gemini-1.5-pro
+The model server exposes AI models from 5 providers:
+- **Anthropic**: Claude models
+- **OpenAI**: GPT models
+- **DeepSeek**: Chat and reasoning models
+- **Gemini**: Google's Gemini models
 - **OpenRouter**: Multi-provider access
 
 #### MCP Model Server Usage
@@ -144,11 +144,6 @@ agent switch openai:gpt-4-turbo-preview
 agent switch deepseek:deepseek-chat
 agent switch gemini:gemini-2.5-flash
 
-# Legacy model switching (still supported)
-agent switch-deepseek      # DeepSeek Chat model
-agent switch-reason        # DeepSeek Reasoner model
-agent switch-gemini-flash  # Google Gemini Flash
-agent switch-gemini-pro    # Google Gemini Pro
 ```
 
 Or use slash commands within interactive chat:
@@ -159,11 +154,6 @@ Or use slash commands within interactive chat:
 /switch deepseek:deepseek-reasoner
 /switch gemini:gemini-2.5-pro
 
-# Legacy commands (still supported)
-/switch-deepseek
-/switch-reason
-/switch-gemini-flash
-/switch-gemini-pro
 ```
 
 ## 🔧 Configuration
@@ -235,7 +225,7 @@ The agent comes with comprehensive built-in tools:
 
 Connect external MCP servers to add functionality like:
 
--   **AI Model Access**: All 11 AI models via the built-in MCP model server
+-   **AI Model Access**: Multiple AI models from 5 providers via the built-in MCP model server
 -   **API Integrations**: Connect to various web APIs
 -   **File System**: Advanced file operations
 -   **Database Connectors**: PostgreSQL, MySQL, SQLite
@@ -271,10 +261,6 @@ Within the interactive chat, use these slash commands:
 -   `/tokens` - Show token usage
 -   `/compact` - Compact conversation history
 -   `/switch <provider>:<model>` - Switch to any provider-model combination
--   `/switch-deepseek` - Switch to DeepSeek Chat (legacy)
--   `/switch-reason` - Switch to DeepSeek Reasoner (legacy)
--   `/switch-gemini-flash` - Switch to Gemini Flash (legacy)
--   `/switch-gemini-pro` - Switch to Gemini Pro (legacy)
 -   `/task` - Spawn a subagent for complex tasks
 -   `/task-status` - Check status of running subagents
 
