@@ -92,7 +92,7 @@ async def run_subagent_task(task_file_path: str):
                     "Task execution interrupted", "User requested interrupt"
                 )
 
-        interrupt_manager.add_interrupt_callback(subagent_interrupt_callback)
+        interrupt_manager.add_callback(subagent_interrupt_callback)
     except Exception as e:
         # Continue without interrupt handling if setup fails
         print(f"Warning: Could not set up subagent interrupt handling: {e}")

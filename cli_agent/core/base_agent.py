@@ -75,7 +75,6 @@ class BaseMCPAgent(ABC):
 
                 # Event-driven message handling
                 self.subagent_message_queue = asyncio.Queue()
-                self.subagent_manager.add_message_callback(self._on_subagent_message)
 
                 # Track last message time for timeout management
                 self.last_subagent_message_time = None
@@ -145,6 +144,10 @@ class BaseMCPAgent(ABC):
 
         # Initialize subagent coordinator after event system is available
         self.subagent_coordinator = SubagentCoordinator(self)
+        
+        # Register subagent message callback after coordinator is initialized
+        if not is_subagent and hasattr(self, 'subagent_manager') and self.subagent_manager:
+            self.subagent_manager.add_message_callback(self.subagent_coordinator.on_subagent_message)
 
         # Initialize display manager for interactive mode
         # For subagents, use non-interactive mode to avoid double display
