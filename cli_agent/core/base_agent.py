@@ -233,8 +233,14 @@ class BaseMCPAgent(ABC):
             return self.builtin_executor.todo_write(args)
         elif tool_name == "builtin:replace_in_file":
             return self.builtin_executor.replace_in_file(args)
+        elif tool_name == "builtin:multiedit":
+            return self.builtin_executor.multiedit(args)
         elif tool_name == "builtin:webfetch":
             return self.builtin_executor.webfetch(args)
+        elif tool_name == "builtin:glob":
+            return self.builtin_executor.glob(args)
+        elif tool_name == "builtin:grep":
+            return self.builtin_executor.grep(args)
         elif tool_name == "builtin:task":
             return await self.builtin_executor.task(args)
         elif tool_name == "builtin:task_status":

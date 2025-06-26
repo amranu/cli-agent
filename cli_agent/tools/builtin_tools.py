@@ -184,6 +184,50 @@ def get_replace_in_file_tool() -> Dict[str, Any]:
     }
 
 
+def get_multiedit_tool() -> Dict[str, Any]:
+    """Return the multiedit tool definition."""
+    return {
+        "server": "builtin",
+        "name": "multiedit",
+        "description": "Performs multiple exact string replacements in a single file in one operation. This is built on top of the replace_in_file tool and allows you to perform multiple find-and-replace operations efficiently. You must use the read_file tool first to read the file's contents. All edits are applied in sequence, in the order they are provided. Each edit operates on the result of the previous edit. All edits must be valid for the operation to succeed - if any edit fails, none will be applied. Use replace_all for replacing and renaming strings across the file.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string", 
+                    "description": "The absolute path to the file to modify"
+                },
+                "edits": {
+                    "type": "array",
+                    "description": "Array of edit operations to perform sequentially on the file",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old_string": {
+                                "type": "string",
+                                "description": "The text to replace - must match file contents exactly"
+                            },
+                            "new_string": {
+                                "type": "string", 
+                                "description": "The text to replace it with"
+                            },
+                            "replace_all": {
+                                "type": "boolean",
+                                "description": "Replace all occurrences of old_string (default false)",
+                                "default": False
+                            }
+                        },
+                        "required": ["old_string", "new_string"]
+                    },
+                    "minItems": 1
+                }
+            },
+            "required": ["file_path", "edits"]
+        },
+        "client": None,
+    }
+
+
 def get_web_fetch_tool() -> Dict[str, Any]:
     """Return the webfetch tool definition."""
     return {
@@ -306,6 +350,58 @@ def get_emit_result_tool() -> Dict[str, Any]:
     }
 
 
+def get_glob_tool() -> Dict[str, Any]:
+    """Return the glob tool definition."""
+    return {
+        "server": "builtin",
+        "name": "glob",
+        "description": "Retrieve files using glob pattern matching that works with any codebase size. Supports glob patterns like '**/*.js' or 'src/**/*.ts'. Returns matching file paths sorted by modification time. Use this tool when you need to find files by name patterns. When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the task tool instead.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "The glob pattern to match files against",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter 'undefined' or 'null' - simply omit it for the default behavior. Must be a valid directory path if provided.",
+                },
+            },
+            "required": ["pattern"],
+        },
+        "client": None,
+    }
+
+
+def get_grep_tool() -> Dict[str, Any]:
+    """Return the grep tool definition."""
+    return {
+        "server": "builtin",
+        "name": "grep",
+        "description": "Search file contents using regular expressions with fast performance on any codebase size. Searches file contents using regular expressions. Supports full regex syntax (eg. 'log.*Error', 'function\\s+\\w+', etc.). Filter files by pattern with the include parameter (eg. '*.js', '*.{ts,tsx}'). Returns file paths with at least one match sorted by modification time. Use this tool when you need to find files containing specific patterns. If you need to identify/count the number of matches within files, use the bash_execute tool with `rg` (ripgrep) directly. Do NOT use `grep`. When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the task tool instead.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "The regular expression pattern to search for in file contents",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "The directory to search in. Defaults to the current working directory.",
+                },
+                "include": {
+                    "type": "string",
+                    "description": "File pattern to include in the search (e.g. '*.js', '*.{ts,tsx}')",
+                },
+            },
+            "required": ["pattern"],
+        },
+        "client": None,
+    }
+
+
 def get_all_builtin_tools() -> Dict[str, Dict[str, Any]]:
     """
     Return a dictionary of all built-in tools with their full qualified names as keys.
@@ -322,7 +418,10 @@ def get_all_builtin_tools() -> Dict[str, Dict[str, Any]]:
         "builtin:todo_read": get_todo_read_tool(),
         "builtin:todo_write": get_todo_write_tool(),
         "builtin:replace_in_file": get_replace_in_file_tool(),
+        "builtin:multiedit": get_multiedit_tool(),
         "builtin:webfetch": get_web_fetch_tool(),
+        "builtin:glob": get_glob_tool(),
+        "builtin:grep": get_grep_tool(),
         "builtin:task": get_task_tool(),
         "builtin:task_status": get_task_status_tool(),
         "builtin:task_results": get_task_results_tool(),
@@ -364,7 +463,10 @@ BUILTIN_TOOL_NAMES = [
     "todo_read",
     "todo_write",
     "replace_in_file",
+    "multiedit",
     "webfetch",
+    "glob",
+    "grep",
     "task",
     "task_status",
     "task_results",

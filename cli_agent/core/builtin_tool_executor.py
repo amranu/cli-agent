@@ -289,6 +289,80 @@ class BuiltinToolExecutor:
         except Exception as e:
             return f"Error replacing text in file: {str(e)}"
 
+    def multiedit(self, args: Dict[str, Any]) -> str:
+        """Perform multiple edits to a single file in one operation."""
+        file_path = args.get("file_path", "")
+        edits = args.get("edits", [])
+        
+        if not file_path:
+            return "Error: No file path provided"
+        if not edits:
+            return "Error: No edits provided"
+        
+        try:
+            # Read the file once
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            original_content = content
+            edit_results = []
+            
+            # Apply each edit in sequence
+            for i, edit in enumerate(edits):
+                old_string = edit.get("old_string", "")
+                new_string = edit.get("new_string", "")
+                replace_all = edit.get("replace_all", False)
+                
+                if not old_string:
+                    return f"Error: Edit {i+1} has no old_string"
+                
+                # Check if old_string exists in current content
+                if old_string not in content:
+                    # Provide helpful debugging
+                    stripped_old = old_string.strip()
+                    if stripped_old and stripped_old in content:
+                        return f"Error: Edit {i+1} - text found but whitespace doesn't match in {file_path}. Check for exact indentation, tabs vs spaces, and trailing whitespace."
+                    return f"Error: Edit {i+1} - text to replace not found in {file_path}. Current edits may have changed the text. Use read_file to check current state."
+                
+                # Perform the replacement
+                if replace_all:
+                    # Replace all occurrences
+                    if old_string == new_string:
+                        return f"Error: Edit {i+1} - old_string and new_string are identical"
+                    
+                    count = content.count(old_string)
+                    content = content.replace(old_string, new_string)
+                    edit_results.append(f"Edit {i+1}: Replaced {count} occurrence(s)")
+                else:
+                    # Replace first occurrence only
+                    if old_string == new_string:
+                        return f"Error: Edit {i+1} - old_string and new_string are identical"
+                    
+                    if content.count(old_string) > 1:
+                        # Find-and-replace for first occurrence
+                        new_content = content.replace(old_string, new_string, 1)
+                        content = new_content
+                        edit_results.append(f"Edit {i+1}: Replaced first occurrence (found {content.count(old_string) + 1} total)")
+                    else:
+                        content = content.replace(old_string, new_string)
+                        edit_results.append(f"Edit {i+1}: Replaced 1 occurrence")
+            
+            # Validate that something actually changed
+            if content == original_content:
+                return f"Warning: No changes made to {file_path}. All edits resulted in no changes."
+            
+            # Write back to file
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            
+            result = f"Successfully applied {len(edits)} edits to {file_path}:\n" + "\n".join(edit_results)
+            return result
+            
+        except FileNotFoundError:
+            return f"Error: File not found: {file_path}"
+        except Exception as e:
+            return f"Error performing multi-edit: {str(e)}"
+
     def webfetch(self, args: Dict[str, Any]) -> str:
         """Fetch content from a webpage."""
         url = args.get("url", "")
@@ -444,6 +518,126 @@ class BuiltinToolExecutor:
             result_lines.append(f"\nCleared {len(tasks_to_remove)} completed task(s)")
 
         return "\n".join(result_lines)
+
+    def glob(self, args: Dict[str, Any]) -> str:
+        """Execute glob pattern matching and return matching file paths."""
+        import glob as glob_module
+        
+        pattern = args.get("pattern", "")
+        path = args.get("path", None)
+        
+        if not pattern:
+            return "Error: pattern parameter is required"
+        
+        try:
+            # Change to the specified directory if provided
+            original_cwd = os.getcwd()
+            search_path = pattern
+            
+            if path:
+                if not os.path.isdir(path):
+                    return f"Error: Directory '{path}' does not exist"
+                os.chdir(path)
+            
+            # Execute glob pattern matching
+            matches = glob_module.glob(pattern, recursive=True)
+            
+            # Restore original directory
+            os.chdir(original_cwd)
+            
+            if not matches:
+                return f"No files found matching pattern: {pattern}"
+            
+            # Sort by modification time (newest first)
+            try:
+                if path:
+                    # Convert to full paths for sorting
+                    full_matches = [os.path.join(path, match) for match in matches]
+                    full_matches.sort(key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0, reverse=True)
+                    # Convert back to relative paths for display
+                    matches = [os.path.relpath(match, path) for match in full_matches]
+                else:
+                    matches.sort(key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0, reverse=True)
+            except (OSError, ValueError):
+                # If sorting fails, just return unsorted results
+                pass
+            
+            return f"Found {len(matches)} files:\n" + "\n".join(matches)
+            
+        except Exception as e:
+            # Restore original directory on error
+            try:
+                os.chdir(original_cwd)
+            except:
+                pass
+            return f"Error executing glob pattern: {str(e)}"
+
+    def grep(self, args: Dict[str, Any]) -> str:
+        """Execute grep pattern search and return matching file paths."""
+        import re
+        import glob as glob_module
+        
+        pattern = args.get("pattern", "")
+        path = args.get("path", ".")
+        include = args.get("include", None)
+        
+        if not pattern:
+            return "Error: pattern parameter is required"
+        
+        try:
+            # Compile the regex pattern
+            try:
+                regex = re.compile(pattern, re.MULTILINE)
+            except re.error as e:
+                return f"Error: Invalid regex pattern '{pattern}': {str(e)}"
+            
+            # Determine files to search
+            if include:
+                # Use glob pattern for file filtering
+                search_pattern = os.path.join(path, "**", include)
+                files_to_search = glob_module.glob(search_pattern, recursive=True)
+            else:
+                # Search all files recursively
+                files_to_search = []
+                for root, dirs, files in os.walk(path):
+                    for file in files:
+                        files_to_search.append(os.path.join(root, file))
+            
+            matching_files = []
+            
+            # Search each file for the pattern
+            for file_path in files_to_search:
+                try:
+                    # Skip binary files and directories
+                    if os.path.isdir(file_path):
+                        continue
+                        
+                    # Try to read as text file
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                        if regex.search(content):
+                            matching_files.append(file_path)
+                            
+                except (IOError, OSError, UnicodeDecodeError):
+                    # Skip files that can't be read
+                    continue
+            
+            if not matching_files:
+                include_msg = f" (filtered by {include})" if include else ""
+                return f"No files found containing pattern: {pattern}{include_msg}"
+            
+            # Sort by modification time (newest first)
+            try:
+                matching_files.sort(key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0, reverse=True)
+            except (OSError, ValueError):
+                # If sorting fails, just return unsorted results
+                pass
+            
+            include_msg = f" (filtered by {include})" if include else ""
+            return f"Found {len(matching_files)} files containing pattern{include_msg}:\n" + "\n".join(matching_files)
+            
+        except Exception as e:
+            return f"Error executing grep search: {str(e)}"
 
     def emit_result(self, args: Dict[str, Any]) -> str:
         """Emit the final result of a subagent task and terminate the subagent."""

@@ -176,6 +176,49 @@ def switch_gemini_pro(ctx):
 
 
 @cli.command()
+@click.argument("provider_model")
+def switch(provider_model):
+    """Switch to a specific provider:model combination.
+    
+    Examples:
+        agent switch anthropic:claude-3.5-sonnet
+        agent switch openai:gpt-4-turbo-preview
+        agent switch deepseek:deepseek-chat
+        agent switch gemini:gemini-2.5-flash
+    """
+    config = load_config()
+    
+    try:
+        # Validate the provider:model format
+        if ":" not in provider_model:
+            click.echo(f"Error: Invalid format. Use 'provider:model' format (e.g., 'anthropic:claude-3.5-sonnet')")
+            return
+            
+        # Test that the provider-model combination is valid by trying to create a host
+        test_host = config.create_host_from_provider_model(provider_model)
+        
+        # If successful, update the config
+        config.default_provider_model = provider_model
+        config.save_persistent_config()
+        
+        provider, model = provider_model.split(":", 1)
+        click.echo(f"Model switched to: {model} via {provider} provider")
+        click.echo(f"Configuration saved. Use 'agent chat' to start chatting with the new model.")
+        
+    except Exception as e:
+        click.echo(f"Error switching to {provider_model}: {e}")
+        click.echo("Available provider:model combinations:")
+        available = config.get_available_provider_models()
+        for provider, models in available.items():
+            for model in models:
+                click.echo(f"  {provider}:{model}")
+
+
+@cli.command()
+@click.option(
+    "--model",
+    help="Provider:model combination to use (e.g., 'anthropic:claude-3.5-sonnet')",
+)
 @click.option(
     "--server",
     multiple=True,
@@ -224,6 +267,7 @@ def switch_gemini_pro(ctx):
 @click.pass_context
 async def chat(
     ctx,
+    model,
     server,
     input_format,
     output_format,
@@ -928,7 +972,7 @@ async def handle_streaming_json_chat(
 
     # Create host using helper function
     try:
-        host = create_host(config)
+        host = create_host(config, provider_model=model)
         # Extract model name from provider-model string
         _, model_name = config.parse_provider_model_string(
             config.default_provider_model

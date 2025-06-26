@@ -19,29 +19,29 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 
 1.  **Clone the repository**:
     ```bash
-    git clone https://github.com/amranu/agent.git
-    cd agent
+    git clone https://github.com/amranu/cli-agent.git
+    cd cli-agent
     ```
 
-2.  **Install dependencies**:
+2.  **Install the package**:
     ```bash
-    pip install -r requirements.txt
+    pip install -e .
     ```
 
-3.  **Configure API keys** (environment variables or interactive setup):
+3.  **Configure API keys** (environment variables):
     ```bash
-    # Set environment variables (recommended)
+    # Set environment variables (required for the providers you want to use)
     export ANTHROPIC_API_KEY=your_anthropic_api_key_here
     export OPENAI_API_KEY=your_openai_api_key_here
     export DEEPSEEK_API_KEY=your_deepseek_api_key_here
     export GEMINI_API_KEY=your_gemini_api_key_here
     export OPENROUTER_API_KEY=your_openrouter_api_key_here
 
-    # Or use interactive configuration
-    python agent.py chat  # Will prompt for missing keys
+    # Example usage
+    agent chat --model deepseek:deepseek-chat
     ```
 
-    Configuration is automatically saved to `~/.config/agent/config.py` and persists across sessions.
+    Configuration is automatically saved to `~/.config/agent/config.json` and persists across sessions.
 
 ## 🛠️ Usage
 
@@ -50,7 +50,7 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 Start an interactive chat session with your configured AI model and MCP tools:
 
 ```bash
-python agent.py chat
+agent chat --model deepseek:deepseek-chat
 ```
 
 ### MCP Model Server
@@ -62,10 +62,10 @@ Start the MCP model server to expose all AI models as standardized MCP tools wit
 python mcp_server.py --stdio
 
 # Or start via agent CLI
-python agent.py mcp serve
+agent mcp serve
 
 # Start with TCP transport (useful for debugging)
-python agent.py mcp serve --port 3000 --host localhost
+agent mcp serve --port 3000 --host localhost
 ```
 
 The model server exposes 11 AI models across 5 providers:
@@ -106,23 +106,23 @@ Each model tool supports persistent conversations:
 
 ```bash
 # Format: name:command:arg1:arg2:...
-python agent.py mcp add myserver:node:/path/to/server.js
-python agent.py mcp add filesystem:python:-m:mcp.server.stdio:filesystem:--root:.
+agent mcp add myserver:node:/path/to/server.js
+agent mcp add filesystem:python:-m:mcp.server.stdio:filesystem:--root:.
 
 # Add the AI models server to your MCP configuration
-python agent.py mcp add ai-models:python:mcp_server.py:--stdio
+agent mcp add ai-models:python:mcp_server.py:--stdio
 ```
 
 #### List configured servers
 
 ```bash
-python agent.py mcp list
+agent mcp list
 ```
 
 #### Remove a server
 
 ```bash
-python agent.py mcp remove myserver
+agent mcp remove myserver
 ```
 
 ### Single Query
@@ -130,7 +130,7 @@ python agent.py mcp remove myserver
 Ask a one-time question without entering interactive mode:
 
 ```bash
-python agent.py ask "What's the weather like today?"
+agent ask "What's the weather like today?"
 ```
 
 ### Model Switching
@@ -139,16 +139,16 @@ Switch between different AI models using the provider-model format (configuratio
 
 ```bash
 # Provider-model format switching
-python agent.py switch anthropic:claude-3.5-sonnet
-python agent.py switch openai:gpt-4-turbo-preview
-python agent.py switch deepseek:deepseek-chat
-python agent.py switch gemini:gemini-2.5-flash
+agent switch anthropic:claude-3.5-sonnet
+agent switch openai:gpt-4-turbo-preview
+agent switch deepseek:deepseek-chat
+agent switch gemini:gemini-2.5-flash
 
 # Legacy model switching (still supported)
-python agent.py switch-deepseek      # DeepSeek Chat model
-python agent.py switch-reason        # DeepSeek Reasoner model
-python agent.py switch-gemini-flash  # Google Gemini Flash
-python agent.py switch-gemini-pro    # Google Gemini Pro
+agent switch-deepseek      # DeepSeek Chat model
+agent switch-reason        # DeepSeek Reasoner model
+agent switch-gemini-flash  # Google Gemini Flash
+agent switch-gemini-pro    # Google Gemini Pro
 ```
 
 Or use slash commands within interactive chat:
@@ -170,9 +170,9 @@ Or use slash commands within interactive chat:
 
 ### Persistent Configuration System
 
-The agent uses an automatic persistent configuration system that saves settings to `~/.config/agent/config.py`:
+The agent uses an automatic persistent configuration system that saves settings to `~/.config/agent/config.json`:
 
--   **API Keys**: Set via environment variables or interactive prompts
+-   **API Keys**: Set via environment variables
 -   **Model Preferences**: Automatically saved when using switch commands
 -   **MCP Servers**: Managed through the CLI and persisted across sessions
 -   **Tool Permissions**: Configurable with session-based approval system
@@ -306,7 +306,7 @@ Using AI models via MCP (requires MCP client):
 ### Example: Basic File Operations
 
 ```bash
-python agent.py chat
+agent chat --model deepseek:deepseek-chat
 ```
 
 In chat:
