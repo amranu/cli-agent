@@ -75,30 +75,6 @@ The model server exposes AI models from 5 providers:
 - **Gemini**: Google's Gemini models
 - **OpenRouter**: Multi-provider access
 
-#### MCP Model Server Usage
-
-Each model tool supports persistent conversations:
-
-```json
-// Start new conversation
-{
-  "messages": [{"role": "user", "content": "Hello"}]
-}
-// Returns: {"response": "Hi! How can I help?", "conversation_id": "abc123"}
-
-// Continue conversation
-{
-  "conversation_id": "abc123",
-  "messages": [{"role": "user", "content": "What's 2+2?"}]
-}
-
-// Clear conversation and restart
-{
-  "conversation_id": "abc123", 
-  "clear_conversation": true,
-  "messages": [{"role": "user", "content": "New topic"}]
-}
-```
 
 ### MCP Server Management
 
