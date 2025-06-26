@@ -19,8 +19,8 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 
 1.  **Clone the repository**:
     ```bash
-    git clone https://github.com/amranu/cli-agent.git
-    cd cli-agent
+    git clone https://github.com/amranu/agent.git
+    cd agent
     ```
 
 2.  **Install the package**:
