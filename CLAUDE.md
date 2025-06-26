@@ -19,19 +19,29 @@ The MCP Agent has been refactored from a monolithic 3,237-line file into a clean
 ## 📁 Modular File Structure
 
 ```
-cli-agent/
+agent/
 ├── cli_agent/                    # Main package - modular architecture
 │   ├── __init__.py              # Package exports and version
-│   ├── core/                    # Core agent functionality
+│   ├── core/                    # Core agent functionality (29 core files)
 │   │   ├── __init__.py         # Core component exports
-│   │   ├── base_agent.py       # BaseMCPAgent abstract class (1,891 lines)
-│   │   ├── base_llm_provider.py # BaseLLMProvider shared functionality
-│   │   ├── base_provider.py    # BaseProvider API abstraction
-│   │   ├── model_config.py     # ModelConfig classes for LLM characteristics
-│   │   ├── mcp_host.py         # MCPHost unified provider+model interface
-│   │   ├── input_handler.py    # InterruptibleInput terminal handling (194 lines)
-│   │   ├── slash_commands.py   # SlashCommandManager command system (330 lines)
-│   │   └── tool_permissions.py # Tool permission management
+│   │   ├── base_agent.py       # BaseMCPAgent abstract class (2,122 lines)
+│   │   ├── base_llm_provider.py # BaseLLMProvider shared functionality (456 lines)
+│   │   ├── base_provider.py    # BaseProvider API abstraction (279 lines)
+│   │   ├── model_config.py     # ModelConfig classes for LLM characteristics (531 lines)
+│   │   ├── mcp_host.py         # MCPHost unified provider+model interface (607 lines)
+│   │   ├── chat_interface.py   # Interactive chat management (912 lines)
+│   │   ├── input_handler.py    # InterruptibleInput terminal handling (303 lines)
+│   │   ├── slash_commands.py   # SlashCommandManager command system (806 lines)
+│   │   ├── tool_execution_engine.py # Tool execution and validation (280 lines)
+│   │   ├── builtin_tool_executor.py # Built-in tool implementations (685 lines)
+│   │   ├── event_system.py     # Central event bus architecture (523 lines)
+│   │   ├── display_manager.py  # Event-driven display coordination (400 lines)
+│   │   ├── response_handler.py # Response processing framework (682 lines)
+│   │   ├── subagent_coordinator.py # Subagent lifecycle management
+│   │   ├── tool_permissions.py # Tool access control system (421 lines)
+│   │   ├── terminal_manager.py # Terminal state management
+│   │   ├── global_interrupt.py # Centralized interrupt handling
+│   │   └── [15 additional core modules]
 │   ├── providers/               # API provider implementations
 │   │   ├── __init__.py         # Provider exports
 │   │   ├── anthropic_provider.py # Anthropic API provider
@@ -41,13 +51,18 @@ cli-agent/
 │   │   └── google_provider.py  # Google Gemini API provider
 │   ├── tools/                   # Tool integration and execution
 │   │   ├── __init__.py         # Tool exports
-│   │   └── builtin_tools.py    # Built-in tool definitions (292 lines)
-│   ├── utils/                   # Utility functions
+│   │   └── builtin_tools.py    # Built-in tool definitions (475 lines)
+│   ├── utils/                   # Utility functions (7 utility modules)
 │   │   ├── __init__.py         # Utility exports
-│   │   ├── tool_conversion.py  # Tool format converters
-│   │   ├── content_processing.py # Content processing utilities
-│   │   ├── diff_display.py     # Diff display utilities
-│   │   ├── http_client.py      # HTTP client utilities
+│   │   ├── tool_conversion.py  # Multi-format tool schema conversion
+│   │   ├── content_processing.py # Content extraction and cleaning utilities
+│   │   ├── diff_display.py     # Terminal diff visualization with colors
+│   │   ├── http_client.py      # HTTP client factory and lifecycle management
+│   │   ├── retry.py            # Exponential backoff retry logic
+│   │   └── tool_parsing.py     # Tool call parsing from LLM responses
+│   ├── mcp/                     # MCP protocol implementations
+│   │   ├── __init__.py         # MCP module initialization
+│   │   └── model_server.py     # MCP model server implementation
 │   │   ├── retry.py            # Retry logic utilities
 │   │   └── tool_parsing.py     # Tool parsing utilities
 │   ├── cli/                     # Command-line interface (future expansion)
@@ -268,18 +283,22 @@ if user_input is None:  # User interrupted
 ```python
 def get_all_builtin_tools() -> Dict[str, Dict]:
     return {
-        "builtin:bash_execute": {...},      # Execute bash commands
-        "builtin:read_file": {...},         # Read file contents
-        "builtin:write_file": {...},        # Write files
-        "builtin:list_directory": {...},    # Directory listing
+        "builtin:bash_execute": {...},      # Execute bash commands with interrupt support
+        "builtin:read_file": {...},         # Read file contents with offset/limit
+        "builtin:write_file": {...},        # Write files with directory creation
+        "builtin:list_directory": {...},    # Directory listing with file type indicators
         "builtin:get_current_directory": {...}, # Current directory
-        "builtin:todo_read": {...},         # Read todo list
-        "builtin:todo_write": {...},        # Update todo list
-        "builtin:replace_in_file": {...},   # Text replacement
-        "builtin:webfetch": {...},          # Web content fetching
-        "builtin:task": {...},              # Spawn subagent tasks
-        "builtin:task_status": {...},       # Check task status
-        "builtin:task_results": {...},      # Get task results
+        "builtin:replace_in_file": {...},   # Exact string replacement with whitespace validation
+        "builtin:multiedit": {...},         # Multiple sequential edits in one operation
+        "builtin:glob": {...},              # File pattern matching with modification time sorting
+        "builtin:grep": {...},              # Content search using regex patterns
+        "builtin:todo_read": {...},         # Read session-specific todo lists
+        "builtin:todo_write": {...},        # Write/update todo lists with structured format
+        "builtin:webfetch": {...},          # Web content fetching and processing
+        "builtin:task": {...},              # Spawn subagent for specific tasks
+        "builtin:task_status": {...},       # Check running subagent task status
+        "builtin:task_results": {...},      # Retrieve completed task results
+        "builtin:emit_result": {...},       # Emit subagent results (subagents only)
     }
 ```
 

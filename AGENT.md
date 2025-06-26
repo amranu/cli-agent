@@ -7,21 +7,24 @@ This document provides a comprehensive technical overview of the MCP Agent codeb
 The MCP Agent is a sophisticated, extensible framework for creating language model-powered agents with advanced tool integration, subagent management, and multi-backend support. The codebase has evolved from a monolithic structure into a clean, modular architecture emphasizing maintainability, extensibility, and production-ready features.
 
 ### Core System Capabilities
-- **Multi-LLM Backend Support:** Runtime-switchable support for DeepSeek and Google Gemini with distinct API integrations
+- **Multi-LLM Backend Support:** Runtime-switchable support for 5 providers (Anthropic, OpenAI, DeepSeek, Google Gemini, OpenRouter) with unified provider-model architecture
 - **Advanced Subagent System:** Process-isolated subagents with event-driven communication and automatic result integration
-- **Comprehensive Tool Ecosystem:** Built-in tools + external MCP protocol integration with unified execution pipeline
+- **Comprehensive Tool Ecosystem:** 16 built-in tools + external MCP protocol integration with unified execution pipeline
 - **Context Management:** Intelligent context preservation with automatic conversation compaction and subagent delegation strategies
-- **Professional UI/UX:** Terminal-based interface with streaming responses, interruption support, and slash commands
-- **Production Features:** Retry logic, fault tolerance, configuration management, and comprehensive error handling
+- **Professional UI/UX:** Event-driven terminal interface with streaming responses, interruption support, and slash commands
+- **Production Features:** Exponential backoff retry logic, fault tolerance, persistent configuration management, and comprehensive error handling
+- **Provider-Model Separation:** Same models accessible through different providers with flexible configuration
 
 ### Key Architectural Features
 
-- **Modular Plugin Architecture:** Clean separation enabling easy LLM backend addition and tool integration
-- **Event-Driven Design:** Async subagent communication with real-time message streaming
-- **Strategy Pattern Implementation:** Interchangeable tool conversion and parsing strategies per LLM
+- **Provider-Model Architecture:** Clean separation between API providers and model characteristics via composition
+- **Event-Driven Design:** Centralized event bus transforming streaming into discrete JSON events with interrupt support
+- **Modular Core System:** 29 core modules with specialized responsibilities (base_agent, chat_interface, tool_execution_engine, etc.)
+- **Strategy Pattern Implementation:** Interchangeable tool conversion and parsing strategies per LLM format
 - **Context-Aware Operation:** Smart delegation of context-heavy tasks to preserve main agent efficiency
-- **Stream-First Design:** Unified streaming interface across all backends with interruption capabilities
-- **Fault-Tolerant Design:** Comprehensive error handling, retry logic, and graceful degradation
+- **Stream-First Design:** Unified streaming interface across all backends with comprehensive interruption capabilities
+- **Fault-Tolerant Design:** Comprehensive error handling, exponential backoff retry logic, and graceful degradation
+- **Tool Extensibility:** Built-in tools (glob, grep, multiedit, etc.) + external MCP tool integration
 
 ## 2. Modular Architecture
 
@@ -30,25 +33,47 @@ The codebase implements a sophisticated modular architecture with clear separati
 ```
 cli_agent/
 ├── __init__.py                    # Package exports and version info
-├── core/                          # Core agent framework
-│   ├── base_agent.py              # Abstract base agent (1,891 lines)
-│   ├── input_handler.py           # Terminal interaction utilities (194 lines)
-│   └── slash_commands.py          # Command system management (330 lines)
+├── core/                          # Core agent framework (29 core files)
+│   ├── base_agent.py              # Abstract base agent (2,122 lines)
+│   ├── base_llm_provider.py       # Centralized LLM provider functionality (456 lines)
+│   ├── base_provider.py           # Provider API abstraction (279 lines)
+│   ├── model_config.py            # Model-specific configurations (531 lines)
+│   ├── mcp_host.py                # Provider-model composition (607 lines)
+│   ├── chat_interface.py          # Interactive chat management (912 lines)
+│   ├── input_handler.py           # Terminal interaction utilities (303 lines)
+│   ├── slash_commands.py          # Command system management (806 lines)
+│   ├── tool_execution_engine.py   # Tool execution and validation (280 lines)
+│   ├── builtin_tool_executor.py   # Tool implementations (685 lines)
+│   ├── event_system.py            # Central event bus architecture (523 lines)
+│   ├── display_manager.py         # Event-driven display coordination (400 lines)
+│   ├── response_handler.py        # Response processing framework (682 lines)
+│   ├── subagent_coordinator.py    # Subagent lifecycle management
+│   ├── tool_permissions.py        # Tool access control system (421 lines)
+│   └── [15 additional specialized modules]
+├── providers/                     # API provider implementations
+│   ├── anthropic_provider.py      # Anthropic API provider
+│   ├── openai_provider.py         # OpenAI API provider
+│   ├── deepseek_provider.py       # DeepSeek API provider
+│   ├── google_provider.py         # Google Gemini API provider
+│   └── openrouter_provider.py     # OpenRouter multi-model API
 ├── tools/                         # Built-in tool definitions
 │   ├── __init__.py                # Tool exports
-│   └── builtin_tools.py           # 12 built-in tools with JSON schemas (292 lines)
-├── utils/                         # Shared utility modules
+│   └── builtin_tools.py           # 16 built-in tools with JSON schemas (475 lines)
+├── utils/                         # Shared utility modules (7 utility modules)
 │   ├── __init__.py                # Centralized utility exports
-│   ├── tool_conversion.py         # LLM-specific tool format conversion (188 lines)
-│   ├── tool_parsing.py            # Multi-format tool call parsing (280 lines)
+│   ├── tool_conversion.py         # Multi-format tool schema conversion
+│   ├── tool_parsing.py            # Tool call parsing from LLM responses
 │   ├── content_processing.py      # Content extraction and cleaning utilities
 │   ├── http_client.py             # HTTP client factory and lifecycle management
-│   ├── retry.py                   # Retry logic with exponential backoff
-│   └── tool_permissions.py        # Tool permissions management
-└── tests/                         # Testing framework
-    ├── __init__.py
-    ├── test_agent.py
-    └── test_tools.py
+│   ├── retry.py                   # Exponential backoff retry logic
+│   └── diff_display.py            # Terminal diff visualization with colors
+├── mcp/                           # MCP protocol implementations
+│   ├── __init__.py                # MCP module initialization
+│   └── model_server.py            # MCP model server implementation
+└── tests/                         # Testing framework (109 tests passing)
+    ├── unit/                      # Unit tests
+    ├── integration/               # Integration tests
+    └── fixtures/                  # Test fixtures
 ```
 
 ### `cli_agent/` Package: Modular Core Framework
@@ -124,14 +149,16 @@ BaseMCPAgent (Abstract Base Class)
 
 #### `cli_agent/tools/builtin_tools.py`: Tool Definitions
 
-- **Built-in Tool Registry (292 lines):**
-  - **File Operations:** `read_file`, `write_file`, `replace_in_file`, `list_directory`, `get_current_directory`
-  - **System Integration:** `bash_execute` for shell command execution
+- **Built-in Tool Registry (475 lines):**
+  - **File Operations:** `read_file`, `write_file`, `replace_in_file`, `multiedit`, `list_directory`, `get_current_directory`
+  - **Search & Discovery:** `glob` (pattern matching), `grep` (content search)
+  - **System Integration:** `bash_execute` for shell command execution with interrupt support
   - **Web Access:** `webfetch` for HTTP requests and content retrieval
-  - **Task Management:** `todo_read`, `todo_write` for task tracking
-  - **Subagent Control:** `task`, `task_status`, `task_results` (filtered out for subagents)
+  - **Task Management:** `todo_read`, `todo_write` for session-specific task tracking
+  - **Subagent Control:** `task`, `task_status`, `task_results`, `emit_result` (filtered appropriately for subagents)
   - **Tool Schema:** Complete JSON schemas with validation and parameter definitions
   - **Centralized Access:** `get_all_builtin_tools()` function for tool registration
+  - **Advanced Features:** Whitespace-preserving edits, modification time sorting, regex search patterns
 
 #### `cli_agent/utils/`: Shared Utility Framework
 
@@ -176,45 +203,34 @@ BaseMCPAgent (Abstract Base Class)
 - **Integration:** Imports from modular `cli_agent` package
 - **Host Selection:** Dynamic selection between DeepSeek and Gemini backends
 
-### `mcp_deepseek_host.py`: Deepseek Model Implementation
+### Provider-Model Architecture
 
-This file provides the `MCPDeepseekHost` class, which is a concrete implementation of `BaseMCPAgent` for the Deepseek language model.
+The system implements a sophisticated provider-model separation architecture that replaces the legacy host implementations:
 
-- **`MCPDeepseekHost` class:**
-    - **Deepseek API Integration:** It uses the `openai` library to communicate with the Deepseek API.
-    - **Tool Formatting:**
-        - `_convert_tools_to_deepseek_format()`: Implements the `convert_tools_to_llm_format` method to format tools as expected by the Deepseek API.
-    - **Tool Call Parsing:**
-        - `_parse_deepseek_tool_calls()`: Implements the `parse_tool_calls` method to parse the tool-calling syntax used by Deepseek.
-    - **System Prompt:**
-        - `_create_system_prompt()`: Customizes the system prompt with instructions specific to the Deepseek model.
-    - **Streaming and Tool Use:**
-        - `chat_completion()`: Manages the interaction with the Deepseek API, including handling streaming responses and iterative tool calls.
+#### **BaseProvider Abstraction:**
+- **AnthropicProvider:** Direct Anthropic API integration with native message format
+- **OpenAIProvider:** Direct OpenAI API integration with function calling support
+- **DeepSeekProvider:** OpenAI-compatible format with reasoning content extraction
+- **GoogleProvider:** Gemini API integration with complex message-to-content conversion
+- **OpenRouterProvider:** Multi-model aggregator with comprehensive model metadata
 
-### `mcp_gemini_host.py`: Gemini Model Implementation
+#### **ModelConfig Classes:**
+- **ClaudeModel:** Anthropic tool format, parameter system prompts, reasoning support
+- **GPTModel:** OpenAI tool format, message system prompts, o1 model special handling
+- **GeminiModel:** Gemini tool format, prepend system prompts, function calling modes
+- **DeepSeekModel:** OpenAI format with reasoning content parsing for chain-of-thought models
 
-This file provides the `MCPGeminiHost` class - a sophisticated implementation of `BaseMCPAgent` for Google Gemini with advanced streaming, retry logic, and context management.
+#### **MCPHost Composition:**
+- **Unified Interface:** Combines Provider + Model via composition pattern
+- **Tool Conversion:** Automatic format conversion based on model.get_tool_format()
+- **Backward Compatibility:** Inherits from BaseLLMProvider for seamless integration
+- **Event-Driven Streaming:** Interrupt-aware streaming with event bus integration
 
-- **`MCPGeminiHost` class:**
-    - **Gemini API Integration:** 
-        - Uses `google-generativeai` library with custom HTTP client configuration
-        - Advanced retry logic with exponential backoff (3 attempts, 1s base delay)
-        - Streaming response handling with failure recovery and retry mechanisms
-        - Custom HTTP client factory for timeout and connection management
-    - **Tool Call Processing:**
-        - Multi-format tool call parsing (structured, XML-style, Python-style)
-        - Parallel tool execution using `asyncio.gather()` for performance
-        - Enhanced argument parsing with proper JSON handling (fixes bash_execute issues)
-        - Tool call format validation and error recovery
-    - **Context Preservation Features:**
-        - Gemini-specific system prompt with context delegation guidance
-        - Emphasizes subagent usage for context-heavy tasks (>200 lines, multiple files)
-        - Provides delegation examples and anti-patterns for efficiency
-    - **Streaming & Reliability:**
-        - Sophisticated streaming response handler with retry logic
-        - Handles premature stream termination with automatic retries (max 3 attempts)
-        - Considers function calls as valid responses (not just text content)
-        - Real-time message display during streaming with proper terminal handling
+#### **Key Benefits:**
+- **Provider Flexibility:** Same model accessible through different providers (e.g., Claude via Anthropic or OpenRouter)
+- **Easy Extensibility:** New providers or models require minimal code changes
+- **Tool Format Abstraction:** Automatic conversion between OpenAI, Anthropic, and Gemini formats
+- **Configuration Management:** Unified configuration system with provider-model combinations
 
 ### Subagent System Architecture
 
@@ -326,20 +342,27 @@ The refactoring from a monolithic 3,237-line file to a modular architecture prov
 
 ### Before & After Comparison
 - **Before:** Single `agent.py` file (3,237 lines)
-- **After:** Focused modules with clear responsibilities
-  - `base_agent.py`: 1,891 lines (core functionality)
-  - `slash_commands.py`: 330 lines (command system)  
-  - `input_handler.py`: 194 lines (terminal handling)
-  - `builtin_tools.py`: 292 lines (tool definitions)
-  - `agent.py`: 505 lines (CLI interface only)
+- **After:** Modular architecture with 29 core files and specialized modules
+  - `base_agent.py`: 2,122 lines (core functionality)
+  - `chat_interface.py`: 912 lines (interactive chat management)
+  - `slash_commands.py`: 806 lines (enhanced command system)
+  - `builtin_tool_executor.py`: 685 lines (tool implementations)
+  - `response_handler.py`: 682 lines (response processing)
+  - `mcp_host.py`: 607 lines (provider-model composition)
+  - `event_system.py`: 523 lines (event bus architecture)
+  - `builtin_tools.py`: 475 lines (16 tool definitions)
+  - `agent.py`: 1,447 lines (comprehensive CLI interface)
 
 ### Key Improvements
-- **Maintainability**: Each module has a single, clear responsibility
-- **Testability**: Components can be unit tested independently
-- **Reusability**: Core modules work across different LLM implementations
-- **Scalability**: New features can be added without touching entire codebase
-- **Developer Experience**: Much easier to navigate and understand
-- **Code Quality**: Enforced separation of concerns and reduced coupling
+- **Maintainability**: Each module has a single, clear responsibility with defined interfaces
+- **Testability**: Components can be unit tested independently (109 tests passing)
+- **Reusability**: Core modules work across different LLM implementations via provider-model architecture
+- **Scalability**: New features can be added without touching entire codebase (16 tools, 5 providers)
+- **Developer Experience**: Much easier to navigate and understand with comprehensive documentation
+- **Code Quality**: Enforced separation of concerns, reduced coupling, and event-driven patterns
+- **Event Architecture**: Clean separation via centralized event bus for display and processing
+- **Tool Extensibility**: Built-in tools + external MCP integration with unified execution pipeline
+- **Provider Flexibility**: Same models accessible through different providers with seamless switching
 
 ## 6. Key Design Patterns & Architectural Decisions
 
