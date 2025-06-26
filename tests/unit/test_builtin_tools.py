@@ -316,18 +316,18 @@ class TestBuiltinTools:
     def test_glob_tool(self):
         """Test the glob tool definition and basic functionality."""
         tools = get_all_builtin_tools()
-        
+
         # Check tool exists
         assert "builtin:glob" in tools
-        
+
         glob_tool = tools["builtin:glob"]
-        
+
         # Check basic structure
         assert glob_tool["name"] == "glob"
         assert glob_tool["server"] == "builtin"
         assert "description" in glob_tool
         assert "schema" in glob_tool
-        
+
         # Check schema structure
         schema = glob_tool["schema"]
         assert "pattern" in schema["properties"]
@@ -335,15 +335,15 @@ class TestBuiltinTools:
         assert "path" in schema["properties"]
         assert schema["properties"]["path"]["type"] == "string"
         assert schema["required"] == ["pattern"]
-        
+
         # Test basic execution
         from cli_agent.core.builtin_tool_executor import BuiltinToolExecutor
-        
+
         class MockAgent:
             is_subagent = False
-        
+
         executor = BuiltinToolExecutor(MockAgent())
-        
+
         # Test with a simple pattern that should find some files
         result = executor.glob({"pattern": "*.py"})
         assert isinstance(result, str)
@@ -352,18 +352,18 @@ class TestBuiltinTools:
     def test_grep_tool(self):
         """Test the grep tool definition and basic functionality."""
         tools = get_all_builtin_tools()
-        
+
         # Check tool exists
         assert "builtin:grep" in tools
-        
+
         grep_tool = tools["builtin:grep"]
-        
+
         # Check basic structure
         assert grep_tool["name"] == "grep"
         assert grep_tool["server"] == "builtin"
         assert "description" in grep_tool
         assert "schema" in grep_tool
-        
+
         # Check schema structure
         schema = grep_tool["schema"]
         assert "pattern" in schema["properties"]
@@ -373,15 +373,15 @@ class TestBuiltinTools:
         assert "include" in schema["properties"]
         assert schema["properties"]["include"]["type"] == "string"
         assert schema["required"] == ["pattern"]
-        
+
         # Test basic execution
         from cli_agent.core.builtin_tool_executor import BuiltinToolExecutor
-        
+
         class MockAgent:
             is_subagent = False
-        
+
         executor = BuiltinToolExecutor(MockAgent())
-        
+
         # Test with a simple pattern
         result = executor.grep({"pattern": "import"})
         assert isinstance(result, str)
@@ -390,22 +390,23 @@ class TestBuiltinTools:
     def test_glob_grep_tool_integration(self):
         """Test that glob and grep tools are properly integrated."""
         tools = get_all_builtin_tools()
-        
+
         # Both tools should be in the registry
         assert "builtin:glob" in tools
         assert "builtin:grep" in tools
-        
+
         # Check they're in the tool names list
         from cli_agent.tools.builtin_tools import BUILTIN_TOOL_NAMES
+
         assert "glob" in BUILTIN_TOOL_NAMES
         assert "grep" in BUILTIN_TOOL_NAMES
-        
+
         # Test executor has the methods
         from cli_agent.core.builtin_tool_executor import BuiltinToolExecutor
-        
+
         class MockAgent:
             is_subagent = False
-        
+
         executor = BuiltinToolExecutor(MockAgent())
         assert hasattr(executor, "glob")
         assert hasattr(executor, "grep")
@@ -415,18 +416,18 @@ class TestBuiltinTools:
     def test_multiedit_tool(self):
         """Test the multiedit tool definition and basic functionality."""
         tools = get_all_builtin_tools()
-        
+
         # Check tool exists
         assert "builtin:multiedit" in tools
-        
+
         multiedit_tool = tools["builtin:multiedit"]
-        
+
         # Check basic structure
         assert multiedit_tool["name"] == "multiedit"
         assert multiedit_tool["server"] == "builtin"
         assert "description" in multiedit_tool
         assert "schema" in multiedit_tool
-        
+
         # Check schema structure
         schema = multiedit_tool["schema"]
         assert "file_path" in schema["properties"]
@@ -434,7 +435,7 @@ class TestBuiltinTools:
         assert "edits" in schema["properties"]
         assert schema["properties"]["edits"]["type"] == "array"
         assert schema["required"] == ["file_path", "edits"]
-        
+
         # Check edits array schema
         edits_schema = schema["properties"]["edits"]
         assert "items" in edits_schema
@@ -443,13 +444,13 @@ class TestBuiltinTools:
         assert "new_string" in edit_item["properties"]
         assert "replace_all" in edit_item["properties"]
         assert edit_item["required"] == ["old_string", "new_string"]
-        
+
         # Test executor has the method
         from cli_agent.core.builtin_tool_executor import BuiltinToolExecutor
-        
+
         class MockAgent:
             is_subagent = False
-        
+
         executor = BuiltinToolExecutor(MockAgent())
         assert hasattr(executor, "multiedit")
         assert callable(getattr(executor, "multiedit"))
@@ -457,10 +458,11 @@ class TestBuiltinTools:
     def test_multiedit_tool_integration(self):
         """Test that multiedit tool is properly integrated."""
         tools = get_all_builtin_tools()
-        
+
         # Tool should be in the registry
         assert "builtin:multiedit" in tools
-        
+
         # Check it's in the tool names list
         from cli_agent.tools.builtin_tools import BUILTIN_TOOL_NAMES
+
         assert "multiedit" in BUILTIN_TOOL_NAMES

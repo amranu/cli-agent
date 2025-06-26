@@ -238,7 +238,6 @@ Within the interactive chat, use these slash commands:
 -   `/compact` - Compact conversation history
 -   `/switch <provider>:<model>` - Switch to any provider-model combination
 -   `/task` - Spawn a subagent for complex tasks
--   `/task-status` - Check status of running subagents
 
 ## 📚 Examples
 
@@ -277,8 +276,6 @@ You: /task Analyze all Python files in the src/ directory and create a summary o
 You: Can you analyze this large log file and find any error patterns?
      [Agent automatically spawns subagent for file analysis]
 
-You: /task-status
-     [Shows: "1 subagent running: log-analysis-task"]
 ```
 
 Subagents work independently and automatically return results to the main conversation.

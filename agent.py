@@ -179,7 +179,7 @@ def switch_gemini_pro(ctx):
 @click.argument("provider_model")
 def switch(provider_model):
     """Switch to a specific provider:model combination.
-    
+
     Examples:
         agent switch anthropic:claude-3.5-sonnet
         agent switch openai:gpt-4-turbo-preview
@@ -187,24 +187,28 @@ def switch(provider_model):
         agent switch gemini:gemini-2.5-flash
     """
     config = load_config()
-    
+
     try:
         # Validate the provider:model format
         if ":" not in provider_model:
-            click.echo(f"Error: Invalid format. Use 'provider:model' format (e.g., 'anthropic:claude-3.5-sonnet')")
+            click.echo(
+                f"Error: Invalid format. Use 'provider:model' format (e.g., 'anthropic:claude-3.5-sonnet')"
+            )
             return
-            
+
         # Test that the provider-model combination is valid by trying to create a host
         test_host = config.create_host_from_provider_model(provider_model)
-        
+
         # If successful, update the config
         config.default_provider_model = provider_model
         config.save_persistent_config()
-        
+
         provider, model = provider_model.split(":", 1)
         click.echo(f"Model switched to: {model} via {provider} provider")
-        click.echo(f"Configuration saved. Use 'agent chat' to start chatting with the new model.")
-        
+        click.echo(
+            f"Configuration saved. Use 'agent chat' to start chatting with the new model."
+        )
+
     except Exception as e:
         click.echo(f"Error switching to {provider_model}: {e}")
         click.echo("Available provider:model combinations:")

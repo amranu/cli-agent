@@ -194,8 +194,8 @@ def get_multiedit_tool() -> Dict[str, Any]:
             "type": "object",
             "properties": {
                 "file_path": {
-                    "type": "string", 
-                    "description": "The absolute path to the file to modify"
+                    "type": "string",
+                    "description": "The absolute path to the file to modify",
                 },
                 "edits": {
                     "type": "array",
@@ -205,24 +205,24 @@ def get_multiedit_tool() -> Dict[str, Any]:
                         "properties": {
                             "old_string": {
                                 "type": "string",
-                                "description": "The text to replace - must match file contents exactly"
+                                "description": "The text to replace - must match file contents exactly",
                             },
                             "new_string": {
-                                "type": "string", 
-                                "description": "The text to replace it with"
+                                "type": "string",
+                                "description": "The text to replace it with",
                             },
                             "replace_all": {
                                 "type": "boolean",
                                 "description": "Replace all occurrences of old_string (default false)",
-                                "default": False
-                            }
+                                "default": False,
+                            },
                         },
-                        "required": ["old_string", "new_string"]
+                        "required": ["old_string", "new_string"],
                     },
-                    "minItems": 1
-                }
+                    "minItems": 1,
+                },
             },
-            "required": ["file_path", "edits"]
+            "required": ["file_path", "edits"],
         },
         "client": None,
     }
