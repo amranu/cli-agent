@@ -191,6 +191,8 @@ class MCPHost(BaseLLMProvider):
         accumulated_reasoning_content = ""
         accumulated_tool_calls = []
         metadata = {}
+        content_emitted = False  # Track if we've already emitted the text content
+        original_content = ""  # Keep original content for conversation history
 
         logger.debug(
             "Starting comprehensive event-driven streaming response processing"
@@ -242,9 +244,44 @@ class MCPHost(BaseLLMProvider):
                 # Handle regular content - accumulate for final buffered emission
                 if hasattr(delta, "content") and delta.content:
                     accumulated_content += delta.content
+                    original_content += delta.content  # Keep for conversation history
 
                 # Handle tool calls in streaming with events
                 if hasattr(delta, "tool_calls") and delta.tool_calls:
+                    # First, detect if we have any new tool calls and emit buffered content
+                    for tool_call_delta in delta.tool_calls:
+                        if (
+                            hasattr(tool_call_delta, "function")
+                            and tool_call_delta.function
+                            and hasattr(tool_call_delta.function, "name")
+                            and tool_call_delta.function.name
+                            and not content_emitted
+                            and accumulated_content
+                        ):
+                            # Tool call detected! Emit accumulated content immediately
+                            content_to_emit = accumulated_content
+                            if accumulated_reasoning_content:
+                                reasoning_with_tags = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
+                                content_to_emit = reasoning_with_tags + content_to_emit
+
+                            await self.event_emitter.emit_text(
+                                content=content_to_emit,
+                                is_streaming=False,
+                                is_markdown=True,
+                            )
+                            await self.event_emitter.emit_text(
+                                content="\n", is_streaming=False, is_markdown=False
+                            )
+                            content_emitted = True
+                            # Clear accumulated content since it was already emitted
+                            accumulated_content = ""
+                            accumulated_reasoning_content = ""
+                            logger.debug(
+                                f"Emitted accumulated content before tool call processing: {len(content_to_emit)} characters"
+                            )
+                            break  # Only emit once
+
+                    # Now process the tool calls
                     for tool_call_delta in delta.tool_calls:
                         if (
                             hasattr(tool_call_delta, "index")
@@ -275,6 +312,7 @@ class MCPHost(BaseLLMProvider):
                                     accumulated_tool_calls[tool_call_delta.index][
                                         "function"
                                     ]["name"] = func.name
+
                                     # Emit tool call discovered event
                                     await self.event_emitter.emit_status(
                                         f"Tool call detected: {func.name}", level="info"
@@ -302,8 +340,37 @@ class MCPHost(BaseLLMProvider):
                                 logger.debug(
                                     f"Gemini part {i}: function call '{part.function_call.name}'"
                                 )
-                                # Convert Gemini function call to standard format
                                 fc = part.function_call
+
+                                # Emit accumulated content before first tool call if not already emitted
+                                if not content_emitted and accumulated_content:
+                                    # Prepend reasoning content if present
+                                    content_to_emit = accumulated_content
+                                    if accumulated_reasoning_content:
+                                        reasoning_with_tags = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
+                                        content_to_emit = (
+                                            reasoning_with_tags + content_to_emit
+                                        )
+
+                                    await self.event_emitter.emit_text(
+                                        content=content_to_emit,
+                                        is_streaming=False,
+                                        is_markdown=True,
+                                    )
+                                    await self.event_emitter.emit_text(
+                                        content="\n",
+                                        is_streaming=False,
+                                        is_markdown=False,
+                                    )
+                                    content_emitted = True
+                                    # Clear accumulated content since it was already emitted
+                                    accumulated_content = ""
+                                    accumulated_reasoning_content = ""
+                                    logger.debug(
+                                        f"Emitted accumulated content before Gemini tool call: {len(content_to_emit)} characters"
+                                    )
+
+                                # Convert Gemini function call to standard format
                                 tool_call = {
                                     "id": getattr(fc, "id", None)
                                     or f"call_{len(accumulated_tool_calls)}",
@@ -341,6 +408,7 @@ class MCPHost(BaseLLMProvider):
                         )
                         # Accumulate the chunk text into the main content
                         accumulated_content += chunk_text
+                        original_content += chunk_text  # Keep for conversation history
                     else:
                         logger.debug("Gemini chunk candidate has no parts")
                 else:
@@ -348,33 +416,39 @@ class MCPHost(BaseLLMProvider):
 
                 # Don't emit text immediately - buffer for proper markdown formatting
 
-        # Prepend reasoning content to accumulated content if present (with tags)
-        if accumulated_reasoning_content:
-            reasoning_with_tags = (
-                f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
-            )
-            accumulated_content = reasoning_with_tags + accumulated_content
-            logger.debug(f"Prepended reasoning content with tags to main content")
+        # Only emit content if it wasn't already emitted during tool call processing
+        if not content_emitted:
+            # Prepend reasoning content to accumulated content if present (with tags)
+            if accumulated_reasoning_content:
+                reasoning_with_tags = (
+                    f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
+                )
+                accumulated_content = reasoning_with_tags + accumulated_content
+                logger.debug(f"Prepended reasoning content with tags to main content")
 
-        # Emit accumulated content as properly formatted markdown
-        logger.debug(
-            f"Final accumulated_content length: {len(accumulated_content)}, tool_calls: {len(accumulated_tool_calls)}"
-        )
-        if accumulated_content:
+            # Emit accumulated content as properly formatted markdown
             logger.debug(
-                f"Emitting buffered content: {len(accumulated_content)} characters - '{accumulated_content[:200]}...'"
+                f"Final accumulated_content length: {len(accumulated_content)}, tool_calls: {len(accumulated_tool_calls)}"
             )
-            # Emit the complete response with markdown formatting
-            await self.event_emitter.emit_text(
-                content=accumulated_content, is_streaming=False, is_markdown=True
-            )
-            # Add newline after LLM response
-            await self.event_emitter.emit_text(
-                content="\n", is_streaming=False, is_markdown=False
-            )
+            if accumulated_content:
+                logger.debug(
+                    f"Emitting buffered content: {len(accumulated_content)} characters - '{accumulated_content[:200]}...'"
+                )
+                # Emit the complete response with markdown formatting
+                await self.event_emitter.emit_text(
+                    content=accumulated_content, is_streaming=False, is_markdown=True
+                )
+                # Add newline after LLM response
+                await self.event_emitter.emit_text(
+                    content="\n", is_streaming=False, is_markdown=False
+                )
+            else:
+                logger.warning(
+                    "No accumulated content to emit, but streaming processing completed"
+                )
         else:
-            logger.warning(
-                "No accumulated content to emit, but streaming processing completed"
+            logger.debug(
+                "Content was already emitted during tool call processing - skipping final emission"
             )
 
         # Content accumulation complete - ready for final formatting
@@ -410,7 +484,13 @@ class MCPHost(BaseLLMProvider):
             f"Streaming processing complete. Content: {len(accumulated_content)} chars, Tool calls: {len(accumulated_tool_calls)}"
         )
 
-        return accumulated_content, accumulated_tool_calls, metadata
+        # Return original content for conversation history, not the cleared accumulated_content
+        final_content = original_content
+        if accumulated_reasoning_content and not content_emitted:
+            # Only add reasoning tags if content wasn't already emitted with them
+            final_content = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n{final_content}"
+
+        return final_content, accumulated_tool_calls, metadata
 
     async def _make_api_request(
         self,
