@@ -9,17 +9,25 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from config import HostConfig
 
 
 class SessionManager:
     """Manages conversation sessions with persistence."""
 
-    def __init__(self, sessions_dir: str = ".agent_sessions"):
+    def __init__(
+        self,
+        sessions_dir: str = ".agent_sessions",
+        config: Optional["HostConfig"] = None,
+    ):
         self.sessions_dir = Path(sessions_dir)
         self.sessions_dir.mkdir(exist_ok=True)
         self.current_session_id: Optional[str] = None
         self.current_messages: List[Dict[str, Any]] = []
+        self.config = config
 
     def create_new_session(self) -> str:
         """Create a new session and return its ID."""
@@ -209,37 +217,48 @@ class SessionManager:
 
     def _update_last_session(self, session_id: str):
         """Update the last session pointer."""
-        last_session_file = self.sessions_dir / "last_session.json"
-
-        try:
-            with open(last_session_file, "w", encoding="utf-8") as f:
-                json.dump({"last_session_id": session_id}, f)
-        except Exception:
-            pass
+        if self.config:
+            # Use config-based storage for persistence
+            self.config.set_last_session_id(session_id)
+        else:
+            # Fallback to file-based storage
+            last_session_file = self.sessions_dir / "last_session.json"
+            try:
+                with open(last_session_file, "w", encoding="utf-8") as f:
+                    json.dump({"last_session_id": session_id}, f)
+            except Exception:
+                pass
 
     def _get_last_session(self) -> Optional[str]:
         """Get the last session ID."""
-        last_session_file = self.sessions_dir / "last_session.json"
-
-        if last_session_file.exists():
-            try:
-                with open(last_session_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                return data.get("last_session_id")
-            except Exception:
-                pass
-
-        return None
+        if self.config:
+            # Use config-based storage
+            return self.config.get_last_session_id()
+        else:
+            # Fallback to file-based storage
+            last_session_file = self.sessions_dir / "last_session.json"
+            if last_session_file.exists():
+                try:
+                    with open(last_session_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    return data.get("last_session_id")
+                except Exception:
+                    pass
+            return None
 
     def _clear_last_session(self):
         """Clear the last session pointer."""
-        last_session_file = self.sessions_dir / "last_session.json"
-
-        if last_session_file.exists():
-            try:
-                last_session_file.unlink()
-            except Exception:
-                pass
+        if self.config:
+            # Use config-based storage
+            self.config.clear_last_session_id()
+        else:
+            # Fallback to file-based storage
+            last_session_file = self.sessions_dir / "last_session.json"
+            if last_session_file.exists():
+                try:
+                    last_session_file.unlink()
+                except Exception:
+                    pass
 
 
 def main():

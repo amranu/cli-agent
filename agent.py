@@ -44,6 +44,27 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
+# Global instances to avoid repeated loading
+_global_config = None
+_global_session_manager = None
+
+
+def _get_global_config():
+    """Get or create global config instance."""
+    global _global_config
+    if _global_config is None:
+        _global_config = load_config()
+    return _global_config
+
+
+def _get_global_session_manager():
+    """Get or create global session manager instance."""
+    global _global_session_manager
+    if _global_session_manager is None:
+        _global_session_manager = SessionManager(config=_get_global_config())
+    return _global_session_manager
+
+
 # Suppress noisy third-party library logging
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -297,8 +318,8 @@ async def chat(
         parsed_allowed_tools = parse_tool_list(allowed_tools)
         parsed_disallowed_tools = parse_tool_list(disallowed_tools)
 
-        # Initialize session manager
-        session_manager = SessionManager()
+        # Use global session manager instance
+        session_manager = _get_global_session_manager()
 
         # Handle session resumption
         if continue_session:
@@ -807,7 +828,7 @@ def sessions():
 @sessions.command("list")
 def list_sessions():
     """List recent conversation sessions."""
-    session_manager = SessionManager()
+    session_manager = _get_global_session_manager()
     sessions_list = session_manager.list_sessions()
 
     if not sessions_list:
@@ -830,7 +851,7 @@ def list_sessions():
 @click.argument("session_id")
 def show(session_id):
     """Show details of a specific session."""
-    session_manager = SessionManager()
+    session_manager = _get_global_session_manager()
     summary = session_manager.get_session_summary(session_id)
 
     if not summary:
@@ -850,7 +871,7 @@ def show(session_id):
 @click.confirmation_option(prompt="Are you sure you want to delete this session?")
 def delete(session_id):
     """Delete a conversation session."""
-    session_manager = SessionManager()
+    session_manager = _get_global_session_manager()
 
     if session_manager.delete_session(session_id):
         click.echo(f"Deleted session: {session_id}")
@@ -862,7 +883,7 @@ def delete(session_id):
 @click.confirmation_option(prompt="Are you sure you want to delete all sessions?")
 def clear():
     """Clear all conversation sessions."""
-    session_manager = SessionManager()
+    session_manager = _get_global_session_manager()
     session_manager.clear_all_sessions()
     click.echo("All sessions cleared.")
 

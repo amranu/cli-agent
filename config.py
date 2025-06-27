@@ -180,6 +180,9 @@ class HostConfig(BaseSettings):
         default="deepseek", alias="MODEL_TYPE"
     )  # For backward compatibility
 
+    # Session management
+    last_session_id: Optional[str] = Field(default=None, alias="LAST_SESSION_ID")
+
     # Host configuration
     host_name: str = Field(default="mcp-agent", alias="HOST_NAME")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
@@ -1236,6 +1239,7 @@ class HostConfig(BaseSettings):
             "ollama_model": self.ollama_model,
             "default_provider_model": self.default_provider_model,
             "model_type": self.model_type,
+            "last_session_id": getattr(self, "last_session_id", None),
             "last_updated": time.time(),
         }
 
@@ -1280,6 +1284,8 @@ class HostConfig(BaseSettings):
                 ]
             if "model_type" in persistent_config:
                 self.model_type = persistent_config["model_type"]
+            if "last_session_id" in persistent_config:
+                self.last_session_id = persistent_config["last_session_id"]
 
             # Migrate legacy model settings to provider-model format
             self._migrate_legacy_model_settings()
@@ -1316,6 +1322,22 @@ class HostConfig(BaseSettings):
         if migration_needed:
             self.save_persistent_config()
             print(f"Migrated to provider-model: {self.default_provider_model}")
+
+    def set_last_session_id(self, session_id: str):
+        """Set and persist the last session ID."""
+        self.last_session_id = session_id
+        self.save_persistent_config()
+        logger.debug(f"Saved last session ID: {session_id}")
+
+    def get_last_session_id(self) -> Optional[str]:
+        """Get the last session ID."""
+        return self.last_session_id
+
+    def clear_last_session_id(self):
+        """Clear the last session ID."""
+        self.last_session_id = None
+        self.save_persistent_config()
+        logger.debug("Cleared last session ID")
 
 
 def load_config() -> HostConfig:
