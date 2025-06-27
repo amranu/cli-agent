@@ -149,8 +149,8 @@ class BuiltinToolExecutor:
 
     def _get_todo_file_path(self) -> str:
         """Get the session-specific todo file path."""
-        # Create .config/agent directory if it doesn't exist
-        config_dir = Path.home() / ".config" / "agent"
+        # Create .config/mcp-agent directory if it doesn't exist
+        config_dir = Path.home() / ".config" / "mcp-agent"
         config_dir.mkdir(parents=True, exist_ok=True)
 
         # Get session ID from agent if available, otherwise use 'default'

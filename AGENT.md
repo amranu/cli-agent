@@ -7,7 +7,7 @@ This document provides a comprehensive technical overview of the MCP Agent codeb
 The MCP Agent is a sophisticated, extensible framework for creating language model-powered agents with advanced tool integration, subagent management, and multi-backend support. The codebase has evolved from a monolithic structure into a clean, modular architecture emphasizing maintainability, extensibility, and production-ready features.
 
 ### Core System Capabilities
-- **Multi-LLM Backend Support:** Runtime-switchable support for 5 providers (Anthropic, OpenAI, DeepSeek, Google Gemini, OpenRouter) with unified provider-model architecture
+- **Multi-LLM Backend Support:** Runtime-switchable support for 6 providers (Anthropic, OpenAI, DeepSeek, Google Gemini, OpenRouter, Ollama) with unified provider-model architecture
 - **Advanced Subagent System:** Process-isolated subagents with event-driven communication and automatic result integration
 - **Comprehensive Tool Ecosystem:** 16 built-in tools + external MCP protocol integration with unified execution pipeline
 - **Context Management:** Intelligent context preservation with automatic conversation compaction and subagent delegation strategies
@@ -55,7 +55,8 @@ cli_agent/
 │   ├── openai_provider.py         # OpenAI API provider
 │   ├── deepseek_provider.py       # DeepSeek API provider
 │   ├── google_provider.py         # Google Gemini API provider
-│   └── openrouter_provider.py     # OpenRouter multi-model API
+│   ├── openrouter_provider.py     # OpenRouter multi-model API
+│   └── ollama_provider.py         # Ollama local inference provider
 ├── tools/                         # Built-in tool definitions
 │   ├── __init__.py                # Tool exports
 │   └── builtin_tools.py           # 16 built-in tools with JSON schemas (475 lines)
@@ -85,8 +86,9 @@ Contains the foundational `BaseMCPAgent` class - a sophisticated abstract base c
 **Key Architecture:**
 ```python
 BaseMCPAgent (Abstract Base Class)
-├── MCPDeepseekHost  # DeepSeek API integration
-└── MCPGeminiHost    # Google Gemini API integration
+└── MCPHost (Provider-Model Composition)
+    ├── BaseProvider + ModelConfig
+    └── Tool Conversion & Event-Driven Streaming
 ```
 
 **Core Responsibilities:**
@@ -201,7 +203,7 @@ BaseMCPAgent (Abstract Base Class)
 - **Streamlined Entry Point:** Main CLI using Click framework
 - **Commands:** `chat`, `ask`, `init`, `mcp`, model switching commands
 - **Integration:** Imports from modular `cli_agent` package
-- **Host Selection:** Dynamic selection between DeepSeek and Gemini backends
+- **Host Selection:** Dynamic provider-model selection via configuration
 
 ### Provider-Model Architecture
 
@@ -213,6 +215,7 @@ The system implements a sophisticated provider-model separation architecture tha
 - **DeepSeekProvider:** OpenAI-compatible format with reasoning content extraction
 - **GoogleProvider:** Gemini API integration with complex message-to-content conversion
 - **OpenRouterProvider:** Multi-model aggregator with comprehensive model metadata
+- **OllamaProvider:** Local inference provider with dynamic model discovery
 
 #### **ModelConfig Classes:**
 - **ClaudeModel:** Anthropic tool format, parameter system prompts, reasoning support
@@ -272,7 +275,7 @@ The sophisticated modular architecture provides a comprehensive execution flow w
 1.  **System Initialization:**
     - **CLI Bootstrap:** `agent.py` entry point using Click framework with comprehensive command set
     - **Configuration Loading:** Pydantic-based config with environment variable integration
-    - **Host Selection:** Dynamic instantiation (`MCPDeepseekHost` or `MCPGeminiHost`) based on configuration
+    - **Host Selection:** Dynamic instantiation of `MCPHost` with provider-model configuration
     - **Base Agent Setup:** `BaseMCPAgent.__init__()` with centralized subagent management and tool loading
     - **External Integration:** Automatic MCP server connections with tool discovery and registration
 
@@ -415,7 +418,7 @@ The sophisticated codebase employs numerous advanced design patterns and archite
 ## 7. Development Guidelines
 
 ### Adding New Components
-- **New LLM Backend:** Extend `BaseMCPAgent` and implement abstract methods
+- **New LLM Backend:** Create new `BaseProvider` and `ModelConfig` classes, then compose via `MCPHost`
 - **New Tools:** Add to `cli_agent/tools/builtin_tools.py` or create MCP server
 - **New Commands:** Add handlers to `SlashCommandManager` or create custom command files
 - **New Utilities:** Add to `cli_agent/utils/` for shared functionality
@@ -427,9 +430,10 @@ from cli_agent.core.base_agent import BaseMCPAgent
 from cli_agent.core.input_handler import InterruptibleInput
 from cli_agent.tools.builtin_tools import get_all_builtin_tools
 
-# LLM implementations  
-from mcp_deepseek_host import MCPDeepseekHost
-from mcp_gemini_host import MCPGeminiHost
+# Provider-Model Architecture
+from cli_agent.core.mcp_host import MCPHost
+from cli_agent.providers.anthropic_provider import AnthropicProvider
+from cli_agent.core.model_config import ClaudeModel
 ```
 
 ### Recent Architectural Improvements:

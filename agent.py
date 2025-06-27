@@ -401,7 +401,7 @@ async def chat(
         import json
         import os
 
-        todo_dir = os.path.expanduser("~/.config/agent")
+        todo_dir = os.path.expanduser("~/.config/mcp-agent")
         os.makedirs(todo_dir, exist_ok=True)
         todo_file = os.path.join(todo_dir, f"todos_{session_id}.json")
         with open(todo_file, "w") as f:

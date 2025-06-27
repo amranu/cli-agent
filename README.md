@@ -30,18 +30,23 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 
 3.  **Configure API keys** (environment variables):
     ```bash
-    # Set environment variables (required for the providers you want to use)
-    export ANTHROPIC_API_KEY=your_anthropic_api_key_here
+    # Set environment variables for the providers you want to use
     export OPENAI_API_KEY=your_openai_api_key_here
     export DEEPSEEK_API_KEY=your_deepseek_api_key_here
+    export ANTHROPIC_API_KEY=your_anthropic_api_key_here
     export GEMINI_API_KEY=your_gemini_api_key_here
     export OPENROUTER_API_KEY=your_openrouter_api_key_here
 
-    # Example usage
-    agent chat --model deepseek:deepseek-chat
+    # Start with automatic provider selection
+    agent chat
+    
+    # Or specify a particular provider-model combination
+    agent chat --model openai:gpt-4-turbo-preview
     ```
 
-    Configuration is automatically saved to `~/.config/agent/config.json` and persists across sessions.
+    **Smart Provider Selection**: The agent automatically selects a configured provider based on available API keys.
+
+    Configuration is automatically saved to `~/.config/mcp-agent/config.json` and persists across sessions.
 
 ## 🛠️ Usage
 
@@ -61,11 +66,13 @@ Start the MCP model server to expose all AI models as standardized MCP tools wit
 # Start via stdio transport (recommended for MCP clients)
 python mcp_server.py --stdio
 
-# Or start via agent CLI
+# Or start via agent CLI (defaults to stdio)
 agent mcp serve
+agent mcp serve --stdio  # explicit stdio
 
 # Start with TCP transport (useful for debugging)
-agent mcp serve --port 3000 --host localhost
+python mcp_server.py --tcp --port 3000 --host localhost
+agent mcp serve --tcp --port 3000 --host localhost
 ```
 
 The model server exposes AI models from 5 providers:
@@ -136,7 +143,7 @@ Or use slash commands within interactive chat:
 
 ### Persistent Configuration System
 
-The agent uses an automatic persistent configuration system that saves settings to `~/.config/agent/config.json`:
+The agent uses an automatic persistent configuration system that saves settings to `~/.config/mcp-agent/config.json`:
 
 -   **API Keys**: Set via environment variables
 -   **Model Preferences**: Automatically saved when using switch commands
@@ -365,7 +372,7 @@ Please read our [CONTRIBUTING.md](CONTRIBUTING.md) file for more details on our 
 ## 🔒 Security
 
 -   **API Keys**: Stored as environment variables
--   **Configuration**: Automatically managed in user home directory (`~/.config/agent/`)
+-   **Configuration**: Automatically managed in user home directory (`~/.config/mcp-agent/`)
 -   **MCP Servers**: Local configurations with session-based tool permissions
 -   **Tool Execution**: Built-in permission system for sensitive operations
 -   **Subagent Isolation**: Subagents run in controlled environments with specific tool access

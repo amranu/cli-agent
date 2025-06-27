@@ -174,7 +174,7 @@ class HostConfig(BaseSettings):
 
     # Provider-Model selection
     default_provider_model: str = Field(
-        default="deepseek:deepseek-chat", alias="DEFAULT_PROVIDER_MODEL"
+        default="", alias="DEFAULT_PROVIDER_MODEL"  # Empty default triggers intelligent selection
     )
     model_type: str = Field(
         default="deepseek", alias="MODEL_TYPE"
@@ -292,6 +292,125 @@ class HostConfig(BaseSettings):
             timeout=self.ollama_timeout,
         )
 
+    def get_intelligent_default_provider_model(self) -> str:
+        """Intelligently select the best available provider based on configured API keys.
+        
+        Selection preference: OpenAI > DeepSeek > Anthropic > OpenRouter > Ollama
+        
+        Returns:
+            String like 'openai:gpt-4-turbo-preview' for the best available provider
+        """
+        # Define default models for each provider
+        provider_defaults = {
+            "openai": "gpt-4-turbo-preview",
+            "deepseek": "deepseek-chat", 
+            "anthropic": "claude-3-5-sonnet-20241022",
+            "openrouter": "anthropic/claude-3.5-sonnet",
+            "ollama": "llama2"  # Ollama doesn't require an API key
+        }
+        
+        # Priority order: OpenAI > DeepSeek > Anthropic > OpenRouter > Ollama
+        priority_order = ["openai", "deepseek", "anthropic", "openrouter", "ollama"]
+        
+        for provider in priority_order:
+            # Check if API key is configured for this provider
+            if provider == "openai" and self.openai_api_key:
+                return f"openai:{provider_defaults['openai']}"
+            elif provider == "deepseek" and self.deepseek_api_key:
+                return f"deepseek:{provider_defaults['deepseek']}"
+            elif provider == "anthropic" and self.anthropic_api_key:
+                return f"anthropic:{provider_defaults['anthropic']}"
+            elif provider == "openrouter" and self.openrouter_api_key:
+                return f"openrouter:{provider_defaults['openrouter']}"
+            elif provider == "ollama":
+                # Check if Ollama is actually running
+                if self._is_ollama_available():
+                    return f"ollama:{provider_defaults['ollama']}"
+        
+        # No providers available - raise informative error
+        self._raise_no_providers_error()
+
+    def _raise_no_providers_error(self) -> None:
+        """Raise an informative error when no providers are available."""
+        error_msg = """❌ No AI providers are configured or available.
+
+To use the MCP Agent, you need at least one of the following:
+
+📋 Configure an API key for a cloud provider:
+   export OPENAI_API_KEY=your_key_here
+   export DEEPSEEK_API_KEY=your_key_here  
+   export ANTHROPIC_API_KEY=your_key_here
+   export GEMINI_API_KEY=your_key_here
+   export OPENROUTER_API_KEY=your_key_here
+
+🏠 Or install and start Ollama for local inference:
+   # Install: https://ollama.ai
+   ollama serve
+   ollama pull llama2
+
+Then restart the agent.
+
+💡 Tip: The agent will automatically select the best available provider."""
+        
+        raise ValueError(error_msg)
+
+    def _provider_has_api_key(self, provider_name: str) -> bool:
+        """Check if a provider has a configured API key.
+        
+        Args:
+            provider_name: Name of the provider (e.g., 'openai', 'deepseek')
+            
+        Returns:
+            True if the provider has a non-empty API key, False otherwise
+        """
+        if provider_name == "openai":
+            return bool(self.openai_api_key)
+        elif provider_name == "deepseek":
+            return bool(self.deepseek_api_key)
+        elif provider_name == "anthropic":
+            return bool(self.anthropic_api_key)
+        elif provider_name == "openrouter":
+            return bool(self.openrouter_api_key)
+        elif provider_name == "google":
+            return bool(self.gemini_api_key)
+        elif provider_name == "ollama":
+            return self._is_ollama_available()  # Check if Ollama is actually running
+        else:
+            return False
+
+    def _is_ollama_available(self) -> bool:
+        """Check if Ollama is running and accessible.
+        
+        Returns:
+            True if Ollama is accessible, False otherwise
+        """
+        try:
+            import httpx
+            import asyncio
+            
+            async def check_ollama():
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        response = await client.get(f"{self.ollama_base_url}/api/tags")
+                        return response.status_code == 200
+                except:
+                    return False
+            
+            # Run the async check
+            try:
+                loop = asyncio.get_running_loop()
+                # If we're in an event loop, we can't use asyncio.run
+                return False  # Conservative fallback in async context
+            except RuntimeError:
+                # No event loop running, safe to use asyncio.run
+                return asyncio.run(check_ollama())
+                
+        except ImportError:
+            # httpx not available
+            return False
+        except Exception:
+            return False
+
     def parse_provider_model_string(self, provider_model: str) -> Tuple[str, str]:
         """Parse provider:model string into provider and model components.
 
@@ -319,7 +438,18 @@ class HostConfig(BaseSettings):
         Returns:
             ProviderModelConfig with provider name, model name, and provider config
         """
-        target_provider_model = provider_model or self.default_provider_model
+        # Use intelligent selection if no provider specified or default is empty
+        if not provider_model and not self.default_provider_model:
+            target_provider_model = self.get_intelligent_default_provider_model()
+        else:
+            target_provider_model = provider_model or self.default_provider_model
+            
+            # If using default and it requires an API key that's not configured, use intelligent selection
+            if not provider_model:  # Only for default selection, not explicit user choice
+                default_provider_name, _ = self.parse_provider_model_string(target_provider_model)
+                if not self._provider_has_api_key(default_provider_name):
+                    target_provider_model = self.get_intelligent_default_provider_model()
+            
         provider_name, model_name = self.parse_provider_model_string(
             target_provider_model
         )
@@ -998,8 +1128,8 @@ class HostConfig(BaseSettings):
         import json
         from pathlib import Path
 
-        # Store MCP config in ~/.config/agent/ to persist across working directories
-        config_dir = Path.home() / ".config" / "agent"
+        # Store MCP config in ~/.config/mcp-agent/ to persist across working directories
+        config_dir = Path.home() / ".config" / "mcp-agent"
         config_dir.mkdir(parents=True, exist_ok=True)
         mcp_config_file = config_dir / "mcp_servers.json"
 
@@ -1020,8 +1150,8 @@ class HostConfig(BaseSettings):
         import json
         from pathlib import Path
 
-        # Load MCP config from ~/.config/agent/ to persist across working directories
-        config_dir = Path.home() / ".config" / "agent"
+        # Load MCP config from ~/.config/mcp-agent/ to persist across working directories
+        config_dir = Path.home() / ".config" / "mcp-agent"
         mcp_config_file = config_dir / "mcp_servers.json"
 
         if not mcp_config_file.exists():
@@ -1194,12 +1324,12 @@ class HostConfig(BaseSettings):
             raise
 
     def save_persistent_config(self):
-        """Save persistent configuration to ~/.config/agent/config.py."""
+        """Save persistent configuration to ~/.config/mcp-agent/config.json."""
         import json
         from pathlib import Path
 
-        # Store persistent config in ~/.config/agent/
-        config_dir = Path.home() / ".config" / "agent"
+        # Store persistent config in ~/.config/mcp-agent/
+        config_dir = Path.home() / ".config" / "mcp-agent"
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / "config.json"
 
@@ -1225,11 +1355,11 @@ class HostConfig(BaseSettings):
             print(f"Warning: Could not save persistent configuration: {e}")
 
     def load_persistent_config(self):
-        """Load persistent configuration from ~/.config/agent/config.py."""
+        """Load persistent configuration from ~/.config/mcp-agent/config.json."""
         import json
         from pathlib import Path
 
-        config_dir = Path.home() / ".config" / "agent"
+        config_dir = Path.home() / ".config" / "mcp-agent"
         config_file = config_dir / "config.json"
 
         if not config_file.exists():
