@@ -37,7 +37,9 @@ class ToolNameUtils:
         return candidates
 
     @staticmethod
-    def resolve_tool_key(tool_key: str, available_tools: Dict[str, Dict]) -> Optional[str]:
+    def resolve_tool_key(
+        tool_key: str, available_tools: Dict[str, Dict]
+    ) -> Optional[str]:
         """Resolve tool key by trying the key itself and various candidates."""
         # First try exact match
         if tool_key in available_tools:
@@ -57,25 +59,33 @@ class ToolNameUtils:
         if isinstance(tool_call, dict):
             if "function" in tool_call and isinstance(tool_call["function"], dict):
                 # Standard OpenAI format: tc["function"]["name"]
-                return tool_call["function"].get("name", f"<missing_function_name_{id(tool_call)}>")
+                return tool_call["function"].get(
+                    "name", f"<missing_function_name_{id(tool_call)}>"
+                )
             else:
                 # Fallback for other formats: tc["name"]
                 return tool_call.get("name", f"<missing_dict_name_{id(tool_call)}>")
         else:
             # Object format
             if hasattr(tool_call, "function"):
-                return getattr(tool_call.function, "name", f"<missing_obj_function_name_{id(tool_call)}>")
+                return getattr(
+                    tool_call.function,
+                    "name",
+                    f"<missing_obj_function_name_{id(tool_call)}>",
+                )
             else:
                 return getattr(tool_call, "name", f"<missing_obj_name_{id(tool_call)}>")
 
     @staticmethod
-    def create_normalized_tools_mapping(available_tools: Dict[str, Dict]) -> Dict[str, Dict]:
+    def create_normalized_tools_mapping(
+        available_tools: Dict[str, Dict]
+    ) -> Dict[str, Dict]:
         """Create a mapping that includes both original and normalized tool names."""
         normalized_tools = available_tools.copy()
-        
+
         for tool_key, tool_info in available_tools.items():
             normalized_key = ToolNameUtils.normalize_tool_name(tool_key)
             if normalized_key != tool_key:
                 normalized_tools[normalized_key] = tool_info.copy()
-        
+
         return normalized_tools

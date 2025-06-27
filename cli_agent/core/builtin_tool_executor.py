@@ -501,7 +501,11 @@ class BuiltinToolExecutor:
                     "task_id": task_id,
                     "description": subagent.description,
                     "status": "completed" if subagent.completed else "running",
-                    "result": subagent.result if subagent.result else "No explicit result provided - subagent must call emit_result",
+                    "result": (
+                        subagent.result
+                        if subagent.result
+                        else "No explicit result provided - subagent must call emit_result"
+                    ),
                 }
                 results.append(result_info)
 

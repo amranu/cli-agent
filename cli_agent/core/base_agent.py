@@ -35,6 +35,7 @@ from cli_agent.core.tool_execution_engine import ToolExecutionEngine
 from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 from cli_agent.core.tool_schema import ToolSchemaManager
 from cli_agent.tools.builtin_tools import get_all_builtin_tools
+from cli_agent.utils.tool_name_utils import ToolNameUtils
 from config import HostConfig
 
 # Configure logging
@@ -1825,17 +1826,12 @@ class BaseMCPAgent(ABC):
         # Convert tool calls to proper OpenAI API format for conversation history
         api_formatted_tool_calls = []
         for tc in tool_calls:
-            # Extract tool name from the correct location based on structure
-            if "function" in tc and isinstance(tc["function"], dict):
-                # Standard OpenAI format: tc["function"]["name"]
-                original_name = tc["function"].get("name", f"<missing_function_name_{id(tc)}>")
-            else:
-                # Fallback for other formats: tc["name"]
-                original_name = tc.get("name", f"<missing_tc_name_{id(tc)}>")
-            
-            # Normalize tool name for OpenAI API compatibility (replace colons with underscores)
-            normalized_name = original_name.replace(":", "_")
-            
+            # Use centralized tool name extraction
+            original_name = ToolNameUtils.extract_tool_name_from_call(tc)
+
+            # Normalize tool name for OpenAI API compatibility
+            normalized_name = ToolNameUtils.normalize_tool_name(original_name)
+
             formatted_tc = {
                 "id": tc.get("id", f"call_{len(api_formatted_tool_calls)}"),
                 "type": "function",

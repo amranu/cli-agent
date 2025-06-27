@@ -13,6 +13,7 @@ from cli_agent.core.event_system import (
     ToolResultEvent,
 )
 from cli_agent.core.global_interrupt import get_global_interrupt_manager
+from cli_agent.utils.tool_name_utils import ToolNameUtils
 
 logger = logging.getLogger(__name__)
 
@@ -144,16 +145,8 @@ class ResponseHandler:
                 for tc in tool_calls:
                     tool_name = ""
                     # Handle dictionary format (most common)
-                    if isinstance(tc, dict):
-                        if "function" in tc and isinstance(tc["function"], dict):
-                            tool_name = tc["function"].get("name", "")
-                        elif "name" in tc:
-                            tool_name = tc["name"]
-                    # Handle object format (backup)
-                    elif hasattr(tc, "name") and tc.name:
-                        tool_name = tc.name
-                    elif hasattr(tc, "function") and hasattr(tc.function, "name"):
-                        tool_name = tc.function.name
+                    # Use centralized tool name extraction
+                    tool_name = ToolNameUtils.extract_tool_name_from_call(tc)
 
                     # Check if this is a task spawning tool
                     if "task" in tool_name:
@@ -566,36 +559,22 @@ class ResponseHandler:
                     for msg in current_messages[-10:]:  # Check last 10 messages
                         if msg.get("role") == "assistant" and "tool_calls" in msg:
                             for tc in msg["tool_calls"]:
-                                # Handle both dict and object formats for tool calls
+                                # Use centralized tool name extraction
+                                tool_name = ToolNameUtils.extract_tool_name_from_call(
+                                    tc
+                                )
+
+                                # Extract tool arguments
                                 if isinstance(tc, dict):
                                     if "function" in tc and isinstance(
                                         tc["function"], dict
                                     ):
-                                        tool_name = tc["function"].get(
-                                            "name", f"<missing_name_tc_{id(tc)}>"
-                                        )
                                         tool_args = tc["function"].get(
                                             "arguments", "{}"
                                         )
                                     else:
-                                        tool_name = tc.get(
-                                            "name", f"<missing_name_tc_dict_{id(tc)}>"
-                                        )
                                         tool_args = tc.get("arguments", "{}")
                                 else:
-                                    tool_name = getattr(
-                                        tc,
-                                        "name",
-                                        (
-                                            getattr(
-                                                tc.function,
-                                                "name",
-                                                f"<missing_function_attr_name_{id(tc)}>",
-                                            )
-                                            if hasattr(tc, "function")
-                                            else f"<missing_name_tc_obj_{id(tc)}>"
-                                        ),
-                                    )
                                     tool_args = getattr(
                                         tc,
                                         "arguments",

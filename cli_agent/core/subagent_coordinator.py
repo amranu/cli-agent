@@ -402,5 +402,7 @@ Please continue with your task.""",
                 "subagent_count": len(subagent_results),
             }
         else:
-            logger.warning("No explicit results collected from subagents - they must call emit_result")
+            logger.warning(
+                "No explicit results collected from subagents - they must call emit_result"
+            )
             return None

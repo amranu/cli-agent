@@ -7,6 +7,8 @@ import time
 import types
 from typing import Any, Dict, List, Optional
 
+from cli_agent.utils.tool_name_utils import ToolNameUtils
+
 logger = logging.getLogger(__name__)
 
 
@@ -16,7 +18,7 @@ class ToolSchemaManager:
     @staticmethod
     def normalize_tool_name(tool_key: str) -> str:
         """Normalize tool name by replacing colons with underscores."""
-        return tool_key.replace(":", "_")
+        return ToolNameUtils.normalize_tool_name(tool_key)
 
     @staticmethod
     def generate_default_description(tool_info: dict) -> str:

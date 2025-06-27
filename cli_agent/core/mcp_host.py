@@ -429,7 +429,6 @@ class MCPHost(BaseLLMProvider):
         model_params = self.model.get_default_parameters()
         model_params = self.model.validate_parameters(**model_params)
 
-
         # Make request through provider
         return await self.provider.make_request(
             messages=formatted_messages,

@@ -14,6 +14,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
+from cli_agent.utils.tool_name_utils import ToolNameUtils
 from config import load_config
 from subagent import emit_error, emit_message, emit_output, emit_result, emit_status
 
@@ -306,7 +307,7 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
             max_iterations = 10  # Prevent infinite loops
             iteration = 0
             emit_result_called = False
-            
+
             # Track if emit_result was called
             original_execute_mcp_tool = host.tool_execution_engine.execute_mcp_tool
 
@@ -325,6 +326,7 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                     )
                     # Exit the subagent cleanly
                     import sys
+
                     sys.exit(0)
 
                 # Check if emit_result was called
@@ -340,54 +342,50 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
 
             host.tool_execution_engine.execute_mcp_tool = track_emit_result_tool
 
-
             try:
                 # Conversation loop for multi-step tasks
                 while iteration < max_iterations and not emit_result_called:
                     iteration += 1
                     emit_output_with_id(f"🔄 Conversation iteration {iteration}")
-                    
+
                     # Generate response using the main agent's system
                     emit_output_with_id("🚀 Calling host.generate_response...")
-                    
+
                     # Create normalized tools mapping for subagent use
                     # This ensures both normalized and original tool names are available
                     original_available_tools = host.available_tools
-                    
-                    # Add normalized tool names to available_tools for subagent use
-                    normalized_tools = original_available_tools.copy()
-                    for tool_key, tool_info in original_available_tools.items():
-                        normalized_key = tool_key.replace(":", "_")
-                        if normalized_key != tool_key:
-                            normalized_tools[normalized_key] = tool_info.copy()
-                    
+
+                    # Use centralized tool name utilities
+                    normalized_tools = ToolNameUtils.create_normalized_tools_mapping(
+                        original_available_tools
+                    )
                     host.available_tools = normalized_tools
-                    
+
                     try:
                         response = await host.generate_response(messages, stream=False)
                     finally:
                         # Restore original tools
                         host.available_tools = original_available_tools
-                    
+
                     emit_output_with_id("✅ host.generate_response completed")
-                    
-                    # Add the response to conversation 
+
+                    # Add the response to conversation
                     if isinstance(response, str) and response.strip():
                         messages.append({"role": "assistant", "content": response})
                         emit_output_with_id(f"📝 Added response: {response}")
-                    
+
                     # If emit_result was called during this iteration, the loop will exit
                     # Otherwise, continue to next iteration
-                
+
                 if iteration >= max_iterations:
                     emit_error_with_id(
                         "Max conversation iterations reached",
-                        f"Subagent reached {max_iterations} iterations without calling emit_result"
+                        f"Subagent reached {max_iterations} iterations without calling emit_result",
                     )
                 elif not emit_result_called:
                     emit_error_with_id(
                         "Task completed without explicit result",
-                        "Subagent finished without calling emit_result tool"
+                        "Subagent finished without calling emit_result tool",
                     )
 
             finally:
