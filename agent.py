@@ -1309,6 +1309,12 @@ async def handle_text_chat(
                 # Save final messages before quitting/breaking
                 if "messages" in chat_result:
                     messages = chat_result["messages"]
+                
+                # Save session before exiting
+                if messages:
+                    session_manager.current_messages = messages
+                    session_manager._save_current_session()
+                
                 break
 
             # Update messages from the interactive chat result
@@ -1326,7 +1332,6 @@ async def handle_text_chat(
                 # Replace all messages in session (simple and reliable)
                 session_manager.current_messages = messages
                 session_manager._save_current_session()
-                logger.debug(f"Saved session to disk with {len(messages)} total messages")
 
             # Check if we need to reload the host
             if isinstance(chat_result, dict) and "reload_host" in chat_result:
