@@ -207,26 +207,13 @@ The agent comes with comprehensive built-in tools:
 -   **Task Delegation**: Spawn focused subagents for complex or context-heavy tasks
 -   **Text Processing**: Search, replace, and manipulate text content
 
-### MCP Server Tools
-
-Connect external MCP servers to add functionality like:
-
--   **AI Model Access**: Multiple AI models from 5 providers via the built-in MCP model server
--   **API Integrations**: Connect to various web APIs
--   **File System**: Advanced file operations
--   **Database Connectors**: PostgreSQL, MySQL, SQLite
--   **Development Tools**: Git operations, code analysis
--   **Custom Services**: Your own MCP-compatible tools
 
 ### AI Model Tools (via MCP Server)
-
-Each AI model is exposed as an MCP tool with persistent conversation support.
 
 All model tools support:
 - **Persistent Conversations**: Maintain context across calls
 - **Conversation Management**: Create, continue, or clear conversations
 - **Full Parameter Control**: Temperature, max_tokens, system prompts
-- **Complete Response Display**: No truncation of results
 
 ## 🔍 Interactive Chat Commands
 
