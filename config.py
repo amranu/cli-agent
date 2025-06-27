@@ -86,13 +86,28 @@ class OpenRouterConfig(BaseModel):
     site_url: Optional[str] = None
 
 
+class OllamaConfig(BaseModel):
+    """Configuration for Ollama API."""
+
+    base_url: str = "http://localhost:11434"
+    model: str = "llama2"
+    temperature: float = 0.7
+    max_tokens: int = 4096
+    timeout: float = 180.0  # Ollama can be slower for local inference
+
+
 class ProviderModelConfig(BaseModel):
     """Configuration for provider-model combination."""
 
-    provider_name: str  # anthropic, openai, openrouter, deepseek, google
-    model_name: str  # claude-3.5-sonnet, gpt-4, etc.
+    provider_name: str  # anthropic, openai, openrouter, deepseek, google, ollama
+    model_name: str  # claude-3.5-sonnet, gpt-4, llama2, etc.
     provider_config: Union[
-        AnthropicConfig, OpenAIConfig, OpenRouterConfig, DeepseekConfig, GeminiConfig
+        AnthropicConfig,
+        OpenAIConfig,
+        OpenRouterConfig,
+        DeepseekConfig,
+        GeminiConfig,
+        OllamaConfig,
     ]
     display_name: Optional[str] = None  # Human-readable name
 
@@ -147,6 +162,15 @@ class HostConfig(BaseSettings):
     )
     openrouter_temperature: float = Field(default=0.7, alias="OPENROUTER_TEMPERATURE")
     openrouter_max_tokens: int = Field(default=8192, alias="OPENROUTER_MAX_TOKENS")
+
+    # Ollama configuration
+    ollama_base_url: str = Field(
+        default="http://localhost:11434", alias="OLLAMA_BASE_URL"
+    )
+    ollama_model: str = Field(default="llama2", alias="OLLAMA_MODEL")
+    ollama_temperature: float = Field(default=0.7, alias="OLLAMA_TEMPERATURE")
+    ollama_max_tokens: int = Field(default=4096, alias="OLLAMA_MAX_TOKENS")
+    ollama_timeout: float = Field(default=180.0, alias="OLLAMA_TIMEOUT")
 
     # Provider-Model selection
     default_provider_model: str = Field(
@@ -250,6 +274,16 @@ class HostConfig(BaseSettings):
             max_tokens=self.openrouter_max_tokens,
         )
 
+    def get_ollama_config(self) -> OllamaConfig:
+        """Get Ollama configuration."""
+        return OllamaConfig(
+            base_url=self.ollama_base_url,
+            model=self.ollama_model,
+            temperature=self.ollama_temperature,
+            max_tokens=self.ollama_max_tokens,
+            timeout=self.ollama_timeout,
+        )
+
     def parse_provider_model_string(self, provider_model: str) -> Tuple[str, str]:
         """Parse provider:model string into provider and model components.
 
@@ -303,6 +337,10 @@ class HostConfig(BaseSettings):
             provider_config = self.get_gemini_config()
             if model_name:
                 provider_config.model = model_name
+        elif provider_name == "ollama":
+            provider_config = self.get_ollama_config()
+            if model_name:
+                provider_config.model = model_name
         else:
             raise ValueError(f"Unknown provider: {provider_name}")
 
@@ -338,6 +376,7 @@ class HostConfig(BaseSettings):
         from cli_agent.providers.anthropic_provider import AnthropicProvider
         from cli_agent.providers.deepseek_provider import DeepSeekProvider
         from cli_agent.providers.google_provider import GoogleProvider
+        from cli_agent.providers.ollama_provider import OllamaProvider
         from cli_agent.providers.openai_provider import OpenAIProvider
         from cli_agent.providers.openrouter_provider import OpenRouterProvider
 
@@ -380,6 +419,12 @@ class HostConfig(BaseSettings):
             provider = GoogleProvider(
                 api_key=pm_config.provider_config.api_key, timeout=120.0
             )
+        elif pm_config.provider_name == "ollama":
+            provider = OllamaProvider(
+                api_key="",  # Ollama doesn't require API key
+                base_url=pm_config.provider_config.base_url,
+                timeout=pm_config.provider_config.timeout,
+            )
         else:
             raise ValueError(f"Unknown provider: {pm_config.provider_name}")
 
@@ -407,6 +452,9 @@ class HostConfig(BaseSettings):
                 model = DeepSeekModel(variant="deepseek-reasoner")
             else:
                 model = DeepSeekModel(variant="deepseek-chat")  # Default
+        elif pm_config.provider_name == "ollama":
+            # For Ollama models, use GPT model as they typically use OpenAI-compatible format
+            model = GPTModel(variant=pm_config.model_name)
         else:
             # Fallback to Claude model for unknown models
             model = ClaudeModel(variant="claude-3.5-sonnet")
@@ -813,6 +861,106 @@ class HostConfig(BaseSettings):
                     available["google"] = fallback_models
                     logger.info(f"Using fallback Google models: {fallback_models}")
 
+        # Add Ollama models (mostly static as it's typically local)
+        if self.ollama_base_url:  # Check if Ollama is configured
+            # Try to get dynamic model list from Ollama API with caching
+            ollama_cache_key = f"ollama_models_{hash(self.ollama_base_url)}"
+
+            # Check Ollama-specific cache first
+            if (
+                ollama_cache_key in self._model_cache
+                and current_time
+                - self._model_cache[ollama_cache_key].get("timestamp", 0)
+                < self._cache_ttl
+            ):
+                available["ollama"] = self._model_cache[ollama_cache_key]["data"]
+                logger.debug("Using cached Ollama models")
+            else:
+                try:
+                    import asyncio
+
+                    import httpx
+
+                    # Try to get models from Ollama API
+                    async def fetch_ollama_models():
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            response = await client.get(
+                                f"{self.ollama_base_url}/api/tags"
+                            )
+                            if response.status_code == 200:
+                                data = response.json()
+                                return [
+                                    model["name"] for model in data.get("models", [])
+                                ]
+                            return []
+
+                    # Check if we're already in an event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # We're in an async context, create a new thread to run the async call
+                        import concurrent.futures
+
+                        def run_in_thread():
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                return new_loop.run_until_complete(
+                                    fetch_ollama_models()
+                                )
+                            finally:
+                                new_loop.close()
+
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(run_in_thread)
+                            models = future.result(timeout=10)  # 10 second timeout
+
+                    except RuntimeError:
+                        # No event loop running, we can use asyncio.run
+                        models = asyncio.run(fetch_ollama_models())
+
+                    if models:  # Only add if we got models
+                        available["ollama"] = models
+                        # Cache the Ollama models separately
+                        self._model_cache[ollama_cache_key] = {
+                            "data": models,
+                            "timestamp": current_time,
+                        }
+                        logger.info(
+                            f"Successfully fetched and cached {len(models)} Ollama models dynamically"
+                        )
+                    else:
+                        # Fallback to common local models
+                        fallback_models = [
+                            "llama2",
+                            "llama2:7b",
+                            "llama2:13b",
+                            "codellama",
+                            "codellama:7b",
+                            "mistral",
+                            "mistral:7b",
+                            "qwen:7b",
+                            "phi3",
+                        ]
+                        available["ollama"] = fallback_models
+                        logger.info(f"Using fallback Ollama models: {fallback_models}")
+
+                except Exception as e:
+                    logger.warning(f"Failed to get dynamic Ollama models: {e}")
+                    # Fallback to static list if API fails
+                    fallback_models = [
+                        "llama2",
+                        "llama2:7b",
+                        "llama2:13b",
+                        "codellama",
+                        "codellama:7b",
+                        "mistral",
+                        "mistral:7b",
+                        "qwen:7b",
+                        "phi3",
+                    ]
+                    available["ollama"] = fallback_models
+                    logger.info(f"Using fallback Ollama models: {fallback_models}")
+
         # Cache the complete result
         self._model_cache[cache_key] = {"data": available, "timestamp": current_time}
 
@@ -948,6 +1096,11 @@ class HostConfig(BaseSettings):
             "OPENROUTER_MODEL": self.openrouter_model,
             "OPENROUTER_TEMPERATURE": str(self.openrouter_temperature),
             "OPENROUTER_MAX_TOKENS": str(self.openrouter_max_tokens),
+            "OLLAMA_BASE_URL": self.ollama_base_url,
+            "OLLAMA_MODEL": self.ollama_model,
+            "OLLAMA_TEMPERATURE": str(self.ollama_temperature),
+            "OLLAMA_MAX_TOKENS": str(self.ollama_max_tokens),
+            "OLLAMA_TIMEOUT": str(self.ollama_timeout),
             "DEFAULT_PROVIDER_MODEL": self.default_provider_model,
             "MODEL_TYPE": self.model_type,
             "HOST_NAME": self.host_name,
@@ -1000,6 +1153,7 @@ class HostConfig(BaseSettings):
             anthropic_vars = [v for v in missing_vars if v.startswith("ANTHROPIC_")]
             openai_vars = [v for v in missing_vars if v.startswith("OPENAI_")]
             openrouter_vars = [v for v in missing_vars if v.startswith("OPENROUTER_")]
+            ollama_vars = [v for v in missing_vars if v.startswith("OLLAMA_")]
             host_vars = [
                 v
                 for v in missing_vars
@@ -1037,6 +1191,12 @@ class HostConfig(BaseSettings):
                     updated_lines.append(f"{var}={managed_vars[var]}")
                 updated_lines.append("")
 
+            if ollama_vars:
+                updated_lines.append("# Ollama API Configuration")
+                for var in sorted(ollama_vars):
+                    updated_lines.append(f"{var}={managed_vars[var]}")
+                updated_lines.append("")
+
             if host_vars:
                 updated_lines.append("# Host Configuration")
                 for var in sorted(host_vars):
@@ -1068,6 +1228,7 @@ class HostConfig(BaseSettings):
             "anthropic_model": self.anthropic_model,
             "openai_model": self.openai_model,
             "openrouter_model": self.openrouter_model,
+            "ollama_model": self.ollama_model,
             "default_provider_model": self.default_provider_model,
             "model_type": self.model_type,
             "last_updated": time.time(),
@@ -1106,6 +1267,8 @@ class HostConfig(BaseSettings):
                 self.openai_model = persistent_config["openai_model"]
             if "openrouter_model" in persistent_config:
                 self.openrouter_model = persistent_config["openrouter_model"]
+            if "ollama_model" in persistent_config:
+                self.ollama_model = persistent_config["ollama_model"]
             if "default_provider_model" in persistent_config:
                 self.default_provider_model = persistent_config[
                     "default_provider_model"
@@ -1193,6 +1356,13 @@ OPENROUTER_API_KEY=your_openrouter_api_key_here
 OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
 OPENROUTER_TEMPERATURE=0.7
 OPENROUTER_MAX_TOKENS=8192
+
+# Ollama Configuration (Local Models)
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama2
+OLLAMA_TEMPERATURE=0.7
+OLLAMA_MAX_TOKENS=4096
+OLLAMA_TIMEOUT=180.0
 
 # Provider-Model Selection
 DEFAULT_PROVIDER_MODEL=deepseek:deepseek-chat
