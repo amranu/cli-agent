@@ -937,37 +937,11 @@ class HostConfig(BaseSettings):
                             f"Successfully fetched and cached {len(models)} Ollama models dynamically"
                         )
                     else:
-                        # Fallback to common local models
-                        fallback_models = [
-                            "llama2",
-                            "llama2:7b",
-                            "llama2:13b",
-                            "codellama",
-                            "codellama:7b",
-                            "mistral",
-                            "mistral:7b",
-                            "qwen:7b",
-                            "phi3",
-                        ]
-                        available["ollama"] = fallback_models
-                        logger.info(f"Using fallback Ollama models: {fallback_models}")
+                        logger.info("No Ollama models found - skipping Ollama provider")
 
                 except Exception as e:
                     logger.warning(f"Failed to get dynamic Ollama models: {e}")
-                    # Fallback to static list if API fails
-                    fallback_models = [
-                        "llama2",
-                        "llama2:7b",
-                        "llama2:13b",
-                        "codellama",
-                        "codellama:7b",
-                        "mistral",
-                        "mistral:7b",
-                        "qwen:7b",
-                        "phi3",
-                    ]
-                    available["ollama"] = fallback_models
-                    logger.info(f"Using fallback Ollama models: {fallback_models}")
+                    logger.info("Ollama provider unavailable - skipping")
 
         # Cache the complete result
         self._model_cache[cache_key] = {"data": available, "timestamp": current_time}
