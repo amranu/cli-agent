@@ -186,7 +186,19 @@ class HTTPClientManager:
                 if hasattr(client, "aclose"):
                     await client.aclose()
                 elif hasattr(client, "close"):
-                    client.close()
+                    close_method = getattr(client, "close")
+                    if asyncio.iscoroutinefunction(close_method):
+                        await close_method()
+                    else:
+                        close_method()
+            except RuntimeError as e:
+                # Ignore "Event loop is closed" errors - this is expected during shutdown
+                if "Event loop is closed" in str(e):
+                    logger.debug(
+                        f"Ignoring event loop closed error for {name} during shutdown"
+                    )
+                else:
+                    logger.warning(f"Runtime error during cleanup for {name}: {e}")
             except Exception as e:
                 logger.warning(f"Default cleanup failed for {name}: {e}")
 

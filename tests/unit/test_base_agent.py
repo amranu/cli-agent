@@ -80,9 +80,16 @@ class TestBaseMCPAgent:
         # Main agent should not have emit_result tool
         assert "builtin:emit_result" not in agent.available_tools
 
-        # Main agent should have task management tools
+        # Main agent should have task spawning tool
         assert "builtin:task" in agent.available_tools
-        assert "builtin:task_status" in agent.available_tools
+
+        # Background subagent tools should only be available if background_subagents is enabled
+        if sample_host_config.background_subagents:
+            assert "builtin:task_status" in agent.available_tools
+            assert "builtin:task_results" in agent.available_tools
+        else:
+            assert "builtin:task_status" not in agent.available_tools
+            assert "builtin:task_results" not in agent.available_tools
 
     def test_init_subagent(self, sample_host_config):
         """Test BaseMCPAgent initialization for subagent."""
@@ -326,3 +333,70 @@ class TestBaseMCPAgent:
                 os.environ["BACKGROUND_SUBAGENTS"] = original_value
             elif "BACKGROUND_SUBAGENTS" in os.environ:
                 del os.environ["BACKGROUND_SUBAGENTS"]
+
+    def test_background_subagent_tools_availability(self, sample_host_config):
+        """Test that background subagent tools are only available when enabled."""
+
+        class TestAgent(BaseMCPAgent):
+            def convert_tools_to_llm_format(self):
+                return []
+
+            def parse_tool_calls(self, response):
+                return []
+
+            async def generate_response(self, messages, stream=True):
+                return "test response"
+
+            def _normalize_tool_calls_to_standard_format(self, tool_calls):
+                return []
+
+            def _extract_text_before_tool_calls(self, content: str) -> str:
+                return ""
+
+            def _get_provider_config(self):
+                return self.config.get_deepseek_config()
+
+            def _get_streaming_preference(self, provider_config) -> bool:
+                return True
+
+            def _calculate_timeout(self, provider_config) -> float:
+                return 60.0
+
+            def _create_llm_client(self, provider_config, timeout_seconds):
+                return MagicMock()
+
+            async def _generate_completion(
+                self, messages, tools=None, stream=True, interactive=True
+            ):
+                return "test response"
+
+            def _get_current_runtime_model(self) -> str:
+                return "test-model"
+
+            def _extract_response_content(self, response):
+                return ("test content", [], {})
+
+            async def _process_streaming_chunks(self, response):
+                return ("test content", [], {})
+
+            async def _make_api_request(
+                self, messages, tools=None, stream=True, interactive=True
+            ):
+                return MagicMock()
+
+            def _create_mock_response(self, content: str, tool_calls):
+                return MagicMock()
+
+        # Test with background subagents disabled (default)
+        sample_host_config.background_subagents = False
+        agent_disabled = TestAgent(sample_host_config, is_subagent=False)
+        assert "builtin:task" in agent_disabled.available_tools  # Always available
+        assert "builtin:task_status" not in agent_disabled.available_tools
+        assert "builtin:task_results" not in agent_disabled.available_tools
+
+        # Test with background subagents enabled
+        sample_host_config.background_subagents = True
+        agent_enabled = TestAgent(sample_host_config, is_subagent=False)
+        assert "builtin:task" in agent_enabled.available_tools
+        assert "builtin:task_status" in agent_enabled.available_tools
+        assert "builtin:task_results" in agent_enabled.available_tools

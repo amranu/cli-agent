@@ -261,7 +261,9 @@ class BaseLLMProvider(BaseMCPAgent):
                     normalized_calls.append(
                         {
                             "id": tool_call.get("id", f"call_{i}"),
-                            "name": tool_call["function"].get("name", "unknown"),
+                            "name": tool_call["function"].get(
+                                "name", f"<missing_function_name_{i}>"
+                            ),
                             "arguments": tool_call["function"].get("arguments", {}),
                         }
                     )
@@ -270,7 +272,7 @@ class BaseLLMProvider(BaseMCPAgent):
                     normalized_calls.append(
                         {
                             "id": tool_call.get("id", f"call_{i}"),
-                            "name": tool_call.get("name", "unknown"),
+                            "name": tool_call.get("name", f"<missing_dict_name_{i}>"),
                             "arguments": tool_call.get("arguments", {}),
                         }
                     )
@@ -279,7 +281,7 @@ class BaseLLMProvider(BaseMCPAgent):
                 normalized_calls.append(
                     {
                         "id": getattr(tool_call, "id", f"call_{i}"),
-                        "name": getattr(tool_call, "name", "unknown"),
+                        "name": getattr(tool_call, "name", f"<missing_obj_name_{i}>"),
                         "arguments": getattr(
                             tool_call, "args", getattr(tool_call, "arguments", {})
                         ),

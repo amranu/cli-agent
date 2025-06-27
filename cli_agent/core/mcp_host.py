@@ -112,7 +112,7 @@ class MCPHost(BaseLLMProvider):
                     f"Unknown tool call format: {type(tc)}, attributes: {dir(tc)}"
                 )
                 logger.debug(f"Tool call repr: {repr(tc)}")
-                call.name = getattr(tc, "name", "unknown")
+                call.name = getattr(tc, "name", f"<missing_tc_name_{id(tc)}>")
                 call.args = getattr(tc, "args", {})
                 call.id = getattr(tc, "id", None)
 
@@ -348,6 +348,14 @@ class MCPHost(BaseLLMProvider):
 
                 # Don't emit text immediately - buffer for proper markdown formatting
 
+        # Prepend reasoning content to accumulated content if present (with tags)
+        if accumulated_reasoning_content:
+            reasoning_with_tags = (
+                f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
+            )
+            accumulated_content = reasoning_with_tags + accumulated_content
+            logger.debug(f"Prepended reasoning content with tags to main content")
+
         # Emit accumulated content as properly formatted markdown
         logger.debug(
             f"Final accumulated_content length: {len(accumulated_content)}, tool_calls: {len(accumulated_tool_calls)}"
@@ -375,9 +383,10 @@ class MCPHost(BaseLLMProvider):
         if accumulated_reasoning_content:
             metadata["reasoning_content"] = accumulated_reasoning_content
 
-        # Parse model-specific content
-        special_content = self.model.parse_special_content(accumulated_content)
-        metadata.update(special_content)
+        # Parse model-specific content (but skip if we already handled reasoning content from API)
+        if not accumulated_reasoning_content:
+            special_content = self.model.parse_special_content(accumulated_content)
+            metadata.update(special_content)
 
         # Response already emitted during streaming loop above
 
@@ -539,18 +548,8 @@ class MCPHost(BaseLLMProvider):
 
     def _handle_provider_specific_features(self, provider_data: Dict[str, Any]) -> None:
         """Handle provider-specific features like reasoning content."""
-        # Handle reasoning content from DeepSeek
-        if "reasoning_content" in provider_data:
-            reasoning_content = provider_data["reasoning_content"]
-            if hasattr(self, "event_emitter") and self.event_emitter:
-                import asyncio
-
-                asyncio.create_task(
-                    self.event_emitter.emit_text(
-                        f"\n<reasoning>{reasoning_content}</reasoning>",
-                        is_markdown=False,
-                    )
-                )
+        # Reasoning content is now handled in the main streaming flow
+        # so we don't need to emit it separately here
 
         # Handle thinking content from Claude
         if "thinking" in provider_data:

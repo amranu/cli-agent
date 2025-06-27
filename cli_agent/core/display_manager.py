@@ -166,17 +166,71 @@ class DisplayManager:
                 # Apply markdown formatting if requested
                 if event.is_markdown and len(event.content.strip()) > 0:
                     try:
+                        import re
+
                         from cli_agent.core.formatting import ResponseFormatter
 
-                        formatter = ResponseFormatter()
-                        content_to_display = formatter.format_markdown(event.content)
-                        # For markdown content, ensure proper line spacing
-                        if not content_to_display.startswith("\n"):
+                        # Extract reasoning and thinking content
+                        reasoning_content = ""
+                        thinking_content = ""
+                        remaining_content = event.content
+
+                        # Extract reasoning tags
+                        reasoning_match = re.search(
+                            r"<reasoning>(.*?)</reasoning>",
+                            remaining_content,
+                            re.DOTALL,
+                        )
+                        if reasoning_match:
+                            reasoning_content = (
+                                f"<reasoning>{reasoning_match.group(1)}</reasoning>"
+                            )
+                            remaining_content = remaining_content.replace(
+                                reasoning_match.group(0), ""
+                            ).strip()
+
+                        # Extract thinking tags
+                        thinking_match = re.search(
+                            r"<thinking>(.*?)</thinking>", remaining_content, re.DOTALL
+                        )
+                        if thinking_match:
+                            thinking_content = (
+                                f"<thinking>{thinking_match.group(1)}</thinking>"
+                            )
+                            remaining_content = remaining_content.replace(
+                                thinking_match.group(0), ""
+                            ).strip()
+
+                        # Format the remaining content with markdown
+                        formatted_remaining = ""
+                        if remaining_content:
+                            formatter = ResponseFormatter()
+                            formatted_remaining = formatter.format_markdown(
+                                remaining_content
+                            )
+
+                        # Reconstruct: reasoning + thinking + formatted content
+                        content_to_display = ""
+                        if reasoning_content:
+                            content_to_display += reasoning_content + "\n\n"
+                        if thinking_content:
+                            content_to_display += thinking_content + "\n\n"
+                        if formatted_remaining:
+                            content_to_display += formatted_remaining
+
+                        # Ensure proper line spacing
+                        if content_to_display and not content_to_display.startswith(
+                            "\n"
+                        ):
                             content_to_display = "\n" + content_to_display
+
                     except Exception as e:
-                        logger.warning(f"Failed to format markdown: {e}")
+                        logger.warning(
+                            f"Failed to format markdown with custom tags: {e}"
+                        )
                         # Fallback to original content with line spacing
-                        if not event.content.startswith("\n"):
+                        content_to_display = event.content
+                        if not content_to_display.startswith("\n"):
                             content_to_display = "\n" + content_to_display
 
                 self.terminal_manager.write_above_prompt(content_to_display)

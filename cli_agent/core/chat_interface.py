@@ -117,11 +117,8 @@ class ChatInterface:
                         await asyncio.sleep(0.5)
                         continue
 
-                # Start persistent prompt for user input
-                self.terminal_manager.start_persistent_prompt("> ")
-
-                # Get user input with smart multiline detection (without prompt since it's persistent)
-                user_input = input_handler.get_multiline_input("")
+                # Get user input with proper prompt - let prompt_toolkit handle the display
+                user_input = input_handler.get_multiline_input("> ")
 
                 # Keep the prompt as "> " instead of changing it
                 # self.terminal_manager.update_prompt("Processing... ")
@@ -559,7 +556,84 @@ class ChatInterface:
             self.stop_conversation()
             return "Goodbye!"
 
-        return user_input
+        # Process @ file references
+        processed_input = self._process_file_references(user_input)
+
+        return processed_input
+
+    def _process_file_references(self, user_input: str) -> str:
+        """Process @ file references in user input and include file contents."""
+        import os
+        import re
+
+        # Find all @ file references using regex
+        # Match @/path/to/file or @~/path/to/file
+        file_pattern = r"@([~/][^\s]*)"
+        matches = re.findall(file_pattern, user_input)
+
+        if not matches:
+            return user_input
+
+        # Process each file reference
+        file_contents = []
+        processed_text = user_input
+
+        for file_path in matches:
+            # Expand user home directory if needed
+            expanded_path = os.path.expanduser(file_path)
+
+            try:
+                # Check if file exists and is readable
+                if os.path.isfile(expanded_path):
+                    with open(
+                        expanded_path, "r", encoding="utf-8", errors="replace"
+                    ) as f:
+                        content = f.read()
+
+                    # Add file content to our collection
+                    file_contents.append(
+                        f"\n\n--- File: {file_path} ---\n{content}\n--- End of {file_path} ---"
+                    )
+
+                    # Remove the @file_path from the original text since we're including it separately
+                    processed_text = processed_text.replace(
+                        f"@{file_path}", f"[File: {file_path}]"
+                    )
+
+                elif os.path.isdir(expanded_path):
+                    # If it's a directory, list its contents
+                    try:
+                        dir_contents = os.listdir(expanded_path)
+                        dir_listing = "\n".join(dir_contents)
+                        file_contents.append(
+                            f"\n\n--- Directory: {file_path} ---\n{dir_listing}\n--- End of {file_path} ---"
+                        )
+                        processed_text = processed_text.replace(
+                            f"@{file_path}", f"[Directory: {file_path}]"
+                        )
+                    except PermissionError:
+                        processed_text = processed_text.replace(
+                            f"@{file_path}",
+                            f"[Directory: {file_path} - Permission denied]",
+                        )
+
+                else:
+                    # File doesn't exist
+                    processed_text = processed_text.replace(
+                        f"@{file_path}", f"[File: {file_path} - Not found]"
+                    )
+
+            except Exception as e:
+                # Error reading file
+                processed_text = processed_text.replace(
+                    f"@{file_path}", f"[File: {file_path} - Error: {str(e)}]"
+                )
+
+        # Combine the processed text with file contents
+        if file_contents:
+            return processed_text + "\n" + "".join(file_contents)
+        else:
+            return processed_text
 
     async def handle_slash_command(self, command: str) -> Optional[str]:
         """Handle slash commands - delegates to agent's slash command manager."""

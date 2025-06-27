@@ -59,20 +59,30 @@ class ToolCallProcessor:
                 )
             elif isinstance(tool_call, dict):
                 if "function" in tool_call:
-                    # OpenAI-style format
+                    # OpenAI-style format - preserve original name even if None/empty
+                    function_name = tool_call["function"].get("name")
                     normalized_calls.append(
                         {
                             "id": tool_call.get("id", f"call_{i}"),
-                            "name": tool_call["function"].get("name", "unknown"),
+                            "name": (
+                                function_name
+                                if function_name is not None
+                                else f"<missing_name_in_function_{i}>"
+                            ),
                             "arguments": tool_call["function"].get("arguments", {}),
                         }
                     )
                 else:
-                    # Simple dict format
+                    # Simple dict format - preserve original name even if None/empty
+                    tool_name = tool_call.get("name")
                     normalized_calls.append(
                         {
                             "id": tool_call.get("id", f"call_{i}"),
-                            "name": tool_call.get("name", "unknown"),
+                            "name": (
+                                tool_name
+                                if tool_name is not None
+                                else f"<missing_name_{i}>"
+                            ),
                             "arguments": tool_call.get("arguments", {}),
                         }
                     )

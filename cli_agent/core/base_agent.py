@@ -206,6 +206,19 @@ class BaseMCPAgent(ABC):
                 del builtin_tools["builtin:emit_result"]
                 logger.info("Removed emit_result from main agent tools")
 
+            # Remove background subagent tools if background subagents are not enabled
+            if not self.config.background_subagents:
+                background_tools = [
+                    "builtin:task_status",
+                    "builtin:task_results",
+                ]
+                for tool_key in background_tools:
+                    if tool_key in builtin_tools:
+                        del builtin_tools[tool_key]
+                        logger.info(
+                            f"Removed {tool_key} - background subagents disabled"
+                        )
+
         self.available_tools.update(builtin_tools)
 
         # Debug: Log available tools for subagents
@@ -1271,7 +1284,9 @@ class BaseMCPAgent(ABC):
                     normalized_calls.append(
                         {
                             "id": tool_call.get("id", f"call_{i}"),
-                            "name": tool_call["function"].get("name", "unknown"),
+                            "name": tool_call["function"].get(
+                                "name", f"<missing_function_name_{i}>"
+                            ),
                             "arguments": tool_call["function"].get("arguments", {}),
                         }
                     )
@@ -1280,7 +1295,7 @@ class BaseMCPAgent(ABC):
                     normalized_calls.append(
                         {
                             "id": tool_call.get("id", f"call_{i}"),
-                            "name": tool_call.get("name", "unknown"),
+                            "name": tool_call.get("name", f"<missing_dict_name_{i}>"),
                             "arguments": tool_call.get("arguments", {}),
                         }
                     )
@@ -1810,7 +1825,7 @@ class BaseMCPAgent(ABC):
                 "id": tc.get("id", f"call_{len(api_formatted_tool_calls)}"),
                 "type": "function",
                 "function": {
-                    "name": tc.get("name", "unknown"),
+                    "name": tc.get("name", f"<missing_tc_name_{id(tc)}>"),
                     "arguments": (
                         tc.get("arguments")
                         if isinstance(tc.get("arguments"), str)

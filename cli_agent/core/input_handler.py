@@ -65,9 +65,53 @@ class InterruptibleInput:
             import asyncio
 
             from prompt_toolkit import prompt
+            from prompt_toolkit.completion import Completer, Completion, PathCompleter
             from prompt_toolkit.key_binding import KeyBindings
             from prompt_toolkit.keys import Keys
             from prompt_toolkit.patch_stdout import patch_stdout
+
+            class AtFilePathCompleter(Completer):
+                def get_completions(self, document, complete_event):
+                    text = document.text_before_cursor
+                    idx = text.rfind("@")
+                    if idx == -1:
+                        return
+                    fragment = text[idx + 1 :]
+
+                    # Allow both absolute paths (/...) and relative paths (anything else)
+                    # Skip empty fragments
+                    if not fragment:
+                        # For empty fragment after @, show current directory contents
+                        fragment = "./"
+
+                    # Use glob to get file completions directly
+                    import glob
+                    import os
+
+                    # Handle the pattern - if it ends with incomplete name, add *
+                    pattern = fragment
+                    if not pattern.endswith("/") and not pattern.endswith("*"):
+                        pattern += "*"
+
+                    try:
+                        matches = glob.glob(pattern)
+                        # Also try with expanduser for ~ paths
+                        if pattern.startswith("~/"):
+                            expanded = os.path.expanduser(pattern)
+                            matches.extend(glob.glob(expanded))
+
+                        for match in matches:
+                            if os.path.isdir(match) and not match.endswith("/"):
+                                match += "/"
+
+                            # The completion text should be just the match
+                            # start_position should replace from @ to cursor
+                            yield Completion(
+                                "@" + match, start_position=-(len(text) - idx)
+                            )
+                    except (OSError, Exception):
+                        # Fallback - no completions
+                        pass
 
             self._prompt = prompt
             self._patch_stdout = patch_stdout
@@ -86,6 +130,8 @@ class InterruptibleInput:
                 if getattr(self, "_allow_escape_interrupt", False):
                     self.interrupted = True
                     event.app.exit(exception=KeyboardInterrupt)
+
+            self._completer = AtFilePathCompleter()
 
         except ImportError:
             self._available = False
@@ -158,6 +204,9 @@ class InterruptibleInput:
                         multiline=multiline_mode,
                         wrap_lines=True,
                         enable_history_search=False,
+                        completer=getattr(self, "_completer", None),
+                        bottom_toolbar=None,  # Ensure no bottom toolbar
+                        reserve_space_for_menu=0,  # Don't reserve space for completion menu
                     )
 
                 # Run the prompt in a thread pool to avoid asyncio conflicts
@@ -174,6 +223,9 @@ class InterruptibleInput:
                     multiline=multiline_mode,
                     wrap_lines=True,
                     enable_history_search=False,
+                    completer=getattr(self, "_completer", None),
+                    bottom_toolbar=None,  # Ensure no bottom toolbar
+                    reserve_space_for_menu=0,  # Don't reserve space for completion menu
                 )
                 return result
 

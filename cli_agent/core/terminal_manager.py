@@ -26,23 +26,17 @@ class TerminalManager:
             except OSError:
                 self.terminal_height, self.terminal_width = 24, 80
 
-            # Initialize the hint line on startup
-            self._initialize_hint_line()
+            # Skip hint line initialization to avoid blank space issues
+            # self._initialize_hint_line()
 
     def start_persistent_prompt(self, prompt_text: str):
-        """Start displaying a persistent prompt at the bottom of the terminal."""
+        """Start displaying a persistent prompt - simplified to avoid conflicts."""
         if not self.is_terminal:
             return
 
-        # Refresh terminal size in case it changed
-        self._refresh_terminal_size()
-
         self.prompt_text = prompt_text
         self.prompt_active = True
-
-        # Move to bottom and display the two-line prompt
-        self._move_to_bottom_with_hint()
-        sys.stdout.flush()
+        # Skip cursor positioning to avoid conflicts with prompt_toolkit
 
     def stop_persistent_prompt(self):
         """Stop displaying the persistent prompt."""
@@ -55,40 +49,17 @@ class TerminalManager:
         sys.stdout.flush()
 
     def write_above_prompt(self, text: str):
-        """Write text above the persistent prompt using print for immediate display."""
-        # Let the global interrupt manager handle Ctrl+C - don't interfere here
-
-        if not self.is_terminal or not self.prompt_active:
-            # Fallback for non-terminal environments or no active prompt - use direct print
-            print(text, end="", flush=True)
-            return
-
-        try:
-            # For terminal with active prompt, write to a safe position above the hint line
-            # Move to line above the hint (terminal_height - 2)
-            safe_line = max(1, self.terminal_height - 2)
-            sys.stdout.write(f"\033[{safe_line};1H")
-
-            # Use print for immediate display, ensure newline handling
-            if not text.endswith("\n"):
-                text += "\n"
-            print(text, end="", flush=True)
-
-            # Redraw the two-line prompt to ensure it stays visible
-            self._move_to_bottom_with_hint()
-        except Exception:
-            # If terminal positioning fails, fall back to simple print
-            print(text, end="", flush=True)
+        """Write text above the current cursor position using simple print."""
+        # Simplified approach - just use normal print and let prompt_toolkit handle positioning
+        print(text, end="", flush=True)
 
     def update_prompt(self, new_prompt_text: str):
-        """Update the prompt text."""
+        """Update the prompt text - simplified to avoid conflicts."""
         if not self.is_terminal:
             return
 
         self.prompt_text = new_prompt_text
-        if self.prompt_active:
-            self._move_to_bottom_with_hint()
-            sys.stdout.flush()
+        # Skip cursor positioning to avoid conflicts with prompt_toolkit
 
     def _save_cursor(self):
         """Save current cursor position."""

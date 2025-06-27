@@ -49,6 +49,19 @@ class GoogleProvider(BaseProvider):
                 # Store reference for cleanup
                 self.http_client = http_client
 
+                # Register with global HTTP client manager for centralized cleanup
+                try:
+                    from cli_agent.utils.http_client import http_client_manager
+
+                    http_client_manager.register_client(
+                        f"google_{id(http_client)}", http_client
+                    )
+                    logger.debug(f"Registered Google HTTP client with global manager")
+                except ImportError:
+                    logger.warning(
+                        "HTTP client manager not available for Google client registration"
+                    )
+
             except Exception as e:
                 logger.warning(f"Failed to create custom HTTP client: {e}")
                 # Fallback to default client
@@ -252,15 +265,6 @@ class GoogleProvider(BaseProvider):
             rate_limit_info["reset_time"] = headers["x-ratelimit-reset"]
 
         return rate_limit_info
-
-    async def shutdown(self):
-        """Cleanup HTTP client if created."""
-        if hasattr(self, "http_client") and self.http_client:
-            try:
-                await self.http_client.aclose()
-                logger.debug("Closed Gemini HTTP client")
-            except Exception as e:
-                logger.error(f"Error closing Gemini HTTP client: {e}")
 
     def _convert_messages_to_gemini_format(
         self, messages: List[Dict[str, Any]]

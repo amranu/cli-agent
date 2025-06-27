@@ -355,13 +355,13 @@ def get_glob_tool() -> Dict[str, Any]:
     return {
         "server": "builtin",
         "name": "glob",
-        "description": "Retrieve files using glob pattern matching that works with any codebase size. Supports glob patterns like '**/*.js' or 'src/**/*.ts'. Returns matching file paths sorted by modification time. Use this tool when you need to find files by name patterns. When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the task tool instead.",
+        "description": "Retrieve files using glob pattern matching that works with any codebase size. Supports glob patterns like '**/*.js' or 'src/**/*.ts' and brace expansion like '**/*.{py,js,ts}'. Returns matching file paths sorted by modification time. IMPORTANT: Avoid overly broad patterns like '**/*' which can cause performance issues - always include a file extension or specific criteria. Use this tool when you need to find files by name patterns. When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the task tool instead.",
         "schema": {
             "type": "object",
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "The glob pattern to match files against",
+                    "description": "The glob pattern to match files against. Examples: '**/*.py' (all Python files), 'src/**/*.{js,ts}' (JS/TS files in src), '*.md' (Markdown files in current dir). Avoid overly broad patterns like '**/*' for performance.",
                 },
                 "path": {
                     "type": "string",

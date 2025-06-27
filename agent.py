@@ -1087,6 +1087,18 @@ async def handle_streaming_json_chat(
                         messages.append({"role": "assistant", "content": response})
 
     finally:
+        # Clean up HTTP clients to prevent "Event loop is closed" errors
+        try:
+            from cli_agent.utils.http_client import http_client_manager
+
+            await http_client_manager.cleanup_all()
+        except Exception as e:
+            # Don't fail cleanup if HTTP client cleanup fails
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(f"HTTP client cleanup failed: {e}")
+
         await host.shutdown()
 
 
@@ -1354,6 +1366,18 @@ async def handle_text_chat(
     finally:
         # Allow pending events to be processed before shutdown
         await asyncio.sleep(0.1)
+
+        # Clean up HTTP clients to prevent "Event loop is closed" errors
+        try:
+            from cli_agent.utils.http_client import http_client_manager
+
+            await http_client_manager.cleanup_all()
+        except Exception as e:
+            # Don't fail cleanup if HTTP client cleanup fails
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(f"HTTP client cleanup failed: {e}")
 
         # Clean up display manager
         if display_manager and hasattr(display_manager, "shutdown"):

@@ -197,17 +197,21 @@ class ResponseHandler:
                                         and "function" in tc
                                         and isinstance(tc["function"], dict)
                                         else (
-                                            tc.get("name", "unknown")
+                                            tc.get(
+                                                "name", f"<missing_name_dict_{id(tc)}>"
+                                            )
                                             if isinstance(tc, dict)
                                             else getattr(
                                                 tc,
                                                 "name",
                                                 (
                                                     getattr(
-                                                        tc.function, "name", "unknown"
+                                                        tc.function,
+                                                        "name",
+                                                        f"<missing_function_name_{id(tc)}>",
                                                     )
                                                     if hasattr(tc, "function")
-                                                    else "unknown"
+                                                    else f"<missing_name_obj_{id(tc)}>"
                                                 ),
                                             )
                                         )
@@ -266,14 +270,16 @@ class ResponseHandler:
                                 break
 
                         # Extract tool name with better error handling for both dict and object formats
-                        tool_name = "unknown"
+                        tool_name = f"<no_tool_name_in_response_{id(tool_call)}>"
 
                         # Handle dictionary format (most common)
                         if isinstance(tool_call, dict):
                             if "function" in tool_call and isinstance(
                                 tool_call["function"], dict
                             ):
-                                tool_name = tool_call["function"].get("name", "unknown")
+                                tool_name = tool_call["function"].get(
+                                    "name", f"<missing_function_name_{id(tool_call)}>"
+                                )
                             elif "name" in tool_call:
                                 tool_name = tool_call["name"]
                         # Handle object format (backup)
@@ -566,22 +572,28 @@ class ResponseHandler:
                                         tc["function"], dict
                                     ):
                                         tool_name = tc["function"].get(
-                                            "name", "unknown"
+                                            "name", f"<missing_name_tc_{id(tc)}>"
                                         )
                                         tool_args = tc["function"].get(
                                             "arguments", "{}"
                                         )
                                     else:
-                                        tool_name = tc.get("name", "unknown")
+                                        tool_name = tc.get(
+                                            "name", f"<missing_name_tc_dict_{id(tc)}>"
+                                        )
                                         tool_args = tc.get("arguments", "{}")
                                 else:
                                     tool_name = getattr(
                                         tc,
                                         "name",
                                         (
-                                            getattr(tc.function, "name", "unknown")
+                                            getattr(
+                                                tc.function,
+                                                "name",
+                                                f"<missing_function_attr_name_{id(tc)}>",
+                                            )
                                             if hasattr(tc, "function")
-                                            else "unknown"
+                                            else f"<missing_name_tc_obj_{id(tc)}>"
                                         ),
                                     )
                                     tool_args = getattr(

@@ -528,9 +528,41 @@ class BuiltinToolExecutor:
 
         return "\n".join(result_lines)
 
+    def _expand_braces(self, pattern: str) -> list:
+        """Expand brace patterns like {a,b,c} into multiple patterns."""
+        import re
+
+        # Find brace patterns
+        brace_pattern = r"\{([^}]*)\}"
+        match = re.search(brace_pattern, pattern)
+
+        if not match:
+            return [pattern]
+
+        # Extract the options from the braces
+        options_str = match.group(1)
+        if not options_str.strip():
+            # Empty braces - remove the braces entirely
+            expanded_pattern = pattern[: match.start()] + pattern[match.end() :]
+            return self._expand_braces(expanded_pattern)
+
+        options = options_str.split(",")
+        expanded_patterns = []
+
+        for option in options:
+            # Replace the brace pattern with each option
+            expanded_pattern = (
+                pattern[: match.start()] + option.strip() + pattern[match.end() :]
+            )
+            # Recursively expand if there are more braces
+            expanded_patterns.extend(self._expand_braces(expanded_pattern))
+
+        return expanded_patterns
+
     def glob(self, args: Dict[str, Any]) -> str:
         """Execute glob pattern matching and return matching file paths."""
         import glob as glob_module
+        import os.path
 
         pattern = args.get("pattern", "")
         path = args.get("path", None)
@@ -538,24 +570,64 @@ class BuiltinToolExecutor:
         if not pattern:
             return "Error: pattern parameter is required"
 
+        # Warn about potentially problematic patterns
+        if pattern == "**/*" or pattern == "**":
+            return "Error: Pattern '**/*' or '**' is too broad and may cause performance issues. Please use a more specific pattern like '**/*.py' or limit the search scope."
+
         try:
             # Change to the specified directory if provided
             original_cwd = os.getcwd()
-            search_path = pattern
 
             if path:
                 if not os.path.isdir(path):
                     return f"Error: Directory '{path}' does not exist"
                 os.chdir(path)
 
-            # Execute glob pattern matching
-            matches = glob_module.glob(pattern, recursive=True)
+            # Expand brace patterns into multiple glob patterns
+            expanded_patterns = self._expand_braces(pattern)
+            all_matches = set()  # Use set to avoid duplicates
 
-            # Restore original directory
+            # Limit the number of results to prevent overwhelming output
+            MAX_RESULTS = 10000
+
+            # Execute glob pattern matching for each expanded pattern
+            for expanded_pattern in expanded_patterns:
+                try:
+                    # Use a safer approach for recursive patterns
+                    if "**" in expanded_pattern:
+                        # For recursive patterns, implement our own walking with depth limit
+                        matches = self._safe_recursive_glob(
+                            expanded_pattern, max_depth=10
+                        )
+                    else:
+                        # For non-recursive patterns, use standard glob
+                        matches = glob_module.glob(expanded_pattern, recursive=False)
+
+                    all_matches.update(matches)
+
+                    # Stop if we have too many results
+                    if len(all_matches) > MAX_RESULTS:
+                        break
+
+                except (OSError, RecursionError) as e:
+                    # Skip patterns that cause issues
+                    continue
+
+            # Convert back to list and restore original directory
+            matches = list(all_matches)
             os.chdir(original_cwd)
 
             if not matches:
                 return f"No files found matching pattern: {pattern}"
+
+            # Limit results for display
+            if len(matches) > MAX_RESULTS:
+                matches = matches[:MAX_RESULTS]
+                truncated_msg = (
+                    f" (showing first {MAX_RESULTS} of {len(all_matches)} results)"
+                )
+            else:
+                truncated_msg = ""
 
             # Sort by modification time (newest first)
             try:
@@ -577,7 +649,7 @@ class BuiltinToolExecutor:
                 # If sorting fails, just return unsorted results
                 pass
 
-            return f"Found {len(matches)} files:\n" + "\n".join(matches)
+            return f"Found {len(matches)} files{truncated_msg}:\n" + "\n".join(matches)
 
         except Exception as e:
             # Restore original directory on error
@@ -586,6 +658,52 @@ class BuiltinToolExecutor:
             except:
                 pass
             return f"Error executing glob pattern: {str(e)}"
+
+    def _safe_recursive_glob(self, pattern: str, max_depth: int = 10) -> list:
+        """Safely perform recursive glob with depth limiting."""
+        import fnmatch
+
+        matches = []
+
+        # Split pattern into directory part and file part
+        if "**" in pattern:
+            parts = pattern.split("**")
+            if len(parts) == 2:
+                prefix = parts[0].rstrip("/")
+                suffix = parts[1].lstrip("/")
+
+                # Start from current directory if no prefix
+                start_dir = prefix if prefix else "."
+
+                # Walk directories with depth limit
+                try:
+                    for root, dirs, files in os.walk(start_dir, followlinks=False):
+                        # Calculate depth
+                        depth = root.replace(start_dir, "").count(os.sep)
+                        if depth >= max_depth:
+                            dirs[:] = []  # Don't recurse deeper
+                            continue
+
+                        # Match files in current directory
+                        for file in files:
+                            full_path = os.path.join(root, file)
+                            if suffix:
+                                if fnmatch.fnmatch(file, suffix):
+                                    matches.append(full_path)
+                            else:
+                                matches.append(full_path)
+
+                        # Also match directories if no suffix specified
+                        if not suffix:
+                            for dir_name in dirs:
+                                full_path = os.path.join(root, dir_name)
+                                matches.append(full_path)
+
+                except (OSError, PermissionError):
+                    # Skip directories we can't access
+                    pass
+
+        return matches
 
     def grep(self, args: Dict[str, Any]) -> str:
         """Execute grep pattern search and return matching file paths."""

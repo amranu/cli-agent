@@ -2,6 +2,7 @@
 
 import pytest
 
+from cli_agent.core.builtin_tool_executor import BuiltinToolExecutor
 from cli_agent.tools.builtin_tools import (
     get_all_builtin_tools,
     get_bash_execute_tool,
@@ -196,6 +197,48 @@ class TestBuiltinTools:
 
             # Description should not be empty
             assert len(tool_def["description"]) > 0
+
+
+class MockAgent:
+    """Mock agent for testing builtin tool executor."""
+
+    def __init__(self):
+        self.is_subagent = False
+        self.subagent_manager = None
+
+
+@pytest.mark.unit
+class TestBuiltinToolExecutor:
+    """Test builtin tool executor functionality."""
+
+    def test_brace_expansion(self):
+        """Test brace expansion functionality in glob patterns."""
+        agent = MockAgent()
+        executor = BuiltinToolExecutor(agent)
+
+        # Test simple brace expansion
+        expanded = executor._expand_braces("*.{py,md}")
+        assert expanded == ["*.py", "*.md"]
+
+        # Test complex brace expansion
+        expanded = executor._expand_braces("**/*.{js,ts,py}")
+        assert expanded == ["**/*.js", "**/*.ts", "**/*.py"]
+
+        # Test no braces (should return original)
+        expanded = executor._expand_braces("**/*.py")
+        assert expanded == ["**/*.py"]
+
+        # Test empty braces (edge case)
+        expanded = executor._expand_braces("*.{}")
+        assert expanded == ["*."]
+
+        # Test single option in braces
+        expanded = executor._expand_braces("*.{py}")
+        assert expanded == ["*.py"]
+
+        # Test nested path with braces
+        expanded = executor._expand_braces("src/**/*.{js,ts}")
+        assert expanded == ["src/**/*.js", "src/**/*.ts"]
 
     def test_tool_naming_convention(self):
         """Test tool naming conventions."""
