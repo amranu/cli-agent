@@ -151,6 +151,35 @@ class BaseProvider(ABC):
         """
         pass
 
+    async def process_streaming_response_with_callbacks(
+        self,
+        response: Any,
+        on_content: callable = None,
+        on_tool_call_start: callable = None,
+        on_tool_call_progress: callable = None,
+        on_reasoning: callable = None,
+    ) -> Tuple[str, List[Any], Dict[str, Any]]:
+        """Process streaming response with real-time callbacks.
+
+        Default implementation calls process_streaming_response.
+        Providers can override for real-time event emission.
+
+        Args:
+            response: Provider's streaming response object
+            on_content: Called when content chunk received: on_content(text_chunk)
+            on_tool_call_start: Called when tool call starts: on_tool_call_start(tool_name)
+            on_tool_call_progress: Called for tool call progress: on_tool_call_progress(tool_call_data)
+            on_reasoning: Called for reasoning content: on_reasoning(reasoning_chunk)
+
+        Returns:
+            Tuple of:
+            - accumulated_content: Full text content
+            - tool_calls: List of completed tool calls
+            - metadata: Provider-specific metadata
+        """
+        # Default implementation: just call the non-callback version
+        return await self.process_streaming_response(response)
+
     @abstractmethod
     def is_retryable_error(self, error: Exception) -> bool:
         """Check if error is retryable for this provider.

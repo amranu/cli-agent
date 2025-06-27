@@ -171,10 +171,162 @@ class MCPHost(BaseLLMProvider):
             and self.event_bus
             and hasattr(self, "event_emitter")
         ):
-            return await self._process_streaming_chunks_with_events(response)
+            return await self._process_streaming_response_with_provider_callbacks(
+                response
+            )
         else:
             # No event system - delegate to provider for basic processing
             return await self.provider.process_streaming_response(response)
+
+    async def _process_streaming_response_with_provider_callbacks(
+        self, response: Any
+    ) -> Tuple[str, List[Any], Dict[str, Any]]:
+        """Simplified event-driven streaming response processor.
+
+        Delegates to provider for format-specific parsing with callbacks for real-time events.
+        """
+        accumulated_content = ""
+        accumulated_reasoning_content = ""
+        content_emitted = False
+        original_content = ""
+
+        logger.debug("Starting event-driven streaming response processing")
+
+        async def on_content_chunk(text_chunk: str):
+            """Handle content chunks as they arrive."""
+            nonlocal accumulated_content, original_content
+            accumulated_content += text_chunk
+            original_content += text_chunk
+
+        async def on_tool_call_detected(tool_name: str):
+            """Handle tool call detection - emit buffered content immediately."""
+            nonlocal content_emitted, accumulated_content, accumulated_reasoning_content
+
+            if not content_emitted and accumulated_content:
+                # Emit accumulated content immediately when tool call is detected
+                content_to_emit = accumulated_content
+                if accumulated_reasoning_content:
+                    reasoning_with_tags = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
+                    content_to_emit = reasoning_with_tags + content_to_emit
+
+                await self.event_emitter.emit_text(
+                    content=content_to_emit, is_streaming=False, is_markdown=True
+                )
+                await self.event_emitter.emit_text(
+                    content="\n", is_streaming=False, is_markdown=False
+                )
+                content_emitted = True
+                # Clear accumulated content since it was already emitted
+                accumulated_content = ""
+                accumulated_reasoning_content = ""
+                logger.debug(
+                    f"Emitted accumulated content before tool call processing: {len(content_to_emit)} characters"
+                )
+
+            # Emit tool call discovered event
+            await self.event_emitter.emit_status(
+                f"Tool call detected: {tool_name}", level="info"
+            )
+
+        async def on_reasoning_chunk(reasoning_chunk: str):
+            """Handle reasoning content chunks."""
+            nonlocal accumulated_reasoning_content
+            accumulated_reasoning_content += reasoning_chunk
+
+        # Delegate to provider with callbacks for real-time event emission
+        try:
+            final_content, tool_calls, metadata = (
+                await self.provider.process_streaming_response_with_callbacks(
+                    response,
+                    on_content=on_content_chunk,
+                    on_tool_call_start=on_tool_call_detected,
+                    on_reasoning=on_reasoning_chunk,
+                )
+            )
+            logger.debug(
+                f"Provider callback processing complete. Final content: {len(final_content)} chars"
+            )
+        except Exception as e:
+            logger.error(f"Provider streaming with callbacks failed: {e}")
+            # Fallback to non-callback version
+            final_content, tool_calls, metadata = (
+                await self.provider.process_streaming_response(response)
+            )
+            logger.debug(
+                f"Provider fallback processing complete. Final content: {len(final_content)} chars"
+            )
+
+        # If we didn't accumulate content through callbacks, use the final content from provider
+        if not original_content and final_content:
+            original_content = final_content
+            accumulated_content = final_content
+
+        # Only emit content if it wasn't already emitted during tool call processing
+        if not content_emitted:
+            # Prepend reasoning content if present
+            content_to_emit = accumulated_content
+            if accumulated_reasoning_content:
+                reasoning_with_tags = (
+                    f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
+                )
+                content_to_emit = reasoning_with_tags + content_to_emit
+
+            if content_to_emit:
+                await self.event_emitter.emit_text(
+                    content=content_to_emit, is_streaming=False, is_markdown=True
+                )
+                await self.event_emitter.emit_text(
+                    content="\n", is_streaming=False, is_markdown=False
+                )
+            else:
+                logger.warning(
+                    "No accumulated content to emit, but streaming processing completed"
+                )
+
+        # Emit tool call events for any complete tool calls
+        for tool_call in tool_calls:
+            # Handle both dict and object formats
+            if hasattr(tool_call, "get"):
+                # Dictionary format
+                tool_id = tool_call.get("id")
+                function_data = tool_call.get("function", {})
+                tool_name = function_data.get("name") if function_data else None
+                arguments_str = (
+                    function_data.get("arguments", "{}") if function_data else "{}"
+                )
+            else:
+                # Object format (e.g., ToolCall object)
+                tool_id = getattr(tool_call, "id", None)
+                function_obj = getattr(tool_call, "function", None)
+                tool_name = (
+                    getattr(function_obj, "name", None) if function_obj else None
+                )
+                arguments_str = (
+                    getattr(function_obj, "arguments", "{}") if function_obj else "{}"
+                )
+
+            if tool_id and tool_name:
+                try:
+                    arguments = json.loads(arguments_str or "{}")
+                except json.JSONDecodeError:
+                    arguments = {"raw_arguments": arguments_str}
+
+                await self.event_emitter.emit_tool_call(
+                    tool_name=tool_name,
+                    tool_id=tool_id,
+                    arguments=arguments,
+                )
+
+        # Return original content for conversation history
+        result_content = original_content or final_content
+        if accumulated_reasoning_content and not content_emitted:
+            # Only add reasoning tags if content wasn't already emitted with them
+            result_content = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n{result_content}"
+
+        logger.debug(
+            f"Streaming processing complete. Content: {len(result_content)} chars, Tool calls: {len(tool_calls)}"
+        )
+        return result_content, tool_calls, metadata
 
     async def _process_streaming_chunks_with_events(
         self, response
