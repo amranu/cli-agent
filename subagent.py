@@ -206,11 +206,12 @@ class SubagentManager:
         logger.info(f"Starting to monitor subagent {subagent.task_id}")
         try:
             async for message in subagent.read_messages():
-                # Store result in subagent process for later retrieval
+                # ONLY store results that were explicitly emitted via emit_result (type="result")
+                # Do NOT automatically capture tool outputs as results
                 if message.type == "result":
                     subagent.result = message.content
                     logger.info(
-                        f"Stored result for {subagent.task_id}: {message.content[:100]}..."
+                        f"Stored EXPLICIT result for {subagent.task_id}: {message.content[:100]}..."
                     )
 
                 # Add to queue for polling fallback

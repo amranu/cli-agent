@@ -301,7 +301,6 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
         # NOTE: Don't override _execute_mcp_tool - let normal tool call handling work
         # host._execute_mcp_tool = emit_tool_execution
 
-        # Approach: Override tool execution engine to capture results
         try:
             # Conversation loop - continue until emit_result is called or max iterations reached
             max_iterations = 10  # Prevent infinite loops
@@ -335,50 +334,50 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
 
                 # Emit tool result immediately for real-time feedback
                 tool_name = tool_key.split(":")[-1]
-                emit_output_with_id(f"🔧 {tool_name}: {str(result).strip()}")
+                emit_output_with_id(f"🔧 {tool_name}: {str(result)}")
 
                 return result
 
             host.tool_execution_engine.execute_mcp_tool = track_emit_result_tool
 
+
             try:
-                # Use the main agent's response generation but in a loop for subagents
+                # Conversation loop for multi-step tasks
                 while iteration < max_iterations and not emit_result_called:
                     iteration += 1
                     emit_output_with_id(f"🔄 Conversation iteration {iteration}")
                     
-                    # Generate response using the same method as main agent
-                    # This handles tool execution automatically
-                    response = await host.generate_response(messages, stream=False)
+                    # Generate response using the main agent's system
+                    emit_output_with_id("🚀 Calling host.generate_response...")
                     
-                    # Check if the response handler updated the conversation
-                    updated_messages = None
-                    if hasattr(host, "response_handler"):
-                        updated_messages = host.response_handler.get_updated_messages()
+                    # Create normalized tools mapping for subagent use
+                    # This ensures both normalized and original tool names are available
+                    original_available_tools = host.available_tools
                     
-                    if updated_messages:
-                        # Use the updated conversation that includes tool results
-                        messages = updated_messages
-                        emit_output_with_id(f"📝 Conversation updated to {len(messages)} messages")
-                        
-                        # Check if the last assistant message had tool calls
-                        # If it did, continue the loop for potential follow-up
-                        last_assistant_msg = None
-                        for msg in reversed(messages):
-                            if msg.get("role") == "assistant":
-                                last_assistant_msg = msg
-                                break
-                        
-                        if last_assistant_msg and not last_assistant_msg.get("tool_calls"):
-                            emit_output_with_id("🔚 Last response had no tool calls - conversation complete")
-                            break
-                    else:
-                        # No tool execution occurred, add response and finish
-                        if isinstance(response, str) and response.strip():
-                            messages.append({"role": "assistant", "content": response})
-                            emit_output_with_id(f"📝 Added text response: {response[:100]}...")
-                        emit_output_with_id("🔚 No tool execution - conversation complete")
-                        break
+                    # Add normalized tool names to available_tools for subagent use
+                    normalized_tools = original_available_tools.copy()
+                    for tool_key, tool_info in original_available_tools.items():
+                        normalized_key = tool_key.replace(":", "_")
+                        if normalized_key != tool_key:
+                            normalized_tools[normalized_key] = tool_info.copy()
+                    
+                    host.available_tools = normalized_tools
+                    
+                    try:
+                        response = await host.generate_response(messages, stream=False)
+                    finally:
+                        # Restore original tools
+                        host.available_tools = original_available_tools
+                    
+                    emit_output_with_id("✅ host.generate_response completed")
+                    
+                    # Add the response to conversation 
+                    if isinstance(response, str) and response.strip():
+                        messages.append({"role": "assistant", "content": response})
+                        emit_output_with_id(f"📝 Added response: {response}")
+                    
+                    # If emit_result was called during this iteration, the loop will exit
+                    # Otherwise, continue to next iteration
                 
                 if iteration >= max_iterations:
                     emit_error_with_id(
@@ -388,7 +387,7 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                 elif not emit_result_called:
                     emit_error_with_id(
                         "Task completed without explicit result",
-                        "Subagent finished conversation without calling emit_result tool"
+                        "Subagent finished without calling emit_result tool"
                     )
 
             finally:
@@ -410,12 +409,7 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                 emit_status_with_id("cancelled", "Task cancelled due to tool denial")
                 return  # Terminate subagent cleanly
             emit_error_with_id(f"Task execution error: {str(e)}", str(e))
-            raise
-
-        # Fallback: If the main approach fails, this shouldn't be reached
-        emit_error_with_id(
-            "Unexpected: Reached fallback section", "Main execution path failed"
-        )
+            return  # Exit on error instead of raising
 
     except Exception as e:
         emit_error_with_id(f"Task failed: {str(e)}", str(e))

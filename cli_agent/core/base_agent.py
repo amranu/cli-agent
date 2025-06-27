@@ -875,12 +875,14 @@ class BaseMCPAgent(ABC):
             # Convert to OpenAI-style format for assistant message
             openai_tool_calls = []
             for call in normalized_calls:
+                # Normalize tool name for OpenAI API compatibility (replace colons with underscores)
+                normalized_name = call["name"].replace(":", "_")
                 openai_tool_calls.append(
                     {
                         "id": call["id"],
                         "type": "function",
                         "function": {
-                            "name": call["name"],
+                            "name": normalized_name,
                             "arguments": (
                                 call["arguments"]
                                 if isinstance(call["arguments"], str)
@@ -896,11 +898,13 @@ class BaseMCPAgent(ABC):
 
         # Add tool result messages
         for call, result in zip(normalized_calls, tool_results):
+            # Normalize tool name for OpenAI API compatibility (replace colons with underscores)
+            normalized_name = call["name"].replace(":", "_")
             updated_messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": call["id"],
-                    "name": call["name"],
+                    "name": normalized_name,
                     "content": result,
                 }
             )
@@ -1821,11 +1825,22 @@ class BaseMCPAgent(ABC):
         # Convert tool calls to proper OpenAI API format for conversation history
         api_formatted_tool_calls = []
         for tc in tool_calls:
+            # Extract tool name from the correct location based on structure
+            if "function" in tc and isinstance(tc["function"], dict):
+                # Standard OpenAI format: tc["function"]["name"]
+                original_name = tc["function"].get("name", f"<missing_function_name_{id(tc)}>")
+            else:
+                # Fallback for other formats: tc["name"]
+                original_name = tc.get("name", f"<missing_tc_name_{id(tc)}>")
+            
+            # Normalize tool name for OpenAI API compatibility (replace colons with underscores)
+            normalized_name = original_name.replace(":", "_")
+            
             formatted_tc = {
                 "id": tc.get("id", f"call_{len(api_formatted_tool_calls)}"),
                 "type": "function",
                 "function": {
-                    "name": tc.get("name", f"<missing_tc_name_{id(tc)}>"),
+                    "name": normalized_name,
                     "arguments": (
                         tc.get("arguments")
                         if isinstance(tc.get("arguments"), str)

@@ -496,11 +496,12 @@ class BuiltinToolExecutor:
 
         for task_id, subagent in self.agent.subagent_manager.subagents.items():
             if subagent.completed or include_running:
+                # Only include results that were explicitly provided via emit_result
                 result_info = {
                     "task_id": task_id,
                     "description": subagent.description,
                     "status": "completed" if subagent.completed else "running",
-                    "result": subagent.result if subagent.result else "No result yet",
+                    "result": subagent.result if subagent.result else "No explicit result provided - subagent must call emit_result",
                 }
                 results.append(result_info)
 

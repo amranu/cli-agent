@@ -27,33 +27,42 @@ class ToolExecutionEngine:
                 return "builtin:emit_result"
 
             if tool_key not in self.agent.available_tools:
-                # Try multiple reverse normalization strategies
-                candidate_keys = []
-
-                # Strategy 1: Add builtin: prefix if it doesn't exist
-                if not tool_key.startswith("builtin:") and not tool_key.startswith(
-                    "mcp:"
-                ):
-                    candidate_keys.append(f"builtin:{tool_key}")
-
-                # Strategy 2: Replace first underscore with colon (for MCP tools like "ai-models_deepseek_chat")
-                if "_" in tool_key:
-                    candidate_keys.append(tool_key.replace("_", ":", 1))
-
-                # Strategy 3: Replace all underscores with colons
-                if "_" in tool_key:
-                    candidate_keys.append(tool_key.replace("_", ":"))
-
-                # Try each candidate
-                found_key = None
-                for candidate in candidate_keys:
-                    if candidate in self.agent.available_tools:
-                        found_key = candidate
-                        break
-
-                if found_key:
-                    tool_key = found_key
+                # For subagents with normalized tool names, don't try to convert back to colon format
+                # This prevents the OpenAI tool name format error
+                if self.agent.is_subagent and "_" in tool_key and ":" not in tool_key:
+                    # This is likely a normalized tool name from OpenAI format conversion
+                    # Keep it as-is since the subagent should have both formats available
+                    pass
                 else:
+                    # Try multiple reverse normalization strategies for non-subagent contexts
+                    candidate_keys = []
+
+                    # Strategy 1: Add builtin: prefix if it doesn't exist
+                    if not tool_key.startswith("builtin:") and not tool_key.startswith(
+                        "mcp:"
+                    ):
+                        candidate_keys.append(f"builtin:{tool_key}")
+
+                    # Strategy 2: Replace first underscore with colon (for MCP tools like "ai-models_deepseek_chat")
+                    if "_" in tool_key:
+                        candidate_keys.append(tool_key.replace("_", ":", 1))
+
+                    # Strategy 3: Replace all underscores with colons
+                    if "_" in tool_key:
+                        candidate_keys.append(tool_key.replace("_", ":"))
+
+                    # Try each candidate
+                    found_key = None
+                    for candidate in candidate_keys:
+                        if candidate in self.agent.available_tools:
+                            found_key = candidate
+                            break
+
+                    if found_key:
+                        tool_key = found_key
+                        
+                # Final check if tool still not found
+                if tool_key not in self.agent.available_tools:
                     # Debug: show available tools when tool not found
                     available_list = list(self.agent.available_tools.keys())[
                         :10

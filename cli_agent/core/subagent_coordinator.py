@@ -242,13 +242,15 @@ class SubagentCoordinator:
             await asyncio.sleep(0.5)
 
         # Collect results from completed subagents
+        # ONLY collect results that were explicitly provided via emit_result
         logger.info(
-            f"Checking {len(self.agent.subagent_manager.subagents)} subagents for results"
+            f"Checking {len(self.agent.subagent_manager.subagents)} subagents for explicit results"
         )
         for task_id, subagent in self.agent.subagent_manager.subagents.items():
             logger.info(
-                f"Subagent {task_id}: completed={subagent.completed}, has_result={subagent.result is not None}"
+                f"Subagent {task_id}: completed={subagent.completed}, has_explicit_result={subagent.result is not None}"
             )
+            # Only collect results that were explicitly set via emit_result (type="result" messages)
             if subagent.result:
                 results.append(
                     {
@@ -258,7 +260,7 @@ class SubagentCoordinator:
                     }
                 )
                 logger.info(
-                    f"Collected result from {task_id}: {subagent.result[:100]}..."
+                    f"Collected explicit result from {task_id}: {subagent.result[:100]}..."
                 )
 
         # Clear processed subagent messages from the queue
@@ -400,5 +402,5 @@ Please continue with your task.""",
                 "subagent_count": len(subagent_results),
             }
         else:
-            logger.warning("No results collected from subagents")
+            logger.warning("No explicit results collected from subagents - they must call emit_result")
             return None

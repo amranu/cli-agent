@@ -539,8 +539,8 @@ class ResponseHandler:
                         # Emit warning event for no subagent results
                         if hasattr(self.agent, "event_bus") and self.agent.event_bus:
                             await self.agent.event_emitter.emit_status(
-                                status="No results collected from subagents",
-                                details="Subagents completed without providing results",
+                                status="No explicit results collected from subagents",
+                                details="Subagents completed without calling emit_result tool",
                                 level="warning",
                             )
                         # Subagent no-results status handled by event system
