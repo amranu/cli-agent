@@ -875,14 +875,14 @@ class BuiltinToolExecutor:
             return "Error: result parameter is required"
 
         # Import here to avoid circular imports
-        from subagent import emit_result
+        from cli_agent.subagents.subagent import emit_result
 
         # Emit the result through the subagent communication system
         emit_result(result)
 
         # If summary is provided, also emit it
         if summary:
-            from subagent import emit_message
+            from cli_agent.subagents.subagent import emit_message
 
             emit_message("result", f"Summary: {summary}")
 

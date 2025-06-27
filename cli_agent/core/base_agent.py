@@ -69,7 +69,7 @@ class BaseMCPAgent(ABC):
                 )
                 if project_root not in sys.path:
                     sys.path.insert(0, project_root)
-                from subagent import SubagentManager
+                from cli_agent.subagents.subagent import SubagentManager
 
                 self.subagent_manager = SubagentManager(config)
 
@@ -282,7 +282,7 @@ class BaseMCPAgent(ABC):
 
         try:
             # Import emit functions
-            from subagent import emit_result
+            from cli_agent.subagents.subagent import emit_result
 
             # Emit the final result
             if summary:

@@ -1,3 +1,5 @@
 """Subagent management and communication components."""
 
-__all__ = []
+from .subagent import SubagentManager, emit_result, emit_message
+
+__all__ = ["SubagentManager", "emit_result", "emit_message"]
