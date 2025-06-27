@@ -403,6 +403,86 @@ class BuiltinToolExecutor:
         except Exception as e:
             return f"Error: {str(e)}"
 
+    def websearch(self, args: Dict[str, Any]) -> str:
+        """Search the web using DuckDuckGo."""
+        query = args.get("query", "")
+        allowed_domains = args.get("allowed_domains", [])
+        blocked_domains = args.get("blocked_domains", [])
+
+        if not query:
+            return "Error: No search query provided"
+
+        try:
+            # Use DuckDuckGo search via their instant answer API
+            search_url = "https://api.duckduckgo.com/"
+            params = {
+                "q": query,
+                "format": "json",
+                "no_html": "1",
+                "skip_disambig": "1"
+            }
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            
+            response = requests.get(search_url, params=params, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            results = []
+            
+            # Add instant answer if available
+            if data.get("Abstract"):
+                results.append(f"**Summary**: {data['Abstract']}")
+                if data.get("AbstractURL"):
+                    results.append(f"**Source**: {data['AbstractURL']}")
+            
+            # Add definition if available
+            if data.get("Definition"):
+                results.append(f"**Definition**: {data['Definition']}")
+                if data.get("DefinitionURL"):
+                    results.append(f"**Source**: {data['DefinitionURL']}")
+            
+            # Add related topics
+            if data.get("RelatedTopics"):
+                results.append("\n**Related Topics**:")
+                for i, topic in enumerate(data["RelatedTopics"][:5]):  # Limit to 5
+                    if isinstance(topic, dict) and topic.get("Text"):
+                        text = topic["Text"]
+                        url = topic.get("FirstURL", "")
+                        
+                        # Apply domain filtering
+                        if allowed_domains:
+                            if not any(domain in url for domain in allowed_domains):
+                                continue
+                        if blocked_domains:
+                            if any(domain in url for domain in blocked_domains):
+                                continue
+                        
+                        results.append(f"{i+1}. {text}")
+                        if url:
+                            results.append(f"   URL: {url}")
+            
+            # Add answer if available
+            if data.get("Answer"):
+                results.append(f"\n**Answer**: {data['Answer']}")
+                if data.get("AnswerType"):
+                    results.append(f"**Type**: {data['AnswerType']}")
+            
+            if not results:
+                # Fallback: try to get some basic info
+                results.append(f"Search completed for: '{query}'")
+                results.append("No specific instant answers found. This may be a topic that requires browsing current web results.")
+                results.append("Consider using the webfetch tool with specific URLs for more detailed information.")
+            
+            return f"Web search results for '{query}':\n\n" + "\n".join(results)
+            
+        except requests.exceptions.RequestException as e:
+            return f"Error performing web search: {str(e)}"
+        except Exception as e:
+            return f"Error: {str(e)}"
+
     async def task(self, args: Dict[str, Any]) -> str:
         """Spawn a subagent task."""
         description = args.get("description", "")

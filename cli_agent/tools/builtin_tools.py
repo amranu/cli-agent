@@ -402,6 +402,37 @@ def get_grep_tool() -> Dict[str, Any]:
     }
 
 
+def get_websearch_tool() -> Dict[str, Any]:
+    """Return the websearch tool definition."""
+    return {
+        "server": "builtin",
+        "name": "websearch",
+        "description": "Search the web for current information using search engines. Returns search result information formatted as search result blocks. Use this tool for accessing information beyond training data cutoff, current events, recent news, or up-to-date information. Provides web search capabilities with domain filtering support.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query to use",
+                    "minLength": 2,
+                },
+                "allowed_domains": {
+                    "type": "array",
+                    "description": "Only include search results from these domains",
+                    "items": {"type": "string"},
+                },
+                "blocked_domains": {
+                    "type": "array", 
+                    "description": "Never include search results from these domains",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["query"],
+        },
+        "client": None,
+    }
+
+
 def get_all_builtin_tools() -> Dict[str, Dict[str, Any]]:
     """
     Return a dictionary of all built-in tools with their full qualified names as keys.
@@ -420,6 +451,7 @@ def get_all_builtin_tools() -> Dict[str, Dict[str, Any]]:
         "builtin:replace_in_file": get_replace_in_file_tool(),
         "builtin:multiedit": get_multiedit_tool(),
         "builtin:webfetch": get_web_fetch_tool(),
+        "builtin:websearch": get_websearch_tool(),
         "builtin:glob": get_glob_tool(),
         "builtin:grep": get_grep_tool(),
         "builtin:task": get_task_tool(),
@@ -465,6 +497,7 @@ BUILTIN_TOOL_NAMES = [
     "replace_in_file",
     "multiedit",
     "webfetch",
+    "websearch",
     "glob",
     "grep",
     "task",

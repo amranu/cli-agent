@@ -197,7 +197,7 @@ def create_model_server() -> FastMCP:
         f"Exposing models from {len(available_models)} providers: {', '.join(f'{p} ({c})' for p, c in provider_counts.items())}"
     )
 
-    # Create a single consolidated chat tool instead of individual model tools
+    # Create conversation manager
     conversation_manager = ConversationManager()
 
     # Get all available models for the parameter enum
@@ -207,9 +207,13 @@ def create_model_server() -> FastMCP:
         for model in models:
             all_models.append(f"{actual_provider}:{model}")
 
-    @app.tool()
+    # Create the docstring with available models
+    available_models_str = ', '.join(all_models)
+    
+    @app.tool(description=f"Start or continue a chat with any available AI model. Available models: {available_models_str}")
     async def start_chat(
         model: str,
+        message: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         conversation_id: Optional[str] = None,
         new_conversation: bool = False,
@@ -219,11 +223,14 @@ def create_model_server() -> FastMCP:
         max_tokens: Optional[int] = None,
         stream: bool = False,
     ) -> Dict[str, Any]:
-        """Start or continue a chat with any available AI model.
+        f"""Start or continue a chat with any available AI model.
+
+        Available models: {available_models_str}
 
         Args:
             model: Model to use in format 'provider:model' (e.g., 'anthropic:claude-3.5-sonnet')
-            messages: List of conversation messages
+            message: Simple string message to send (will be converted to user message)
+            messages: List of conversation messages (alternative to message parameter)
             conversation_id: ID for persistent conversation (auto-generated if not provided)
             new_conversation: Start a new conversation (ignores existing conversation_id)
             clear_conversation: Clear the specified conversation
@@ -257,7 +264,7 @@ def create_model_server() -> FastMCP:
 
             # Handle conversation management
             if clear_conversation and conversation_id:
-                conversation_manager.clear_conversation(conversation_key)
+                conversation_manager.clear_conversation(conversation_id)
                 return {
                     "message": f"Cleared conversation {conversation_id} for {model}"
                 }
@@ -268,22 +275,23 @@ def create_model_server() -> FastMCP:
                 )
 
             # Get or create conversation
-            conversation = conversation_manager.get_conversation(
-                conversation_key, conversation_id
-            )
+            conversation = conversation_manager.get_conversation(conversation_id)
             if not conversation:
                 conversation_id = conversation_manager.create_conversation(
                     conversation_key, conversation_id
                 )
-                conversation = conversation_manager.get_conversation(
-                    conversation_key, conversation_id
-                )
+                conversation = conversation_manager.get_conversation(conversation_id)
 
+            # Handle message input - prioritize simple message over messages list
+            if message and not messages:
+                # Convert simple string message to user message
+                messages = [{"role": "user", "content": message}]
+            
             # Add new messages to conversation
             if messages:
                 for msg in messages:
                     conversation_manager.add_message(
-                        conversation_key, conversation_id, msg
+                        conversation_id, msg["role"], msg["content"]
                     )
 
             # Get current conversation messages
@@ -304,9 +312,7 @@ def create_model_server() -> FastMCP:
 
             # Add response to conversation
             conversation_manager.add_message(
-                conversation_key,
-                conversation_id,
-                {"role": "assistant", "content": response_content},
+                conversation_id, "assistant", response_content
             )
 
             return {

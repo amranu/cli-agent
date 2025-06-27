@@ -328,6 +328,7 @@ class TestBuiltinToolExecutor:
                 "check",
                 "replace",
                 "retrieve",
+                "search",
             ]
             assert any(
                 word in description.lower() for word in action_words
