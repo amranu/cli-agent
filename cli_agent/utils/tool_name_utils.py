@@ -33,6 +33,11 @@ class ToolNameUtils:
         # Strategy 3: Replace all underscores with colons
         if "_" in tool_key:
             candidates.append(tool_key.replace("_", ":"))
+            
+        # Strategy 4: Handle partial tool names for common built-ins
+        # This prevents LLMs from calling partial tool names like "result" instead of "emit_result"
+        if tool_key == "result":
+            candidates.extend(["builtin:emit_result", "emit_result", "builtin_emit_result"])
 
         return candidates
 

@@ -566,16 +566,33 @@ Then restart the agent.
         else:
             raise ValueError(f"Unknown provider: {pm_config.provider_name}")
 
-        # Create model instance based on model name
+        # Create model instance based on provider first, then model name
         model_name = pm_config.model_name.lower()
-        if "claude" in model_name:
-            # For Claude, use the actual model name as variant for dynamic model support
-            model = ClaudeModel(variant=pm_config.model_name)
-        elif "gpt" in model_name or "o1" in model_name:
-            # For GPT, use the full model name as variant to support dynamic models
+        
+        # Provider-specific logic for standardized APIs
+        if pm_config.provider_name == "openrouter":
+            # OpenRouter standardizes everything to OpenAI format regardless of underlying model
+            # Use GPTModel for all OpenRouter models (claude, gpt, gemini, llama, qwen, etc.)
             model = GPTModel(variant=pm_config.model_name)
-        elif "gemini" in model_name:
-            # For Gemini, extract variant
+        elif pm_config.provider_name == "ollama":
+            # Ollama standardizes everything to OpenAI format through its API
+            # Detect underlying model family only for special content parsing (reasoning, etc.)
+            if "deepseek" in model_name:
+                # DeepSeek models need reasoning content parsing but use OpenAI format for tools
+                if "reasoner" in model_name:
+                    model = DeepSeekModel(variant="deepseek-reasoner")
+                else:
+                    model = DeepSeekModel(variant="deepseek-chat")
+            else:
+                # All other Ollama models use OpenAI format (llama, qwen, claude, gemini, etc.)
+                # Ollama's OpenAI-compatible API standardizes tool calling to OpenAI format
+                model = GPTModel(variant=pm_config.model_name)
+        # Direct provider cases - use native formats
+        elif pm_config.provider_name == "anthropic":
+            # Direct Anthropic API - use Anthropic format
+            model = ClaudeModel(variant=pm_config.model_name)
+        elif pm_config.provider_name == "google":
+            # Direct Google API - use Gemini format
             if "2.5-flash" in model_name:
                 model = GeminiModel(variant="gemini-2.5-flash")
             elif "1.5-pro" in model_name:
@@ -584,18 +601,28 @@ Then restart the agent.
                 model = GeminiModel(variant="gemini-1.5-flash")
             else:
                 model = GeminiModel(variant="gemini-2.5-flash")  # Default
-        elif "deepseek" in model_name:
-            # For DeepSeek, extract variant
+        elif pm_config.provider_name == "deepseek":
+            # Direct DeepSeek API - use DeepSeek format
             if "reasoner" in model_name:
                 model = DeepSeekModel(variant="deepseek-reasoner")
             else:
-                model = DeepSeekModel(variant="deepseek-chat")  # Default
-        elif pm_config.provider_name == "ollama":
-            # For Ollama models, use GPT model as they typically use OpenAI-compatible format
+                model = DeepSeekModel(variant="deepseek-chat")
+        elif pm_config.provider_name == "openai":
+            # Direct OpenAI API - use OpenAI format
             model = GPTModel(variant=pm_config.model_name)
         else:
-            # Fallback to Claude model for unknown models
-            model = ClaudeModel(variant="claude-3.5-sonnet")
+            # Fallback for unknown providers - try to detect by model name
+            if "claude" in model_name:
+                model = ClaudeModel(variant=pm_config.model_name)
+            elif "gpt" in model_name or "o1" in model_name:
+                model = GPTModel(variant=pm_config.model_name)
+            elif "gemini" in model_name:
+                model = GeminiModel(variant="gemini-2.5-flash")
+            elif "deepseek" in model_name:
+                model = DeepSeekModel(variant="deepseek-chat")
+            else:
+                # Final fallback
+                model = GPTModel(variant=pm_config.model_name)
 
         # Override temperature and max_tokens after creation
         model.temperature = pm_config.provider_config.temperature

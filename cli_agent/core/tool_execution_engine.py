@@ -23,10 +23,14 @@ class ToolExecutionEngine:
         import sys
 
         try:
+            # Debug logging for tool calls
+            logger.debug(f"Tool call: {tool_key} with args: {arguments}")
+            
             # Handle special case for emit:result calls from subagents
             if tool_key == "emit:result" and self.agent.is_subagent:
-                # Return the proper builtin tool name for subagents to use
-                return "builtin:emit_result"
+                # Redirect to the proper emit_result tool
+                tool_key = "builtin:emit_result"
+                logger.debug(f"Redirected emit:result to {tool_key}")
 
             if tool_key not in self.agent.available_tools:
                 # For subagents with normalized tool names, don't try to convert back to colon format
@@ -41,6 +45,7 @@ class ToolExecutionEngine:
                         tool_key, self.agent.available_tools
                     )
                     if resolved_key:
+                        logger.debug(f"Resolved tool '{tool_key}' to '{resolved_key}'")
                         tool_key = resolved_key
 
                 # Final check if tool still not found
