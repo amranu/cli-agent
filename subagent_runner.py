@@ -242,14 +242,16 @@ async def run_subagent_task(task_file_path: str):
         # Add explicit tool usage instructions for subagents
         enhanced_prompt = f"""{prompt}
 
-CRITICAL INSTRUCTIONS:
-- You are a subagent focused on executing tasks.
-- You MUST use the available tools to complete your task.
-- You can provide reasoning and explanations as you work.
-- When the task is complete, you MUST use the 'emit_result' tool to provide a summary of your results.
-- The emit_result tool takes two parameters: 'result' (required - the main findings/output) and 'summary' (optional - brief description of what was accomplished).
-- Always call emit_result as your final action to terminate the subagent and return results to the main agent.
-- The subagent will continue running until you call emit_result.
+CRITICAL INSTRUCTIONS FOR SUBAGENT:
+- You are a subagent that MUST use tools to complete tasks.
+- Start immediately by using the appropriate tools (like bash_execute, read_file, etc.).
+- DO NOT provide explanations or analysis without first executing the requested tools.
+- Execute tools step by step to gather the required information.
+- After ALL tool execution is complete, analyze the results and call emit_result.
+- The emit_result tool takes 'result' (required - your findings) and 'summary' (optional - brief description).
+- IMPORTANT: You MUST call emit_result as your final action to complete the task.
+- The conversation will continue until you call emit_result.
+- Begin with tool usage immediately - no preliminary explanations needed.
 """
 
         messages = [{"role": "user", "content": enhanced_prompt}]
@@ -301,13 +303,16 @@ CRITICAL INSTRUCTIONS:
 
         # Approach: Override tool execution engine to capture results
         try:
-            # Capture tool execution results
-            captured_tool_results = []
-
-            # Override the tool execution engine's execute_mcp_tool method directly
+            # Conversation loop - continue until emit_result is called or max iterations reached
+            max_iterations = 10  # Prevent infinite loops
+            iteration = 0
+            emit_result_called = False
+            
+            # Track if emit_result was called
             original_execute_mcp_tool = host.tool_execution_engine.execute_mcp_tool
 
-            async def capture_tool_execution(tool_key, arguments):
+            async def track_emit_result_tool(tool_key, arguments):
+                nonlocal emit_result_called
                 result = await original_execute_mcp_tool(tool_key, arguments)
 
                 # Check if tool was denied by user
@@ -321,10 +326,12 @@ CRITICAL INSTRUCTIONS:
                     )
                     # Exit the subagent cleanly
                     import sys
-
                     sys.exit(0)
 
-                captured_tool_results.append({"tool": tool_key, "result": result})
+                # Check if emit_result was called
+                if tool_key == "builtin:emit_result":
+                    emit_result_called = True
+                    emit_output_with_id("✅ Task completed - emit_result called")
 
                 # Emit tool result immediately for real-time feedback
                 tool_name = tool_key.split(":")[-1]
@@ -332,53 +339,61 @@ CRITICAL INSTRUCTIONS:
 
                 return result
 
-            host.tool_execution_engine.execute_mcp_tool = capture_tool_execution
+            host.tool_execution_engine.execute_mcp_tool = track_emit_result_tool
 
             try:
-                # Generate response with tool capture
-                response = await host.generate_response(messages, stream=False)
-
-                # Build result from captured tool outputs
-                if captured_tool_results:
-                    result_parts = []
-                    for tool_result in captured_tool_results:
-                        tool_name = tool_result["tool"].split(":")[
-                            -1
-                        ]  # Get tool name without prefix
-                        result_content = str(tool_result["result"]).strip()
-
-                        # For bash commands, extract just the output
-                        if tool_name == "bash_execute" and result_content:
-                            # Look for actual command output
-                            lines = result_content.split("\n")
-                            for line in lines:
-                                if line.strip() and not line.startswith(
-                                    ("Executing", "Command completed", "Exit code")
-                                ):
-                                    result_parts.append(line.strip())
-                        else:
-                            result_parts.append(result_content)
-
-                    if result_parts:
-                        result_text = "\n".join(result_parts)
+                # Use the main agent's response generation but in a loop for subagents
+                while iteration < max_iterations and not emit_result_called:
+                    iteration += 1
+                    emit_output_with_id(f"🔄 Conversation iteration {iteration}")
+                    
+                    # Generate response using the same method as main agent
+                    # This handles tool execution automatically
+                    response = await host.generate_response(messages, stream=False)
+                    
+                    # Check if the response handler updated the conversation
+                    updated_messages = None
+                    if hasattr(host, "response_handler"):
+                        updated_messages = host.response_handler.get_updated_messages()
+                    
+                    if updated_messages:
+                        # Use the updated conversation that includes tool results
+                        messages = updated_messages
+                        emit_output_with_id(f"📝 Conversation updated to {len(messages)} messages")
+                        
+                        # Check if the last assistant message had tool calls
+                        # If it did, continue the loop for potential follow-up
+                        last_assistant_msg = None
+                        for msg in reversed(messages):
+                            if msg.get("role") == "assistant":
+                                last_assistant_msg = msg
+                                break
+                        
+                        if last_assistant_msg and not last_assistant_msg.get("tool_calls"):
+                            emit_output_with_id("🔚 Last response had no tool calls - conversation complete")
+                            break
                     else:
-                        result_text = f"Task '{description}' executed successfully"
-                else:
-                    result_text = (
-                        str(response).strip()
-                        if response
-                        else f"Task '{description}' completed successfully"
+                        # No tool execution occurred, add response and finish
+                        if isinstance(response, str) and response.strip():
+                            messages.append({"role": "assistant", "content": response})
+                            emit_output_with_id(f"📝 Added text response: {response[:100]}...")
+                        emit_output_with_id("🔚 No tool execution - conversation complete")
+                        break
+                
+                if iteration >= max_iterations:
+                    emit_error_with_id(
+                        "Max conversation iterations reached",
+                        f"Subagent reached {max_iterations} iterations without calling emit_result"
+                    )
+                elif not emit_result_called:
+                    emit_error_with_id(
+                        "Task completed without explicit result",
+                        "Subagent finished conversation without calling emit_result tool"
                     )
 
             finally:
                 # Restore original method
                 host.tool_execution_engine.execute_mcp_tool = original_execute_mcp_tool
-
-            # Use emit_result to return the captured output
-            from subagent import emit_result
-
-            emit_result(result_text)
-            return  # Exit successfully
 
         except SystemExit:
             # This is expected when emit_result calls sys.exit(0)
