@@ -176,6 +176,9 @@ OPENROUTER_TEMPERATURE=0.7                     # optional, defaults to 0.7
 # Provider-Model Selection (new format)
 DEFAULT_PROVIDER_MODEL=anthropic:claude-3.5-sonnet  # defaults to deepseek:deepseek-chat
 
+# Subagent Configuration
+SUBAGENT_PERMISSIONS_BYPASS=false             # bypass permission checks for subagents, defaults to false
+
 # Host Configuration (optional)
 HOST_NAME=mcp-agent                            # defaults to 'mcp-agent'
 LOG_LEVEL=INFO                                 # defaults to INFO
@@ -366,6 +369,7 @@ Please read our [CONTRIBUTING.md](CONTRIBUTING.md) file for more details on our 
 -   **MCP Servers**: Local configurations with session-based tool permissions
 -   **Tool Execution**: Built-in permission system for sensitive operations
 -   **Subagent Isolation**: Subagents run in controlled environments with specific tool access
+-   **Subagent Permissions**: Can be configured to bypass permission checks for automated workflows via `SUBAGENT_PERMISSIONS_BYPASS=true`
 
 ## 📄 License
 

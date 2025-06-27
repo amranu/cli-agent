@@ -212,6 +212,11 @@ class HostConfig(BaseSettings):
     # Background subagent configuration
     background_subagents: bool = Field(default=False, alias="BACKGROUND_SUBAGENTS")
 
+    # Subagent permissions bypass
+    subagent_permissions_bypass: bool = Field(
+        default=False, alias="SUBAGENT_PERMISSIONS_BYPASS"
+    )
+
     # MCP Server settings
     mcp_server_enabled: bool = Field(default=False, alias="MCP_SERVER_ENABLED")
     mcp_server_port: int = Field(default=3000, alias="MCP_SERVER_PORT")

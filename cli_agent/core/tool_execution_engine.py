@@ -125,9 +125,22 @@ class ToolExecutionEngine:
                     logger.warning(f"Failed to display multiedit diff preview: {e}")
 
             # Check tool permissions (both main agent and subagents)
+            # Skip permission checks for subagents if bypass is enabled
+            bypass_subagent_permissions = (
+                self.agent.is_subagent
+                and hasattr(self.agent, "config")
+                and getattr(self.agent.config, "subagent_permissions_bypass", False)
+            )
+
+            if bypass_subagent_permissions:
+                logger.info(
+                    f"Bypassing permission check for subagent tool: {tool_name} (SUBAGENT_PERMISSIONS_BYPASS=true)"
+                )
+
             if (
                 hasattr(self.agent, "permission_manager")
                 and self.agent.permission_manager
+                and not bypass_subagent_permissions
             ):
                 from cli_agent.core.tool_permissions import (
                     ToolDeniedReturnToPrompt,
