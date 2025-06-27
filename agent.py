@@ -65,6 +65,49 @@ def _get_global_session_manager():
     return _global_session_manager
 
 
+def _display_chat_history(messages, max_messages=5):
+    """Display recent chat history when continuing a session."""
+    if not messages:
+        return
+
+    click.echo("\n" + "=" * 60)
+    click.echo("📜 Recent Chat History")
+    click.echo("=" * 60)
+
+    # Show last few messages
+    recent_messages = (
+        messages[-max_messages:] if len(messages) > max_messages else messages
+    )
+
+    if len(messages) > max_messages:
+        click.echo(f"... (showing last {max_messages} of {len(messages)} messages)")
+        click.echo()
+
+    for i, msg in enumerate(recent_messages):
+        role = msg.get("role", "unknown")
+        content = msg.get("content", "")
+
+        if role == "user":
+            click.echo(f"👤 User:")
+            # Truncate very long messages
+            if len(content) > 200:
+                content = content[:200] + "..."
+            click.echo(f"   {content}")
+        elif role == "assistant":
+            click.echo(f"🤖 Assistant:")
+            # Truncate very long messages
+            if len(content) > 300:
+                content = content[:300] + "..."
+            click.echo(f"   {content}")
+
+        # Add spacing between messages
+        if i < len(recent_messages) - 1:
+            click.echo()
+
+    click.echo("=" * 60)
+    click.echo("Continuing conversation...\n")
+
+
 # Suppress noisy third-party library logging
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -328,6 +371,8 @@ async def chat(
                 click.echo(f"Continuing session: {session_id[:8]}...")
                 messages = session_manager.get_messages()
                 click.echo(f"Restored {len(messages)} messages")
+                # Display recent chat history for context
+                _display_chat_history(messages)
             else:
                 click.echo("No previous session found, starting new conversation")
                 session_id = session_manager.create_new_session()
@@ -338,6 +383,8 @@ async def chat(
                 click.echo(f"Resumed session: {session_id[:8]}...")
                 messages = session_manager.get_messages()
                 click.echo(f"Restored {len(messages)} messages")
+                # Display recent chat history for context
+                _display_chat_history(messages)
             else:
                 click.echo(
                     f"Session {resume_session_id} not found, starting new conversation"
@@ -1276,10 +1323,10 @@ async def handle_text_chat(
 
             # Save session after each interaction
             if messages:
-                existing_messages = session_manager.get_messages()
-                for msg in messages:
-                    if msg not in existing_messages:
-                        session_manager.add_message(msg)
+                # Replace all messages in session (simple and reliable)
+                session_manager.current_messages = messages
+                session_manager._save_current_session()
+                logger.debug(f"Saved session to disk with {len(messages)} total messages")
 
             # Check if we need to reload the host
             if isinstance(chat_result, dict) and "reload_host" in chat_result:
