@@ -222,9 +222,23 @@ class InterruptibleInput:
                                 if tool_name.startswith(current_tool):
                                     yield Completion(tool_name, start_position=-len(current_tool))
                     
+                    # Handle /models command with provider completion
+                    elif command == "/models":
+                        providers = ["anthropic", "openai", "deepseek", "gemini", "openrouter", "ollama"]
+                        if len(parts) == 1 and text.endswith(" "):
+                            # Show all providers after space: "/models "
+                            for provider in providers:
+                                yield Completion(provider, start_position=0)
+                        elif len(parts) == 2:
+                            # Complete partial provider name: "/models anth"
+                            current = parts[1]
+                            for provider in providers:
+                                if provider.startswith(current):
+                                    yield Completion(provider, start_position=-len(current))
+                    
                     # Handle other slash commands (basic completion)
-                    elif len(parts) == 1:
-                        # Complete slash command names
+                    elif len(parts) == 1 and not text.endswith(" "):
+                        # Only complete slash command names if not followed by space
                         commands = [
                             "/help", "/clear", "/compact", "/tokens", "/tools", "/permissions",
                             "/model", "/models", "/switch", "/provider", "/review", "/truncate",

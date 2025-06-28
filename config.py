@@ -388,7 +388,7 @@ Then restart the agent.
             import httpx
             import asyncio
             
-            async def check_ollama():
+            async def check_ollama_async():
                 try:
                     async with httpx.AsyncClient(timeout=5.0) as client:
                         response = await client.get(f"{self.ollama_base_url}/api/tags")
@@ -396,14 +396,22 @@ Then restart the agent.
                 except:
                     return False
             
-            # Run the async check
+            def check_ollama_sync():
+                try:
+                    with httpx.Client(timeout=5.0) as client:
+                        response = client.get(f"{self.ollama_base_url}/api/tags")
+                        return response.status_code == 200
+                except:
+                    return False
+            
+            # Run the check
             try:
                 loop = asyncio.get_running_loop()
-                # If we're in an event loop, we can't use asyncio.run
-                return False  # Conservative fallback in async context
+                # If we're in an event loop, use synchronous client to avoid conflicts
+                return check_ollama_sync()
             except RuntimeError:
                 # No event loop running, safe to use asyncio.run
-                return asyncio.run(check_ollama())
+                return asyncio.run(check_ollama_async())
                 
         except ImportError:
             # httpx not available

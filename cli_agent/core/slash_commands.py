@@ -20,14 +20,14 @@ class SlashCommandManager:
         self.load_custom_commands()
 
     def load_custom_commands(self):
-        """Load custom commands from .claude/commands/ and ~/.claude/commands/"""
+        """Load custom commands from .claude/commands/ and ~/.config/mcp-agent/commands/"""
         # Project-specific commands
         project_commands_dir = Path(".claude/commands")
         if project_commands_dir.exists():
             self._load_commands_from_dir(project_commands_dir, "project")
 
         # Personal commands
-        personal_commands_dir = Path.home() / ".claude/commands"
+        personal_commands_dir = Path.home() / ".config" / "mcp-agent" / "commands"
         if personal_commands_dir.exists():
             self._load_commands_from_dir(personal_commands_dir, "personal")
 
