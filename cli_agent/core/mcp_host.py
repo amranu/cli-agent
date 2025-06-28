@@ -444,7 +444,7 @@ class MCPHost(BaseLLMProvider):
                     content="\n", is_streaming=False, is_markdown=False
                 )
             else:
-                logger.warning(
+                logger.debug(
                     "No accumulated content to emit, but streaming processing completed"
                 )
         else:
