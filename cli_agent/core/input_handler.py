@@ -201,12 +201,19 @@ class InterruptibleInput:
                     # Handle /permissions command with tool completion
                     if command == "/permissions" and len(parts) >= 2:
                         if len(parts) == 2:
-                            # Complete allow/deny/auto/reset
-                            subcommands = ["allow", "deny", "auto", "reset"]
-                            current = parts[1]
-                            for sub in subcommands:
-                                if sub.startswith(current):
-                                    yield Completion(sub, start_position=-len(current))
+                            # Check if we have trailing space (indicates ready for next argument)
+                            if text.endswith(" ") and parts[1] in ["allow", "deny"]:
+                                # Show all tool names for allow/deny after space
+                                tool_names = self._get_available_tool_names()
+                                for tool_name in tool_names:
+                                    yield Completion(tool_name, start_position=0)
+                            else:
+                                # Complete allow/deny/auto/reset
+                                subcommands = ["allow", "deny", "auto", "reset"]
+                                current = parts[1]
+                                for sub in subcommands:
+                                    if sub.startswith(current):
+                                        yield Completion(sub, start_position=-len(current))
                         elif len(parts) == 3 and parts[1] in ["allow", "deny"]:
                             # Complete tool names for allow/deny
                             current_tool = parts[2]
