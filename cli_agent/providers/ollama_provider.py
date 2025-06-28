@@ -64,6 +64,7 @@ class OllamaProvider(BaseProvider):
         # Models known to not support tools
         unsupported_models = [
             "gemma3:",  # All gemma3 variants don't support tools
+            "deepseek-r1:",  # DeepSeek R1 models don't support tools
         ]
         
         # Check if model matches any unsupported pattern

@@ -540,7 +540,7 @@ class ResponseHandler:
                         pass
                         return
 
-                # Generate follow-up response with tool results (only if no subagents were spawned)
+            # Generate follow-up response with tool results (only if no subagents were spawned)
                 # Skip status message for simple single tool calls to reduce verbosity
                 if hasattr(self.agent, "event_bus") and self.agent.event_bus and len(tool_calls) > 1:
                     await self.agent.event_emitter.emit_status(

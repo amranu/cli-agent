@@ -93,12 +93,15 @@ Use available tools when needed to help users effectively.
 Be precise and thorough in your responses."""
 
     def parse_special_content(self, text_content: str) -> Dict[str, Any]:
-        """Parse Qwen thinking content."""
+        """Parse Qwen thinking content - preserve tags in output."""
         import re
         
-        # Extract <think>...</think> blocks
+        # Check if there are <think>...</think> blocks
         thinking_pattern = r'<think>(.*?)</think>'
         thinking_match = re.search(thinking_pattern, text_content, re.DOTALL)
-        thinking_content = thinking_match.group(1).strip() if thinking_match else ""
         
-        return {"thinking_content": thinking_content} if thinking_content else {}
+        if thinking_match:
+            # Preserve the thinking content with tags
+            return {"has_thinking": True}
+        
+        return {}

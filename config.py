@@ -588,9 +588,9 @@ Then restart the agent.
             if "deepseek" in model_name:
                 # DeepSeek models need reasoning content parsing but use OpenAI format for tools
                 if "reasoner" in model_name:
-                    model = DeepSeekModel(variant="deepseek-reasoner")
+                    model = DeepSeekModel(variant=pm_config.model_name)
                 else:
-                    model = DeepSeekModel(variant="deepseek-chat")
+                    model = DeepSeekModel(variant=pm_config.model_name)
             elif model_name.startswith("qwen3:"):
                 # Qwen3 models need special handling (thinking content parsing)
                 from cli_agent.core.models.qwen_model import QwenModel
