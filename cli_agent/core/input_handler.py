@@ -47,14 +47,18 @@ class InterruptibleInput:
         - Prevents getting stuck in long tool execution sequences
     """
 
-    def __init__(self):
+    def __init__(self, agent=None):
         """Initialize the InterruptibleInput handler.
 
         Sets up prompt_toolkit components if available, otherwise prepares
         for fallback to basic input() function. Also initializes command history.
+        
+        Args:
+            agent: Optional reference to the agent for accessing tool names
         """
         self.interrupted = False
         self.global_interrupt_manager = get_global_interrupt_manager()
+        self.agent = agent  # Store agent reference for tool name completion
         self._setup_history()
         self._setup_prompt_toolkit()
 
@@ -128,9 +132,23 @@ class InterruptibleInput:
             from prompt_toolkit.keys import Keys
             from prompt_toolkit.patch_stdout import patch_stdout
 
-            class AtFilePathCompleter(Completer):
+            class AdvancedCompleter(Completer):
+                def __init__(self, agent=None):
+                    self.agent = agent
+
                 def get_completions(self, document, complete_event):
                     text = document.text_before_cursor
+                    
+                    # Handle file path completion after @
+                    if "@" in text:
+                        yield from self._get_file_completions(text)
+                    
+                    # Handle slash command completion
+                    elif text.strip().startswith("/"):
+                        yield from self._get_slash_command_completions(text)
+
+                def _get_file_completions(self, text):
+                    """Get file path completions for @ references."""
                     idx = text.rfind("@")
                     if idx == -1:
                         return
@@ -171,6 +189,63 @@ class InterruptibleInput:
                         # Fallback - no completions
                         pass
 
+                def _get_slash_command_completions(self, text):
+                    """Get slash command completions including tool names for permissions."""
+                    # Parse the command
+                    parts = text.strip().split()
+                    if not parts:
+                        return
+
+                    command = parts[0]  # e.g. "/permissions"
+                    
+                    # Handle /permissions command with tool completion
+                    if command == "/permissions" and len(parts) >= 2:
+                        if len(parts) == 2:
+                            # Complete allow/deny/auto/reset
+                            subcommands = ["allow", "deny", "auto", "reset"]
+                            current = parts[1]
+                            for sub in subcommands:
+                                if sub.startswith(current):
+                                    yield Completion(sub, start_position=-len(current))
+                        elif len(parts) == 3 and parts[1] in ["allow", "deny"]:
+                            # Complete tool names for allow/deny
+                            current_tool = parts[2]
+                            tool_names = self._get_available_tool_names()
+                            for tool_name in tool_names:
+                                if tool_name.startswith(current_tool):
+                                    yield Completion(tool_name, start_position=-len(current_tool))
+                    
+                    # Handle other slash commands (basic completion)
+                    elif len(parts) == 1:
+                        # Complete slash command names
+                        commands = [
+                            "/help", "/clear", "/compact", "/tokens", "/tools", "/permissions",
+                            "/model", "/models", "/switch", "/provider", "/review", "/truncate",
+                            "/refresh-models", "/history", "/init", "/quit", "/exit"
+                        ]
+                        current = command
+                        for cmd in commands:
+                            if cmd.startswith(current):
+                                yield Completion(cmd, start_position=-len(current))
+
+                def _get_available_tool_names(self):
+                    """Get list of available tool names for completion."""
+                    if not self.agent or not hasattr(self.agent, 'available_tools'):
+                        return []
+                    
+                    tool_names = []
+                    for tool_key in self.agent.available_tools.keys():
+                        # Add the full tool key (e.g., "builtin:bash_execute")
+                        tool_names.append(tool_key)
+                        
+                        # Also add just the tool name part for convenience
+                        if ":" in tool_key:
+                            tool_name = tool_key.split(":", 1)[1]
+                            tool_names.append(tool_name)
+                    
+                    # Remove duplicates and sort
+                    return sorted(list(set(tool_names)))
+
             self._prompt = prompt
             self._patch_stdout = patch_stdout
             self._available = True
@@ -197,7 +272,7 @@ class InterruptibleInput:
                     self.interrupted = True
                     event.app.exit(exception=KeyboardInterrupt)
 
-            self._completer = AtFilePathCompleter()
+            self._completer = AdvancedCompleter(self.agent)
 
         except ImportError:
             self._available = False

@@ -1137,7 +1137,7 @@ async def handle_streaming_json_chat(
                         click.echo(f"Assistant: {response}")
             else:
                 # Interactive mode
-                input_handler = InterruptibleInput()
+                input_handler = InterruptibleInput(host)
                 messages = []
 
                 while True:
@@ -1276,7 +1276,7 @@ async def handle_text_chat(
         display_manager = host.display_manager
 
     # Start interactive chat with host reloading support
-    input_handler = InterruptibleInput()
+    input_handler = InterruptibleInput(host)
 
     # Start continuous background interrupt monitoring for the entire chat session
     from cli_agent.core.interrupt_aware_streaming import run_with_interrupt_monitoring
