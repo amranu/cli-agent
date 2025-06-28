@@ -20,6 +20,7 @@ class AnthropicProvider(BaseProvider):
         self._models_cache = None
         self._models_cache_time = 0
         self._cache_duration = 3600  # 1 hour cache
+        self._implements_callbacks = True  # Mark that we implement callback-based streaming
 
     @property
     def name(self) -> str:
@@ -122,8 +123,13 @@ class AnthropicProvider(BaseProvider):
             response.raise_for_status()
 
             if stream:
-                # Return an async iterator instead of the raw response
-                return self._create_streaming_iterator(response)
+                # Check if this provider implements callbacks (new method)
+                if self._implements_callbacks:
+                    # Return raw response for callback-based processing
+                    return response
+                else:
+                    # Return an async iterator for compatibility
+                    return self._create_streaming_iterator(response)
             else:
                 return response.json()
 
@@ -275,6 +281,249 @@ class AnthropicProvider(BaseProvider):
 
         logger.debug(
             f"Processed Anthropic stream: {len(accumulated_content)} chars, {len(tool_calls)} tool calls"
+        )
+        return accumulated_content, tool_calls, metadata
+
+    async def process_streaming_response_with_callbacks(
+        self,
+        response: Any,
+        on_content: callable = None,
+        on_tool_call_start: callable = None,
+        on_tool_call_progress: callable = None,
+        on_reasoning: callable = None,
+    ) -> Tuple[str, List[Any], Dict[str, Any]]:
+        """Process Anthropic streaming response with real-time callbacks."""
+        logger.debug("Starting Anthropic streaming with callbacks")
+        accumulated_content = ""
+        tool_calls = []
+        metadata = {}
+        current_tool_use = None
+
+        # Process server-sent events with callbacks
+        # Handle different response types (Claude Sonnet 4 returns async_generator)
+        try:
+            if hasattr(response, 'aiter_lines'):
+                # Standard httpx response
+                lines_iter = response.aiter_lines()
+            elif hasattr(response, '__aiter__'):
+                # Direct async generator - convert to line-based iterator
+                lines_iter = response
+            else:
+                raise ValueError(f"Unsupported response type: {type(response)}")
+                
+            interruptible_response = self.make_streaming_interruptible(
+                lines_iter, "Anthropic streaming with callbacks"
+            )
+        except Exception as e:
+            logger.error(f"Failed to create streaming iterator: {e}")
+            # Fallback to regular method
+            logger.info("Falling back to regular streaming method due to iterator failure")
+            return await self.process_streaming_response(response)
+
+        # Track whether we're processing synthetic chunks (Claude Sonnet 4) vs SSE events
+        using_synthetic_chunks = False
+        
+        async for chunk in interruptible_response:
+            # Handle different chunk types
+            event = None
+            
+            if hasattr(chunk, 'choices') and chunk.choices:
+                using_synthetic_chunks = True
+                # Synthetic Chunk object (OpenAI-like format from AnthropicProvider)
+                logger.debug(f"Synthetic chunk with choices: {type(chunk)}")
+                logger.debug(f"Chunk choices: {len(chunk.choices)} choices")
+                choice = chunk.choices[0]
+                logger.debug(f"Choice type: {type(choice)}")
+                logger.debug(f"Choice has delta: {hasattr(choice, 'delta')}")
+                if hasattr(choice, 'delta') and choice.delta:
+                    logger.debug(f"Delta type: {type(choice.delta)}")
+                    logger.debug(f"Delta attributes: {[attr for attr in dir(choice.delta) if not attr.startswith('_')]}")
+                    delta = choice.delta
+                    
+                    # Handle text content
+                    logger.debug(f"Delta has content attr: {hasattr(delta, 'content')}")
+                    if hasattr(delta, 'content'):
+                        logger.debug(f"Delta content value: {repr(getattr(delta, 'content', 'MISSING'))}")
+                        if delta.content:
+                            text_chunk = delta.content
+                            accumulated_content += text_chunk
+                            logger.debug(f"Accumulated {len(text_chunk)} chars of content: {repr(text_chunk[:50])}")
+                            if on_content and text_chunk:
+                                logger.debug(f"Calling on_content callback with: {repr(text_chunk[:50])}")
+                                await on_content(text_chunk)
+                        else:
+                            logger.debug("Delta content is empty/None")
+                    else:
+                        logger.debug(f"Delta has no content attribute. Available attributes: {[attr for attr in dir(delta) if not attr.startswith('_')]}")
+                    
+                    # Handle tool calls
+                    if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                        for tool_call in delta.tool_calls:
+                            if hasattr(tool_call, 'function') and tool_call.function:
+                                func = tool_call.function
+                                tool_name = getattr(func, 'name', None)
+                                if tool_name and on_tool_call_start:
+                                    logger.debug(f"Tool call detected via synthetic chunk: {tool_name}")
+                                    await on_tool_call_start(tool_name)
+                                    
+                                # Create tool call object in OpenAI format for MCPHost compatibility
+                                tool_args = getattr(func, 'arguments', {}) if hasattr(func, 'arguments') else {}
+                                logger.debug(f"Raw tool_args from func: {repr(tool_args)} (type: {type(tool_args)})")
+                                
+                                # Ensure tool_args is always a dict
+                                if tool_args is None:
+                                    tool_args = {}
+                                elif not isinstance(tool_args, dict):
+                                    logger.debug(f"Converting non-dict tool_args to string: {tool_args}")
+                                    tool_args = {"raw_arguments": str(tool_args)}
+                                
+                                arguments_str = json.dumps(tool_args)
+                                logger.debug(f"Serialized arguments: {repr(arguments_str)}")
+                                
+                                tool_call_obj = {
+                                    "id": getattr(tool_call, 'id', f"call_{len(tool_calls)}"),
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": arguments_str
+                                    }
+                                }
+                                tool_calls.append(tool_call_obj)
+                                
+                continue  # Skip further processing for synthetic chunks
+                
+            elif hasattr(chunk, 'type'):
+                # Direct event object (Claude Sonnet 4 format)
+                event = chunk.__dict__ if hasattr(chunk, '__dict__') else dict(chunk)
+                logger.debug(f"Direct event object: {event.get('type', 'unknown')}")
+            elif hasattr(chunk, 'text'):
+                # Anthropic Chunk object with text (SSE format)
+                line = chunk.text
+                logger.debug(f"Chunk object with text: {repr(line[:100])}")
+                
+                if not line or not line.strip():
+                    logger.debug(f"Skipping empty line: {repr(line)}")
+                    continue
+
+                if line.startswith("data: "):
+                    data_str = line[6:]  # Remove "data: " prefix
+
+                    if data_str.strip() == "[DONE]":
+                        break
+
+                    try:
+                        event = json.loads(data_str)
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"Failed to parse JSON: {data_str[:100]}... Error: {e}")
+                        continue
+            elif isinstance(chunk, str):
+                # String line (from aiter_lines)
+                line = chunk
+                logger.debug(f"String line: {repr(line[:100])}")
+                
+                if not line or not line.strip():
+                    continue
+
+                if line.startswith("data: "):
+                    data_str = line[6:]  # Remove "data: " prefix
+
+                    if data_str.strip() == "[DONE]":
+                        break
+
+                    try:
+                        event = json.loads(data_str)
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"Failed to parse JSON: {data_str[:100]}... Error: {e}")
+                        continue
+            else:
+                logger.debug(f"Unknown chunk type: {type(chunk)}")
+                continue
+
+            # Skip SSE processing if we're using synthetic chunks to avoid duplicates
+            if using_synthetic_chunks:
+                continue
+                
+            if not event:
+                continue
+
+            event_type = event.get("type")
+            logger.debug(f"Processing callback event: {event_type}")
+
+            if event_type == "content_block_start":
+                content_block = event.get("content_block", {})
+                if content_block.get("type") == "tool_use":
+                    tool_name = content_block.get("name")
+                    tool_id = content_block.get("id")
+                    logger.debug(f"Tool call started: {tool_name} (id: {tool_id})")
+                    current_tool_use = {
+                        "id": tool_id,
+                        "name": tool_name,
+                        "input": {},
+                        "partial_json": "",
+                    }
+                    # Emit tool call start callback
+                    if on_tool_call_start and tool_name:
+                        logger.debug(f"Calling on_tool_call_start callback for: {tool_name}")
+                        await on_tool_call_start(tool_name)
+
+            elif event_type == "content_block_delta":
+                delta = event.get("delta", {})
+                if delta.get("type") == "text_delta":
+                    text_chunk = delta.get("text", "")
+                    accumulated_content += text_chunk
+                    # Emit content callback
+                    if on_content and text_chunk:
+                        logger.debug(f"Calling on_content callback with: {repr(text_chunk[:50])}")
+                        await on_content(text_chunk)
+                        
+                elif delta.get("type") == "input_json_delta" and current_tool_use:
+                    partial_json = delta.get("partial_json", "")
+                    current_tool_use["partial_json"] += partial_json
+                    logger.debug(f"Tool argument delta: {repr(partial_json[:50])}")
+
+            elif event_type == "content_block_stop":
+                if current_tool_use:
+                    # Parse accumulated JSON
+                    partial_json = current_tool_use.get("partial_json", "").strip()
+                    if partial_json:
+                        try:
+                            current_tool_use["input"] = json.loads(partial_json)
+                            logger.debug(f"Tool call complete: {current_tool_use['name']} with args: {current_tool_use['input']}")
+                        except json.JSONDecodeError as e:
+                            logger.warning(
+                                f"Failed to parse tool input JSON: {partial_json} - Error: {e}"
+                            )
+                            current_tool_use["input"] = {}
+                    else:
+                        # No arguments for this tool call
+                        current_tool_use["input"] = {}
+                        logger.debug(f"Tool call complete: {current_tool_use['name']} with no arguments")
+
+                    # Only create tool call object if we're NOT using synthetic chunks
+                    # (synthetic chunks already handle tool call creation)
+                    if not using_synthetic_chunks:
+                        tool_call = {
+                            "id": current_tool_use["id"],
+                            "type": "function",
+                            "function": {
+                                "name": current_tool_use["name"],
+                                "arguments": json.dumps(current_tool_use["input"])
+                            }
+                        }
+                        tool_calls.append(tool_call)
+                    current_tool_use = None
+
+                elif event_type == "message_start":
+                    message = event.get("message", {})
+                    usage = message.get("usage", {})
+                    if usage:
+                        metadata["usage"] = {
+                            "input_tokens": usage.get("input_tokens", 0),
+                            "output_tokens": usage.get("output_tokens", 0),
+                        }
+
+        logger.debug(
+            f"Processed Anthropic stream with callbacks: {len(accumulated_content)} chars, {len(tool_calls)} tool calls"
         )
         return accumulated_content, tool_calls, metadata
 
@@ -571,6 +820,7 @@ class AnthropicProvider(BaseProvider):
                                                                         "Function",
                                                                         (),
                                                                         {
+                                                                            "name": current_tool_use["name"],
                                                                             "arguments": partial_json
                                                                         },
                                                                     )(),
@@ -590,6 +840,30 @@ class AnthropicProvider(BaseProvider):
                         if current_tool_use:
                             # Tool call is complete, but we've already yielded incremental updates
                             current_tool_use = None
+            
+            # Safety yield to ensure generator always yields something
+            # This prevents NoneType iteration errors in base_llm_provider
+            if True:  # Always yield at least an empty chunk
+                chunk = type(
+                    "Chunk",
+                    (),
+                    {
+                        "choices": [
+                            type(
+                                "Choice",
+                                (),
+                                {
+                                    "delta": type(
+                                        "Delta",
+                                        (),
+                                        {"content": ""},
+                                    )(),
+                                },
+                            )()
+                        ]
+                    },
+                )()
+                yield chunk
 
         return anthropic_stream_iterator()
 
