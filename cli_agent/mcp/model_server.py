@@ -175,6 +175,7 @@ def create_model_server() -> FastMCP:
         "openai": "openai",
         "openrouter": "openrouter",
         "deepseek": "deepseek",
+        "ollama": "ollama",
     }
 
     if not available_models:
