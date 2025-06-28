@@ -310,14 +310,17 @@ class MCPHost(BaseLLMProvider):
                             ):
                                 func = tool_call_delta.function
                                 if hasattr(func, "name") and func.name:
+                                    # Only emit detection event if this is the first time we see this tool name
+                                    current_name = accumulated_tool_calls[tool_call_delta.index]["function"]["name"]
+                                    if current_name is None:
+                                        # This is the first time we're seeing this tool call
+                                        await self.event_emitter.emit_status(
+                                            f"Tool call detected: {func.name}", level="info"
+                                        )
+                                    
                                     accumulated_tool_calls[tool_call_delta.index][
                                         "function"
                                     ]["name"] = func.name
-
-                                    # Emit tool call discovered event
-                                    await self.event_emitter.emit_status(
-                                        f"Tool call detected: {func.name}", level="info"
-                                    )
                                 if hasattr(func, "arguments") and func.arguments:
                                     accumulated_tool_calls[tool_call_delta.index][
                                         "function"
