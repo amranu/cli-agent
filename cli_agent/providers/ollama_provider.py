@@ -350,6 +350,8 @@ class OllamaProvider(BaseProvider):
                 self.role = delta_data.get("role")
                 if "tool_calls" in delta_data:
                     self.tool_calls = delta_data["tool_calls"]
+                else:
+                    self.tool_calls = None
                     
             def _process_content_for_thinking(self, content):
                 """Process content to handle thinking tags for models like qwen."""

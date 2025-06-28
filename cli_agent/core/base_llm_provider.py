@@ -98,7 +98,7 @@ class BaseLLMProvider(BaseMCPAgent):
                             )
 
                             # Consume the generator and return the final content
-                            final_content = ""
+                            final_result = None
                             logger.info(
                                 f"Consuming streaming generator: {type(generator)}"
                             )
@@ -122,16 +122,16 @@ class BaseLLMProvider(BaseMCPAgent):
                                     logger.info(
                                         f"Generator yielded: {type(content)} - {repr(content[:100] if isinstance(content, str) else content)}"
                                     )
-                                    if isinstance(content, str):
-                                        final_content = content
+                                    # Store the final result regardless of type
+                                    final_result = content
                             except Exception as e:
                                 logger.error(f"Error consuming generator: {e}")
-                                final_content = ""
+                                final_result = ""
 
                             logger.info(
-                                f"Final content collected: {len(final_content)} chars"
+                                f"Final result collected: {type(final_result)} - {len(final_result) if isinstance(final_result, str) else final_result}"
                             )
-                            return final_content
+                            return final_result
 
                         return await run_with_interrupt_monitoring(
                             consume_streaming_response(),

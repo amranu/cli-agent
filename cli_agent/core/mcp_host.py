@@ -249,8 +249,15 @@ class MCPHost(BaseLLMProvider):
 
                 # Handle tool calls in streaming with events
                 if hasattr(delta, "tool_calls") and delta.tool_calls:
+                    # Apply model-specific tool call formatting if needed
+                    tool_calls_to_process = delta.tool_calls
+                    if hasattr(self.model, 'format_streaming_tool_calls'):
+                        formatted_calls = self.model.format_streaming_tool_calls(delta.tool_calls)
+                        if formatted_calls is not None:
+                            tool_calls_to_process = formatted_calls
+                    
                     # First, detect if we have any new tool calls and emit buffered content
-                    for tool_call_delta in delta.tool_calls:
+                    for tool_call_delta in tool_calls_to_process:
                         if (
                             hasattr(tool_call_delta, "function")
                             and tool_call_delta.function
@@ -283,7 +290,7 @@ class MCPHost(BaseLLMProvider):
                             break  # Only emit once
 
                     # Now process the tool calls
-                    for tool_call_delta in delta.tool_calls:
+                    for tool_call_delta in tool_calls_to_process:
                         if (
                             hasattr(tool_call_delta, "index")
                             and tool_call_delta.index is not None

@@ -584,15 +584,19 @@ Then restart the agent.
             model = GPTModel(variant=pm_config.model_name)
         elif pm_config.provider_name == "ollama":
             # Ollama standardizes everything to OpenAI format through its API
-            # Detect underlying model family only for special content parsing (reasoning, etc.)
+            # Detect underlying model family only for special content parsing and streaming support
             if "deepseek" in model_name:
                 # DeepSeek models need reasoning content parsing but use OpenAI format for tools
                 if "reasoner" in model_name:
                     model = DeepSeekModel(variant="deepseek-reasoner")
                 else:
                     model = DeepSeekModel(variant="deepseek-chat")
+            elif model_name.startswith("qwen3:"):
+                # Qwen3 models need special handling (thinking content parsing)
+                from cli_agent.core.models.qwen_model import QwenModel
+                model = QwenModel(variant=pm_config.model_name)
             else:
-                # All other Ollama models use OpenAI format (llama, qwen, claude, gemini, etc.)
+                # All other Ollama models use OpenAI format (llama, claude, gemini, etc.)
                 # Ollama's OpenAI-compatible API standardizes tool calling to OpenAI format
                 model = GPTModel(variant=pm_config.model_name)
         # Direct provider cases - use native formats
