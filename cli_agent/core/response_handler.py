@@ -541,14 +541,13 @@ class ResponseHandler:
                         return
 
                 # Generate follow-up response with tool results (only if no subagents were spawned)
-                if hasattr(self.agent, "event_bus") and self.agent.event_bus:
+                # Skip status message for simple single tool calls to reduce verbosity
+                if hasattr(self.agent, "event_bus") and self.agent.event_bus and len(tool_calls) > 1:
                     await self.agent.event_emitter.emit_status(
                         status="Processing tool results",
                         details="Generating follow-up response based on tool outputs",
                         level="info",
                     )
-                # Tool result processing status handled by event system
-                pass
 
                 try:
                     # Add instruction to prevent repeating identical tool calls (same tool + same arguments)

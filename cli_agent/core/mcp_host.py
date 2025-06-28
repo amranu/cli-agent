@@ -314,9 +314,12 @@ class MCPHost(BaseLLMProvider):
                                     current_name = accumulated_tool_calls[tool_call_delta.index]["function"]["name"]
                                     if current_name is None:
                                         # This is the first time we're seeing this tool call
-                                        await self.event_emitter.emit_status(
-                                            f"Tool call detected: {func.name}", level="info"
-                                        )
+                                        # Reduce verbosity for common tools
+                                        common_tools = {"builtin_todo_read", "builtin_todo_write", "todo_read", "todo_write"}
+                                        if func.name not in common_tools:
+                                            await self.event_emitter.emit_status(
+                                                f"Tool call detected: {func.name}", level="info"
+                                            )
                                     
                                     accumulated_tool_calls[tool_call_delta.index][
                                         "function"
@@ -388,10 +391,12 @@ class MCPHost(BaseLLMProvider):
                                 }
                                 accumulated_tool_calls.append(tool_call)
 
-                                # Emit tool call discovered event
-                                await self.event_emitter.emit_status(
-                                    f"Tool call detected: {fc.name}", level="info"
-                                )
+                                # Emit tool call discovered event (reduce verbosity for common tools)
+                                common_tools = {"builtin_todo_read", "builtin_todo_write", "todo_read", "todo_write"}
+                                if fc.name not in common_tools:
+                                    await self.event_emitter.emit_status(
+                                        f"Tool call detected: {fc.name}", level="info"
+                                    )
                             elif hasattr(part, "text") and part.text:
                                 logger.debug(
                                     f"Gemini part {i}: text content '{part.text[:100]}...' (len={len(part.text)})"
