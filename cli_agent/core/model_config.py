@@ -70,9 +70,13 @@ class ModelConfig(ABC):
         """
         pass
 
-    @abstractmethod
     def parse_special_content(self, response_text: str) -> Dict[str, Any]:
-        """Parse model-specific content like <thinking> or <reasoning>.
+        """Parse universal thinking/reasoning tags from any model.
+
+        This method provides universal parsing for common thinking tag formats:
+        <thinking>, <reasoning>, <think>, <reflection>, <analysis>
+        
+        Subclasses can override this for model-specific behavior.
 
         Args:
             response_text: Raw response text from model
@@ -80,7 +84,30 @@ class ModelConfig(ABC):
         Returns:
             Dict of extracted special content
         """
-        pass
+        import re
+
+        special_content = {}
+
+        # Parse various thinking/reasoning tag formats
+        tag_patterns = [
+            ("thinking", r"<thinking>(.*?)</thinking>"),
+            ("reasoning", r"<reasoning>(.*?)</reasoning>"),
+            ("think", r"<think>(.*?)</think>"),
+            ("reflection", r"<reflection>(.*?)</reflection>"),
+            ("analysis", r"<analysis>(.*?)</analysis>"),
+        ]
+
+        for tag_name, pattern in tag_patterns:
+            matches = re.findall(pattern, response_text, re.DOTALL)
+            if matches:
+                # All thinking content goes into "reasoning" for consistent handling
+                content = "\n".join(match.strip() for match in matches)
+                if "reasoning" not in special_content:
+                    special_content["reasoning"] = content
+                else:
+                    special_content["reasoning"] += "\n\n" + content
+
+        return special_content
 
     def get_default_parameters(self) -> Dict[str, Any]:
         """Get default parameters for API requests."""
@@ -233,20 +260,13 @@ Key behaviors:
 Tool usage: When users ask you to do something that requires action, use the appropriate tools immediately rather than just describing what you would do."""
 
     def parse_special_content(self, response_text: str) -> Dict[str, Any]:
-        """Parse Claude-specific content blocks like <thinking>."""
+        """Parse Claude content using universal parsing plus Claude-specific blocks."""
         import re
 
-        special_content = {}
+        # Start with universal parsing
+        special_content = super().parse_special_content(response_text)
 
-        # Parse <thinking> blocks
-        thinking_pattern = r"<thinking>(.*?)</thinking>"
-        thinking_matches = re.findall(thinking_pattern, response_text, re.DOTALL)
-        if thinking_matches:
-            special_content["thinking"] = "\n".join(
-                match.strip() for match in thinking_matches
-            )
-
-        # Parse <result> blocks for subagents
+        # Add Claude-specific <result> blocks for subagents
         result_pattern = r"<result>(.*?)</result>"
         result_matches = re.findall(result_pattern, response_text, re.DOTALL)
         if result_matches:
@@ -359,9 +379,9 @@ Key behaviors:
 Tool usage: When users request actions (running commands, reading files, etc.), use the appropriate tools immediately rather than just describing what you would do."""
 
     def parse_special_content(self, response_text: str) -> Dict[str, Any]:
-        """GPT doesn't typically have special content blocks."""
-        # Could add parsing for any special GPT content in the future
-        return {}
+        """Parse GPT content using universal parsing."""
+        # Use the universal parsing from the base class
+        return super().parse_special_content(response_text)
 
 
 class GeminiModel(ModelConfig):
@@ -440,9 +460,9 @@ CRITICAL REQUIREMENTS:
 Tool Usage Priority: Take action FIRST, then provide analysis based on actual results."""
 
     def parse_special_content(self, response_text: str) -> Dict[str, Any]:
-        """Parse any Gemini-specific content."""
-        # Gemini doesn't typically have special content blocks like Claude's <thinking>
-        return {}
+        """Parse Gemini content using universal parsing."""
+        # Use the universal parsing from the base class
+        return super().parse_special_content(response_text)
 
 
 class DeepSeekModel(ModelConfig):
@@ -514,17 +534,6 @@ Key behaviors for DeepSeek:
 Reasoning Pattern: Think through problems step-by-step in <reasoning> blocks, then take appropriate actions using available tools."""
 
     def parse_special_content(self, response_text: str) -> Dict[str, Any]:
-        """Parse DeepSeek-specific content like <reasoning>."""
-        import re
-
-        special_content = {}
-
-        # Parse <reasoning> blocks
-        reasoning_pattern = r"<reasoning>(.*?)</reasoning>"
-        reasoning_matches = re.findall(reasoning_pattern, response_text, re.DOTALL)
-        if reasoning_matches:
-            special_content["reasoning"] = "\n".join(
-                match.strip() for match in reasoning_matches
-            )
-
-        return special_content
+        """Parse DeepSeek content using universal parsing."""
+        # Use the universal parsing from the base class
+        return super().parse_special_content(response_text)
