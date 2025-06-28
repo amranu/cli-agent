@@ -3,11 +3,13 @@
 Professional input handler using prompt_toolkit for robust terminal interaction.
 
 This module provides the InterruptibleInput class which offers advanced terminal
-input handling with support for interruption, multiline input, and fallback
-mechanisms for environments where prompt_toolkit is not available.
+input handling with support for interruption, multiline input, command history,
+and fallback mechanisms for environments where prompt_toolkit is not available.
 """
 
 import logging
+import os
+from pathlib import Path
 from typing import Optional
 
 from cli_agent.core.global_interrupt import get_global_interrupt_manager
@@ -49,11 +51,66 @@ class InterruptibleInput:
         """Initialize the InterruptibleInput handler.
 
         Sets up prompt_toolkit components if available, otherwise prepares
-        for fallback to basic input() function.
+        for fallback to basic input() function. Also initializes command history.
         """
         self.interrupted = False
         self.global_interrupt_manager = get_global_interrupt_manager()
+        self._setup_history()
         self._setup_prompt_toolkit()
+
+    def _setup_history(self):
+        """Setup command history storage.
+        
+        Creates a persistent history file in the user's config directory.
+        """
+        # Create config directory for mcp-agent
+        self.config_dir = Path.home() / ".config" / "mcp-agent"
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Set up history file path
+        self.history_file = self.config_dir / "command_history.txt"
+        
+        # Initialize history storage for fallback mode
+        self._fallback_history = []
+        self._history_position = 0
+        
+        # Load existing history
+        self._load_history()
+
+    def _load_history(self):
+        """Load command history from file."""
+        try:
+            if self.history_file.exists():
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    self._fallback_history = [line.strip() for line in f.readlines() if line.strip()]
+                # Limit history size to last 1000 commands
+                if len(self._fallback_history) > 1000:
+                    self._fallback_history = self._fallback_history[-1000:]
+                    self._save_history()
+        except Exception as e:
+            logger.warning(f"Could not load command history: {e}")
+            self._fallback_history = []
+
+    def _save_history(self):
+        """Save command history to file."""
+        try:
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                for command in self._fallback_history:
+                    f.write(f"{command}\n")
+        except Exception as e:
+            logger.warning(f"Could not save command history: {e}")
+
+    def _add_to_history(self, command: str):
+        """Add a command to history (avoiding duplicates of last command)."""
+        if command and command.strip():
+            command = command.strip()
+            # Don't add duplicate of the last command
+            if not self._fallback_history or self._fallback_history[-1] != command:
+                self._fallback_history.append(command)
+                # Limit history size
+                if len(self._fallback_history) > 1000:
+                    self._fallback_history = self._fallback_history[-1000:]
+                self._save_history()
 
     def _setup_prompt_toolkit(self):
         """Setup prompt_toolkit components.
@@ -66,6 +123,7 @@ class InterruptibleInput:
 
             from prompt_toolkit import prompt
             from prompt_toolkit.completion import Completer, Completion, PathCompleter
+            from prompt_toolkit.history import FileHistory
             from prompt_toolkit.key_binding import KeyBindings
             from prompt_toolkit.keys import Keys
             from prompt_toolkit.patch_stdout import patch_stdout
@@ -117,6 +175,14 @@ class InterruptibleInput:
             self._patch_stdout = patch_stdout
             self._available = True
 
+            # Set up command history with prompt_toolkit
+            try:
+                self._history = FileHistory(str(self.history_file))
+                logger.debug(f"Command history initialized: {self.history_file}")
+            except Exception as e:
+                logger.warning(f"Could not initialize prompt_toolkit history: {e}")
+                self._history = None
+
             # Create key bindings for interruption
             self._bindings = KeyBindings()
 
@@ -162,7 +228,10 @@ class InterruptibleInput:
         if not self._available:
             # Fallback to basic input if prompt_toolkit unavailable
             try:
-                return input(prompt_text)
+                result = input(prompt_text)
+                if result:
+                    self._add_to_history(result)
+                return result
             except KeyboardInterrupt:
                 self.interrupted = True
                 # Manually trigger the global interrupt manager since basic input intercepted the signal
@@ -203,7 +272,8 @@ class InterruptibleInput:
                         key_bindings=self._bindings if allow_escape_interrupt else None,
                         multiline=multiline_mode,
                         wrap_lines=True,
-                        enable_history_search=False,
+                        enable_history_search=True,
+                        history=getattr(self, "_history", None),
                         completer=getattr(self, "_completer", None),
                         bottom_toolbar=None,  # Ensure no bottom toolbar
                         reserve_space_for_menu=0,  # Don't reserve space for completion menu
@@ -222,7 +292,8 @@ class InterruptibleInput:
                     key_bindings=self._bindings if allow_escape_interrupt else None,
                     multiline=multiline_mode,
                     wrap_lines=True,
-                    enable_history_search=False,
+                    enable_history_search=True,
+                    history=getattr(self, "_history", None),
                     completer=getattr(self, "_completer", None),
                     bottom_toolbar=None,  # Ensure no bottom toolbar
                     reserve_space_for_menu=0,  # Don't reserve space for completion menu
@@ -247,7 +318,10 @@ class InterruptibleInput:
             logger.error(f"Error in prompt_toolkit input: {e}")
             # Fallback to basic input
             try:
-                return input(prompt_text)
+                result = input(prompt_text)
+                if result:
+                    self._add_to_history(result)
+                return result
             except KeyboardInterrupt:
                 self.interrupted = True
                 return None
@@ -335,7 +409,10 @@ class InterruptibleInput:
         if not self._available:
             # Fallback behavior
             try:
-                return input(initial_prompt)
+                result = input(initial_prompt)
+                if result:
+                    self._add_to_history(result)
+                return result
             except KeyboardInterrupt:
                 self.interrupted = True
                 return None
@@ -352,3 +429,20 @@ class InterruptibleInput:
             allow_escape_interrupt=allow_escape_interrupt,
         )
         return user_input
+
+    def get_history_info(self) -> str:
+        """Get information about command history functionality.
+        
+        Returns:
+            str: Information about how to use command history
+        """
+        if self._available:
+            return (
+                "📚 Command History: Use ↑/↓ arrow keys to navigate previous commands. "
+                f"History stored in: {self.history_file}"
+            )
+        else:
+            return (
+                "📚 Command History: Available in fallback mode. "
+                f"History stored in: {self.history_file}"
+            )
