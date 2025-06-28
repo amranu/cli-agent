@@ -52,6 +52,28 @@ class OllamaProvider(BaseProvider):
     def supports_streaming(self) -> bool:
         return True
 
+    def _model_supports_tools(self, model_name: str) -> bool:
+        """Check if a model supports tool calling.
+        
+        Args:
+            model_name: The Ollama model name
+            
+        Returns:
+            True if the model supports tools, False otherwise
+        """
+        # Models known to not support tools
+        unsupported_models = [
+            "gemma3:",  # All gemma3 variants don't support tools
+        ]
+        
+        # Check if model matches any unsupported pattern
+        for pattern in unsupported_models:
+            if model_name.startswith(pattern):
+                return False
+                
+        # Default to True for other models
+        return True
+
     def extract_response_content(
         self, response: Any
     ) -> Tuple[str, List[Any], Dict[str, Any]]:
@@ -96,11 +118,9 @@ class OllamaProvider(BaseProvider):
     ) -> Tuple[str, List[Any], Dict[str, Any]]:
         """Process Ollama streaming response."""
         accumulated_content = ""
-        accumulated_thinking_content = ""
         accumulated_tool_calls = []
         metadata = {}
         current_tool_call = None
-        in_thinking_block = False
 
         # Handle both async and sync iterators
         if hasattr(response, "__aiter__"):
@@ -116,13 +136,7 @@ class OllamaProvider(BaseProvider):
                     if choices:
                         delta = choices[0].get("delta", {})
                         if "content" in delta and delta["content"]:
-                            content_chunk = delta["content"]
-                            # Process content to separate thinking from actual response
-                            processed_content, thinking_content, in_thinking_block = self._process_content_chunk(
-                                content_chunk, accumulated_thinking_content, in_thinking_block
-                            )
-                            accumulated_content += processed_content
-                            accumulated_thinking_content += thinking_content
+                            accumulated_content += delta["content"]
                         if "tool_calls" in delta and delta["tool_calls"]:
                             for tc in delta["tool_calls"]:
                                 if tc.get("index") is not None:
@@ -162,13 +176,7 @@ class OllamaProvider(BaseProvider):
                     # Handle object chunk format
                     delta = chunk.choices[0].delta
                     if hasattr(delta, "content") and delta.content:
-                        content_chunk = delta.content
-                        # Process content to separate thinking from actual response
-                        processed_content, thinking_content, in_thinking_block = self._process_content_chunk(
-                            content_chunk, accumulated_thinking_content, in_thinking_block
-                        )
-                        accumulated_content += processed_content
-                        accumulated_thinking_content += thinking_content
+                        accumulated_content += delta.content
                     if hasattr(delta, "tool_calls") and delta.tool_calls:
                         for tc in delta.tool_calls:
                             if hasattr(tc, "index") and tc.index is not None:
@@ -212,45 +220,15 @@ class OllamaProvider(BaseProvider):
                     if choices:
                         delta = choices[0].get("delta", {})
                         if "content" in delta and delta["content"]:
-                            content_chunk = delta["content"]
-                            # Process content to separate thinking from actual response
-                            processed_content, thinking_content, in_thinking_block = self._process_content_chunk(
-                                content_chunk, accumulated_thinking_content, in_thinking_block
-                            )
-                            accumulated_content += processed_content
-                            accumulated_thinking_content += thinking_content
+                            accumulated_content += delta["content"]
                     if "model" in chunk and not metadata.get("model"):
                         metadata["model"] = chunk["model"]
 
-        # Add thinking content to metadata if present (similar to DeepSeek reasoning)
-        if accumulated_thinking_content:
-            metadata["reasoning_content"] = accumulated_thinking_content
-
         logger.debug(
-            f"Processed Ollama stream: {len(accumulated_content)} chars, {len(accumulated_tool_calls)} tool calls, {len(accumulated_thinking_content)} thinking chars"
+            f"Processed Ollama stream: {len(accumulated_content)} chars, {len(accumulated_tool_calls)} tool calls"
         )
         return accumulated_content, accumulated_tool_calls, metadata
 
-    def _process_content_chunk(self, content_chunk, accumulated_thinking, in_thinking_block):
-        """Process a content chunk - for qwen models, keep all content visible."""
-        if not content_chunk:
-            return "", "", in_thinking_block
-            
-        # For qwen models, we want to keep thinking content visible in the main response
-        # Just track it separately for metadata but don't remove it from main content
-        thinking_content = ""
-        
-        # Extract thinking content for metadata while keeping it in main response
-        if "<think>" in content_chunk:
-            # Find thinking content between tags for metadata
-            start = content_chunk.find("<think>")
-            if start != -1:
-                end = content_chunk.find("</think>", start)
-                if end != -1:
-                    thinking_content = content_chunk[start + 7:end]  # Extract just the thinking part
-                    
-        # Return the full content chunk as processed content (keep thinking visible)
-        return content_chunk, thinking_content, in_thinking_block
 
     async def make_request(
         self,
@@ -281,9 +259,11 @@ class OllamaProvider(BaseProvider):
             ]:
                 payload[key] = value
 
-        # Add tools if provided
-        if tools:
+        # Add tools if provided, but skip for models that don't support them
+        if tools and self._model_supports_tools(model_name):
             payload["tools"] = tools
+        elif tools and not self._model_supports_tools(model_name):
+            logger.warning(f"Model {model_name} does not support tools - skipping tool calls")
 
         logger.debug(
             f"Ollama API request: {len(messages)} messages, tools={len(tools) if tools else 0}"
