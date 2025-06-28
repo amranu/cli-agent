@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cli-agent"
+name = "mcp-cli-agent"
 version = "1.0.0"
 description = "MCP-enabled AI assistant with tool integration"
 readme = "README.md"
@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Software Development :: Tools",
+    "Topic :: Software Development",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
@@ -30,11 +30,13 @@ dependencies = [
     "fastmcp>=2.0.0",
     "openai>=1.0.0",
     "google-genai>=1.0.0",
+    "httpx>=0.24.0",
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
     "click>=8.0.0",
     "prompt_toolkit>=3.0.0",
     "rich>=13.0.0",
+    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]
@@ -65,7 +67,7 @@ Homepage = "https://github.com/amranu/cli-agent"
 agent = "agent:main"
 
 [tool.setuptools]
-py-modules = ["agent", "config", "mcp_deepseek_host", "mcp_gemini_host"]
+py-modules = ["agent", "config", "streaming_json", "session_manager"]
 
 [tool.setuptools.packages.find]
 where = ["."]

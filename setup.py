@@ -27,7 +27,7 @@ def read_requirements():
 
 
 setup(
-    name="cli-agent",
+    name="mcp-cli-agent",
     version="1.0.0",
     description="MCP-enabled AI assistant with tool integration",
     long_description=read_readme(),
