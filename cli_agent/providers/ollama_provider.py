@@ -96,9 +96,11 @@ class OllamaProvider(BaseProvider):
     ) -> Tuple[str, List[Any], Dict[str, Any]]:
         """Process Ollama streaming response."""
         accumulated_content = ""
+        accumulated_thinking_content = ""
         accumulated_tool_calls = []
         metadata = {}
         current_tool_call = None
+        in_thinking_block = False
 
         # Handle both async and sync iterators
         if hasattr(response, "__aiter__"):
@@ -114,7 +116,13 @@ class OllamaProvider(BaseProvider):
                     if choices:
                         delta = choices[0].get("delta", {})
                         if "content" in delta and delta["content"]:
-                            accumulated_content += delta["content"]
+                            content_chunk = delta["content"]
+                            # Process content to separate thinking from actual response
+                            processed_content, thinking_content, in_thinking_block = self._process_content_chunk(
+                                content_chunk, accumulated_thinking_content, in_thinking_block
+                            )
+                            accumulated_content += processed_content
+                            accumulated_thinking_content += thinking_content
                         if "tool_calls" in delta and delta["tool_calls"]:
                             for tc in delta["tool_calls"]:
                                 if tc.get("index") is not None:
@@ -154,7 +162,13 @@ class OllamaProvider(BaseProvider):
                     # Handle object chunk format
                     delta = chunk.choices[0].delta
                     if hasattr(delta, "content") and delta.content:
-                        accumulated_content += delta.content
+                        content_chunk = delta.content
+                        # Process content to separate thinking from actual response
+                        processed_content, thinking_content, in_thinking_block = self._process_content_chunk(
+                            content_chunk, accumulated_thinking_content, in_thinking_block
+                        )
+                        accumulated_content += processed_content
+                        accumulated_thinking_content += thinking_content
                     if hasattr(delta, "tool_calls") and delta.tool_calls:
                         for tc in delta.tool_calls:
                             if hasattr(tc, "index") and tc.index is not None:
@@ -198,14 +212,45 @@ class OllamaProvider(BaseProvider):
                     if choices:
                         delta = choices[0].get("delta", {})
                         if "content" in delta and delta["content"]:
-                            accumulated_content += delta["content"]
+                            content_chunk = delta["content"]
+                            # Process content to separate thinking from actual response
+                            processed_content, thinking_content, in_thinking_block = self._process_content_chunk(
+                                content_chunk, accumulated_thinking_content, in_thinking_block
+                            )
+                            accumulated_content += processed_content
+                            accumulated_thinking_content += thinking_content
                     if "model" in chunk and not metadata.get("model"):
                         metadata["model"] = chunk["model"]
 
+        # Add thinking content to metadata if present (similar to DeepSeek reasoning)
+        if accumulated_thinking_content:
+            metadata["reasoning_content"] = accumulated_thinking_content
+
         logger.debug(
-            f"Processed Ollama stream: {len(accumulated_content)} chars, {len(accumulated_tool_calls)} tool calls"
+            f"Processed Ollama stream: {len(accumulated_content)} chars, {len(accumulated_tool_calls)} tool calls, {len(accumulated_thinking_content)} thinking chars"
         )
         return accumulated_content, accumulated_tool_calls, metadata
+
+    def _process_content_chunk(self, content_chunk, accumulated_thinking, in_thinking_block):
+        """Process a content chunk - for qwen models, keep all content visible."""
+        if not content_chunk:
+            return "", "", in_thinking_block
+            
+        # For qwen models, we want to keep thinking content visible in the main response
+        # Just track it separately for metadata but don't remove it from main content
+        thinking_content = ""
+        
+        # Extract thinking content for metadata while keeping it in main response
+        if "<think>" in content_chunk:
+            # Find thinking content between tags for metadata
+            start = content_chunk.find("<think>")
+            if start != -1:
+                end = content_chunk.find("</think>", start)
+                if end != -1:
+                    thinking_content = content_chunk[start + 7:end]  # Extract just the thinking part
+                    
+        # Return the full content chunk as processed content (keep thinking visible)
+        return content_chunk, thinking_content, in_thinking_block
 
     async def make_request(
         self,
@@ -286,12 +331,56 @@ class OllamaProvider(BaseProvider):
 
                     try:
                         chunk_data = json.loads(data_str)
-                        # Yield the chunk as-is for processing by process_streaming_response
-                        yield chunk_data
+                        # Convert dict format to object format for MCPHost compatibility
+                        yield self._convert_dict_to_object(chunk_data)
                     except json.JSONDecodeError:
                         continue
 
         return ollama_stream_iterator()
+
+    def _convert_dict_to_object(self, chunk_data):
+        """Convert Ollama dict format chunks to object format for MCPHost compatibility."""
+        # Create a simple object that mimics the expected structure
+        class ChunkObject:
+            def __init__(self, data):
+                if "choices" in data and data["choices"]:
+                    choice_data = data["choices"][0]
+                    self.choices = [ChoiceObject(choice_data)]
+                else:
+                    self.choices = []
+                    
+                # Copy other metadata
+                for key, value in data.items():
+                    if key != "choices":
+                        setattr(self, key, value)
+
+        class ChoiceObject:
+            def __init__(self, choice_data):
+                self.index = choice_data.get("index", 0)
+                if "delta" in choice_data:
+                    self.delta = DeltaObject(choice_data["delta"])
+                elif "message" in choice_data:
+                    self.message = choice_data["message"]
+
+        class DeltaObject:
+            def __init__(self, delta_data):
+                # Handle content and separate thinking/reasoning from actual response
+                raw_content = delta_data.get("content")
+                self.content = self._process_content_for_thinking(raw_content)
+                self.role = delta_data.get("role")
+                if "tool_calls" in delta_data:
+                    self.tool_calls = delta_data["tool_calls"]
+                    
+            def _process_content_for_thinking(self, content):
+                """Process content to handle thinking tags for models like qwen."""
+                if not content:
+                    return content
+                    
+                # For now, return the content as-is but we'll need to add
+                # thinking extraction logic here similar to DeepSeek
+                return content
+
+        return ChunkObject(chunk_data)
 
     def is_retryable_error(self, error: Exception) -> bool:
         """Check if Ollama error is retryable."""
