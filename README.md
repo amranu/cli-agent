@@ -1,4 +1,4 @@
-# MCP Agent
+# CLI Agent
 
 A powerful, modular command-line interface for interacting with AI models enhanced with Model Context Protocol (MCP) tool integration. Features a centralized architecture that makes it easy to add new LLM providers while providing robust tool integration and subagent management capabilities.
 
@@ -19,8 +19,8 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 
 1.  **Clone the repository**:
     ```bash
-    git clone https://github.com/amranu/mcp-agent.git
-    cd mcp-agent
+    git clone https://github.com/amranu/cli-agent.git
+    cd cli-agent
     ```
 
 2.  **Install the package**:
@@ -46,7 +46,9 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 
     **Smart Provider Selection**: The agent automatically selects a configured provider based on available API keys.
 
-    Configuration is automatically saved to `~/.config/mcp-agent/config.json` and persists across sessions.
+    Configuration is automatically saved to `~/.config/cli-agent/config.json` and persists across sessions.
+
+    **Migration from MCP Agent**: If you previously used MCP Agent, your configuration will be automatically migrated from `~/.config/mcp-agent/` to `~/.config/cli-agent/` on first run.
 
 ## 🛠️ Usage
 
@@ -143,7 +145,7 @@ Or use slash commands within interactive chat:
 
 ### Persistent Configuration System
 
-The agent uses an automatic persistent configuration system that saves settings to `~/.config/mcp-agent/config.json`:
+The agent uses an automatic persistent configuration system that saves settings to `~/.config/cli-agent/config.json`:
 
 -   **API Keys**: Set via environment variables
 -   **Model Preferences**: Automatically saved when using switch commands
@@ -187,7 +189,7 @@ DEFAULT_PROVIDER_MODEL=anthropic:claude-3.5-sonnet  # defaults to deepseek:deeps
 SUBAGENT_PERMISSIONS_BYPASS=false             # bypass permission checks for subagents, defaults to false
 
 # Host Configuration (optional)
-HOST_NAME=mcp-agent                            # defaults to 'mcp-agent'
+HOST_NAME=cli-agent                            # defaults to 'cli-agent'
 LOG_LEVEL=INFO                                 # defaults to INFO
 ```
 
@@ -359,7 +361,7 @@ Please read our [CONTRIBUTING.md](CONTRIBUTING.md) file for more details on our 
 ## 🔒 Security
 
 -   **API Keys**: Stored as environment variables
--   **Configuration**: Automatically managed in user home directory (`~/.config/mcp-agent/`)
+-   **Configuration**: Automatically managed in user home directory (`~/.config/cli-agent/`)
 -   **MCP Servers**: Local configurations with session-based tool permissions
 -   **Tool Execution**: Built-in permission system for sensitive operations
 -   **Subagent Isolation**: Subagents run in controlled environments with specific tool access
@@ -378,10 +380,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
--   🐛 [Report Issues](https://github.com/amranu/agent/issues)
--   💬 [Discussions](https://github.com/amranu/agent/discussions)
--   📖 [Wiki](https://github.com/amranu/agent/wiki)
+-   🐛 [Report Issues](https://github.com/amranu/cli-agent/issues)
+-   💬 [Discussions](https://github.com/amranu/cli-agent/discussions)
+-   📖 [Wiki](https://github.com/amranu/cli-agent/wiki)
 
 ---
 
-**Happy coding with MCP Agent! 🤖✨**
+**Happy coding with CLI Agent! 🤖✨**

@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 if TYPE_CHECKING:
     from cli_agent.core.base_agent import BaseMCPAgent
 
+# Import config migration function
+from config import get_config_dir
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -20,14 +23,14 @@ class SlashCommandManager:
         self.load_custom_commands()
 
     def load_custom_commands(self):
-        """Load custom commands from .claude/commands/ and ~/.config/mcp-agent/commands/"""
+        """Load custom commands from .claude/commands/ and ~/.config/cli-agent/commands/"""
         # Project-specific commands
         project_commands_dir = Path(".claude/commands")
         if project_commands_dir.exists():
             self._load_commands_from_dir(project_commands_dir, "project")
 
         # Personal commands
-        personal_commands_dir = Path.home() / ".config" / "mcp-agent" / "commands"
+        personal_commands_dir = get_config_dir() / "commands"
         if personal_commands_dir.exists():
             self._load_commands_from_dir(personal_commands_dir, "personal")
 

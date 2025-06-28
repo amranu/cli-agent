@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import requests
+from config import get_config_dir
 
 
 class BuiltinToolExecutor:
@@ -149,8 +150,8 @@ class BuiltinToolExecutor:
 
     def _get_todo_file_path(self) -> str:
         """Get the session-specific todo file path."""
-        # Create .config/mcp-agent directory if it doesn't exist
-        config_dir = Path.home() / ".config" / "mcp-agent"
+        # Create .config/cli-agent directory if it doesn't exist
+        config_dir = get_config_dir()
         config_dir.mkdir(parents=True, exist_ok=True)
 
         # Get session ID from agent if available, otherwise use 'default'

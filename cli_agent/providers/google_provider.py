@@ -50,17 +50,7 @@ class GoogleProvider(BaseProvider):
                 self.http_client = http_client
 
                 # Register with global HTTP client manager for centralized cleanup
-                try:
-                    from cli_agent.utils.http_client import http_client_manager
-
-                    http_client_manager.register_client(
-                        f"google_{id(http_client)}", http_client
-                    )
-                    logger.debug(f"Registered Google HTTP client with global manager")
-                except ImportError:
-                    logger.warning(
-                        "HTTP client manager not available for Google client registration"
-                    )
+                self._register_http_client(http_client)
 
             except Exception as e:
                 logger.warning(f"Failed to create custom HTTP client: {e}")

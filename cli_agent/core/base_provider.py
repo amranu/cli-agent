@@ -223,6 +223,26 @@ class BaseProvider(ABC):
 
     # Helper methods that providers can use
 
+    def _register_http_client(self, client: Any, client_type: str = None) -> None:
+        """Register HTTP client with global manager for centralized cleanup.
+        
+        Args:
+            client: The HTTP client instance to register
+            client_type: Optional client type identifier for debugging
+        """
+        try:
+            from cli_agent.utils.http_client import http_client_manager
+            
+            client_id = f"{self.name}_{id(client)}"
+            http_client_manager.register_client(client_id, client)
+            
+            client_desc = f"{client_type} " if client_type else ""
+            logger.debug(f"Registered {self.name} {client_desc}HTTP client with global manager")
+        except ImportError:
+            logger.warning(
+                f"HTTP client manager not available for {self.name} client registration"
+            )
+
     def _extract_headers(self, response: Any) -> Dict[str, str]:
         """Extract headers from response if available.
 

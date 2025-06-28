@@ -27,14 +27,14 @@ def read_requirements():
 
 
 setup(
-    name="agent",
+    name="cli-agent",
     version="1.0.0",
     description="MCP-enabled AI assistant with tool integration",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
     author="CLI Agent Team",
     author_email="",
-    url="https://github.com/amranu/agent",
+    url="https://github.com/amranu/cli-agent",
     packages=find_packages(),
     py_modules=["agent", "config", "mcp_deepseek_host", "mcp_gemini_host"],
     install_requires=read_requirements(),
@@ -60,7 +60,7 @@ setup(
     python_requires=">=3.8",
     keywords="ai assistant mcp tools cli chatbot deepseek gemini",
     project_urls={
-        "Bug Reports": "https://github.com/amranu/agent/issues",
-        "Source": "https://github.com/amranu/agent",
+        "Bug Reports": "https://github.com/amranu/cli-agent/issues",
+        "Source": "https://github.com/amranu/cli-agent",
     },
 )

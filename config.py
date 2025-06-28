@@ -2,13 +2,39 @@
 
 import logging
 import os
+import shutil
 import time
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+
+def migrate_mcp_agent_config():
+    """Migrate configuration from old mcp-agent directory to new cli-agent directory."""
+    old_config_dir = Path.home() / ".config" / "mcp-agent"
+    new_config_dir = Path.home() / ".config" / "cli-agent"
+    
+    # Skip if old directory doesn't exist or new directory already exists
+    if not old_config_dir.exists() or new_config_dir.exists():
+        return
+    
+    try:
+        logger.info(f"Migrating configuration from {old_config_dir} to {new_config_dir}")
+        shutil.move(str(old_config_dir), str(new_config_dir))
+        logger.info("Configuration migration completed successfully")
+    except Exception as e:
+        logger.warning(f"Failed to migrate configuration: {e}")
+        # If migration fails, just continue - the old config will still work
+
+
+def get_config_dir() -> Path:
+    """Get the configuration directory, with migration from old location if needed."""
+    migrate_mcp_agent_config()
+    return Path.home() / ".config" / "cli-agent"
 
 
 class MCPServerConfig(BaseModel):
@@ -1109,8 +1135,8 @@ Then restart the agent.
                         logger.info("No Ollama models found - skipping Ollama provider")
 
                 except Exception as e:
-                    logger.warning(f"Failed to get dynamic Ollama models: {e}")
-                    logger.info("Ollama provider unavailable - skipping")
+                    logger.debug(f"Failed to get dynamic Ollama models: {e}")
+                    logger.debug("Ollama provider unavailable - skipping")
 
         # Cache the complete result
         self._model_cache[cache_key] = {"data": available, "timestamp": current_time}
@@ -1167,8 +1193,8 @@ Then restart the agent.
         import json
         from pathlib import Path
 
-        # Store MCP config in ~/.config/mcp-agent/ to persist across working directories
-        config_dir = Path.home() / ".config" / "mcp-agent"
+        # Store MCP config in ~/.config/cli-agent/ to persist across working directories
+        config_dir = get_config_dir()
         config_dir.mkdir(parents=True, exist_ok=True)
         mcp_config_file = config_dir / "mcp_servers.json"
 
@@ -1189,8 +1215,8 @@ Then restart the agent.
         import json
         from pathlib import Path
 
-        # Load MCP config from ~/.config/mcp-agent/ to persist across working directories
-        config_dir = Path.home() / ".config" / "mcp-agent"
+        # Load MCP config from ~/.config/cli-agent/ to persist across working directories
+        config_dir = get_config_dir()
         mcp_config_file = config_dir / "mcp_servers.json"
 
         if not mcp_config_file.exists():
@@ -1363,12 +1389,12 @@ Then restart the agent.
             raise
 
     def save_persistent_config(self):
-        """Save persistent configuration to ~/.config/mcp-agent/config.json."""
+        """Save persistent configuration to ~/.config/cli-agent/config.json."""
         import json
         from pathlib import Path
 
-        # Store persistent config in ~/.config/mcp-agent/
-        config_dir = Path.home() / ".config" / "mcp-agent"
+        # Store persistent config in ~/.config/cli-agent/
+        config_dir = get_config_dir()
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / "config.json"
 
@@ -1394,11 +1420,11 @@ Then restart the agent.
             print(f"Warning: Could not save persistent configuration: {e}")
 
     def load_persistent_config(self):
-        """Load persistent configuration from ~/.config/mcp-agent/config.json."""
+        """Load persistent configuration from ~/.config/cli-agent/config.json."""
         import json
         from pathlib import Path
 
-        config_dir = Path.home() / ".config" / "mcp-agent"
+        config_dir = get_config_dir()
         config_file = config_dir / "config.json"
 
         if not config_file.exists():

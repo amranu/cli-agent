@@ -36,15 +36,7 @@ class OllamaProvider(BaseProvider):
         )
 
         # Register with global HTTP client manager for centralized cleanup
-        try:
-            from cli_agent.utils.http_client import http_client_manager
-
-            http_client_manager.register_client(f"ollama_{id(client)}", client)
-            logger.debug(f"Registered Ollama HTTP client with global manager")
-        except ImportError:
-            logger.warning(
-                "HTTP client manager not available for Ollama client registration"
-            )
+        self._register_http_client(client)
 
         logger.debug(f"Created Ollama HTTP client with timeout: {timeout}s")
         return client

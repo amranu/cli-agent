@@ -15,7 +15,7 @@ import click
 
 from cli_agent.core.base_agent import BaseMCPAgent
 from cli_agent.core.input_handler import InterruptibleInput
-from config import HostConfig, load_config
+from config import HostConfig, load_config, get_config_dir
 
 # Import local modules with error handling for different environments
 try:
@@ -401,7 +401,7 @@ async def chat(
         import json
         import os
 
-        todo_dir = os.path.expanduser("~/.config/mcp-agent")
+        todo_dir = str(get_config_dir())
         os.makedirs(todo_dir, exist_ok=True)
         todo_file = os.path.join(todo_dir, f"todos_{session_id}.json")
         with open(todo_file, "w") as f:

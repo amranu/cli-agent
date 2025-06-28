@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from cli_agent.core.global_interrupt import get_global_interrupt_manager
+from config import get_config_dir
 
 # Configure logging
 logging.basicConfig(
@@ -67,8 +68,8 @@ class InterruptibleInput:
         
         Creates a persistent history file in the user's config directory.
         """
-        # Create config directory for mcp-agent
-        self.config_dir = Path.home() / ".config" / "mcp-agent"
+        # Create config directory for cli-agent
+        self.config_dir = get_config_dir()
         self.config_dir.mkdir(parents=True, exist_ok=True)
         
         # Set up history file path

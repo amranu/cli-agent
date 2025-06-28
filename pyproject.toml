@@ -57,9 +57,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/anthropics/cli-agent"
-"Bug Reports" = "https://github.com/anthropics/cli-agent/issues"
-"Source Code" = "https://github.com/anthropics/cli-agent"
+Homepage = "https://github.com/amranu/cli-agent"
+"Bug Reports" = "https://github.com/amranu/cli-agent/issues"
+"Source Code" = "https://github.com/amranu/cli-agent"
 
 [project.scripts]
 agent = "agent:main"

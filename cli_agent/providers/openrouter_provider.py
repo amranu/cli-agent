@@ -45,15 +45,7 @@ class OpenRouterProvider(BaseProvider):
             )
 
             # Register with global HTTP client manager for centralized cleanup
-            try:
-                from cli_agent.utils.http_client import http_client_manager
-
-                http_client_manager.register_client(f"openrouter_{id(client)}", client)
-                logger.debug(f"Registered OpenRouter HTTP client with global manager")
-            except ImportError:
-                logger.warning(
-                    "HTTP client manager not available for OpenRouter client registration"
-                )
+            self._register_http_client(client)
 
             logger.debug(f"Created OpenRouter client with timeout: {timeout}s")
             return client
