@@ -62,14 +62,8 @@ class BaseMCPAgent(ABC):
         # Centralized subagent management system
         if not is_subagent:
             try:
-                # Add project root directory to path for subagent import
-                # subagent.py is in the root directory, not in cli_agent/core/
-                project_root = os.path.dirname(
-                    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                )
-                if project_root not in sys.path:
-                    sys.path.insert(0, project_root)
-                from subagent import SubagentManager
+                # Import SubagentManager from the reorganized location
+                from cli_agent.subagents.subagent import SubagentManager
 
                 self.subagent_manager = SubagentManager(config)
 
