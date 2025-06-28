@@ -4,7 +4,7 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 
 ## 🚀 Features
 
-- **Multiple AI Backends**: Support for Anthropic Claude, OpenAI GPT, DeepSeek, Google Gemini, and OpenRouter with easy extensibility
+- **Multiple AI Backends**: Support for Anthropic Claude, OpenAI GPT, DeepSeek, Google Gemini, OpenRouter, and ollama with easy extensibility
 - **MCP Model Server**: Expose all AI models as standardized MCP tools with persistent conversations
 - **Modular Architecture**: Provider-model separation with centralized base agent for maximum flexibility
 - **MCP Server Integration**: Connect to multiple MCP servers for extended functionality
