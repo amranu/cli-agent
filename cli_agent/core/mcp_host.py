@@ -194,6 +194,7 @@ class MCPHost(BaseLLMProvider):
         metadata = {}
         content_emitted = False  # Track if we've already emitted the text content
         original_content = ""  # Keep original content for conversation history
+        is_thinking_content = False  # Track if reasoning content came from thinking tags
 
         logger.debug(
             "Starting comprehensive event-driven streaming response processing"
@@ -244,8 +245,26 @@ class MCPHost(BaseLLMProvider):
 
                 # Handle regular content - accumulate for final buffered emission
                 if hasattr(delta, "content") and delta.content:
-                    accumulated_content += delta.content
-                    original_content += delta.content  # Keep for conversation history
+                    # Check if this chunk contains thinking content for qwen models and extract it
+                    if not accumulated_reasoning_content:
+                        chunk_special_content = self.model.parse_special_content(delta.content)
+                        if "thinking_content" in chunk_special_content:
+                            # Extract thinking content and treat it like reasoning content
+                            accumulated_reasoning_content = chunk_special_content["thinking_content"]
+                            is_thinking_content = True  # Mark this as thinking content for proper tag formatting
+                            # Remove thinking tags from the content stream
+                            import re
+                            thinking_pattern = r'<think>(.*?)</think>'
+                            cleaned_content = re.sub(thinking_pattern, '', delta.content, flags=re.DOTALL).strip()
+                            if cleaned_content:  # Only add if there's content left after removing thinking tags
+                                accumulated_content += cleaned_content
+                            original_content += delta.content  # Keep original with tags for conversation history
+                        else:
+                            accumulated_content += delta.content
+                            original_content += delta.content  # Keep for conversation history
+                    else:
+                        accumulated_content += delta.content
+                        original_content += delta.content  # Keep for conversation history
 
                 # Handle tool calls in streaming with events
                 if hasattr(delta, "tool_calls") and delta.tool_calls:
@@ -266,10 +285,15 @@ class MCPHost(BaseLLMProvider):
                             and not content_emitted
                             and accumulated_content
                         ):
-                            # Tool call detected! Emit accumulated content immediately
+                            # Tool call detected! Check for thinking content and emit accumulated content immediately
                             content_to_emit = accumulated_content
+                            
+                            # Prepend reasoning/thinking content if present
                             if accumulated_reasoning_content:
-                                reasoning_with_tags = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
+                                if is_thinking_content:
+                                    reasoning_with_tags = f"<think>\n{accumulated_reasoning_content}\n</think>\n\n"
+                                else:
+                                    reasoning_with_tags = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
                                 content_to_emit = reasoning_with_tags + content_to_emit
 
                             await self.event_emitter.emit_text(
@@ -358,13 +382,16 @@ class MCPHost(BaseLLMProvider):
 
                                 # Emit accumulated content before first tool call if not already emitted
                                 if not content_emitted and accumulated_content:
-                                    # Prepend reasoning content if present
+                                    # Check for thinking content and prepend
                                     content_to_emit = accumulated_content
+                                    
+                                    # Prepend reasoning/thinking content if present
                                     if accumulated_reasoning_content:
-                                        reasoning_with_tags = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
-                                        content_to_emit = (
-                                            reasoning_with_tags + content_to_emit
-                                        )
+                                        if is_thinking_content:
+                                            reasoning_with_tags = f"<think>\n{accumulated_reasoning_content}\n</think>\n\n"
+                                        else:
+                                            reasoning_with_tags = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
+                                        content_to_emit = reasoning_with_tags + content_to_emit
 
                                     await self.event_emitter.emit_text(
                                         content=content_to_emit,
@@ -422,9 +449,25 @@ class MCPHost(BaseLLMProvider):
                         logger.debug(
                             f"Gemini chunk total text accumulated: '{chunk_text[:100]}...' (len={len(chunk_text)})"
                         )
-                        # Accumulate the chunk text into the main content
-                        accumulated_content += chunk_text
-                        original_content += chunk_text  # Keep for conversation history
+                        # Check if chunk text contains thinking content and extract it
+                        if chunk_text and not accumulated_reasoning_content:
+                            chunk_special_content = self.model.parse_special_content(chunk_text)
+                            if "thinking_content" in chunk_special_content:
+                                # Extract thinking content and treat it like reasoning content
+                                accumulated_reasoning_content = chunk_special_content["thinking_content"]
+                                is_thinking_content = True  # Mark this as thinking content for proper tag formatting
+                                # Remove thinking tags from the content stream
+                                import re
+                                thinking_pattern = r'<think>(.*?)</think>'
+                                cleaned_chunk_text = re.sub(thinking_pattern, '', chunk_text, flags=re.DOTALL).strip()
+                                if cleaned_chunk_text:  # Only add if there's content left after removing thinking tags
+                                    accumulated_content += cleaned_chunk_text
+                            else:
+                                accumulated_content += chunk_text
+                        else:
+                            accumulated_content += chunk_text
+                        
+                        original_content += chunk_text  # Keep original for conversation history
                     else:
                         logger.debug("Gemini chunk candidate has no parts")
                 else:
@@ -434,13 +477,15 @@ class MCPHost(BaseLLMProvider):
 
         # Only emit content if it wasn't already emitted during tool call processing
         if not content_emitted:
-            # Prepend reasoning content to accumulated content if present (with tags)
+            # Prepend reasoning/thinking content with appropriate tags
             if accumulated_reasoning_content:
-                reasoning_with_tags = (
-                    f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
-                )
+                if is_thinking_content:
+                    reasoning_with_tags = f"<think>\n{accumulated_reasoning_content}\n</think>\n\n"
+                    logger.debug(f"Prepended thinking content with tags to main content")
+                else:
+                    reasoning_with_tags = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
+                    logger.debug(f"Prepended reasoning content with tags to main content")
                 accumulated_content = reasoning_with_tags + accumulated_content
-                logger.debug(f"Prepended reasoning content with tags to main content")
 
             # Emit accumulated content as properly formatted markdown
             logger.debug(
@@ -471,12 +516,10 @@ class MCPHost(BaseLLMProvider):
 
         # Handle accumulated reasoning content
         if accumulated_reasoning_content:
-            metadata["reasoning_content"] = accumulated_reasoning_content
-
-        # Parse model-specific content (but skip if we already handled reasoning content from API)
-        if not accumulated_reasoning_content:
-            special_content = self.model.parse_special_content(accumulated_content)
-            metadata.update(special_content)
+            if is_thinking_content:
+                metadata["thinking_content"] = accumulated_reasoning_content
+            else:
+                metadata["reasoning_content"] = accumulated_reasoning_content
 
         # Response already emitted during streaming loop above
 
@@ -503,8 +546,11 @@ class MCPHost(BaseLLMProvider):
         # Return original content for conversation history, not the cleared accumulated_content
         final_content = original_content
         if accumulated_reasoning_content and not content_emitted:
-            # Only add reasoning tags if content wasn't already emitted with them
-            final_content = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n{final_content}"
+            # Only add tags if content wasn't already emitted with them
+            if is_thinking_content:
+                final_content = f"<think>\n{accumulated_reasoning_content}\n</think>\n\n{final_content}"
+            else:
+                final_content = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n{final_content}"
 
         return final_content, accumulated_tool_calls, metadata
 

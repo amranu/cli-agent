@@ -189,14 +189,14 @@ class DisplayManager:
                                 reasoning_match.group(0), ""
                             ).strip()
 
-                        # Extract thinking tags
+                        # Extract thinking tags (both <thinking> and <think>)
                         thinking_match = re.search(
-                            r"<thinking>(.*?)</thinking>", remaining_content, re.DOTALL
+                            r"<think(?:ing)?>(.*?)</think(?:ing)?>", remaining_content, re.DOTALL
                         )
                         if thinking_match:
-                            thinking_content = (
-                                f"<thinking>{thinking_match.group(1)}</thinking>"
-                            )
+                            # Preserve the original tag format
+                            full_match = thinking_match.group(0)
+                            thinking_content = full_match
                             remaining_content = remaining_content.replace(
                                 thinking_match.group(0), ""
                             ).strip()

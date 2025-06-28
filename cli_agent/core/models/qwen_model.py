@@ -93,15 +93,21 @@ Use available tools when needed to help users effectively.
 Be precise and thorough in your responses."""
 
     def parse_special_content(self, text_content: str) -> Dict[str, Any]:
-        """Parse Qwen thinking content - preserve tags in output."""
+        """Parse Qwen thinking content for proper formatting."""
         import re
+        import logging
         
-        # Check if there are <think>...</think> blocks
+        logger = logging.getLogger(__name__)
+        logger.debug(f"QwenModel.parse_special_content called with: '{text_content[:200]}...'")
+        
+        # Extract <think>...</think> blocks
         thinking_pattern = r'<think>(.*?)</think>'
         thinking_match = re.search(thinking_pattern, text_content, re.DOTALL)
         
         if thinking_match:
-            # Preserve the thinking content with tags
-            return {"has_thinking": True}
+            thinking_content = thinking_match.group(1).strip()
+            logger.debug(f"Found thinking content: '{thinking_content[:100]}...'")
+            return {"thinking_content": thinking_content}
         
+        logger.debug("No thinking content found")
         return {}
