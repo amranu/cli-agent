@@ -139,11 +139,6 @@ async def run_subagent_task(task_file_path: str):
             host = config.create_host_from_provider_model(is_subagent=True)
             emit_output_with_id(f"Created {config.default_provider_model} subagent")
 
-        # Subagents don't need their own permission manager since they delegate
-        # all permission decisions to the main process via IPC
-        # Set permission_manager to None to ensure tool execution engine bypasses permission checks
-        host.permission_manager = None
-
         # Create custom input handler for subagent that connects to main terminal
         from cli_agent.core.input_handler import InterruptibleInput
         

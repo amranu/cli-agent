@@ -139,6 +139,19 @@ class SubagentCoordinator:
 
                 # Display the permission prompt to the user via event system
                 if self.event_emitter:
+                    # Check queue status
+                    queue_size = self._permission_queue.qsize() if self._permission_queue else 0
+                    total_requests = queue_size + 1  # Include current request
+                    current_position = 1  # We're processing this one now
+                    
+                    # Show queue status if multiple requests
+                    if total_requests > 1:
+                        await self.event_emitter.emit_system_message(
+                            f"📋 Permission Request {current_position} of {total_requests}",
+                            "queue_status",
+                            "📊",
+                        )
+                    
                     # Force a clear line and add proper spacing
                     await self.event_emitter.emit_text(
                         "\n\n" + "=" * 60 + "\n", is_markdown=False, is_streaming=False
@@ -204,6 +217,16 @@ class SubagentCoordinator:
                 logger.info(f"Wrote permission response to {response_file}")
             except Exception as e:
                 logger.error(f"Error writing permission response: {e}")
+                
+            # Show remaining requests in queue
+            if self._permission_queue:
+                remaining = self._permission_queue.qsize()
+                if remaining > 0 and self.event_emitter:
+                    await self.event_emitter.emit_system_message(
+                        f"✅ Permission handled. Processing next request ({remaining} remaining)...",
+                        "queue_update",
+                        "➡️",
+                    )
 
         except Exception as e:
             logger.error(f"Error handling subagent permission request: {e}")
