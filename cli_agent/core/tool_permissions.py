@@ -264,6 +264,17 @@ class ToolPermissionManager:
         Returns ToolPermissionResult with decision and whether to skip prompting.
         """
 
+        # For subagents, ALWAYS set the tool information on the input handler
+        # This must happen before any early returns so the info is available for display
+        if input_handler is not None and hasattr(input_handler, "subagent_context"):
+            tool_description = format_tool_description(tool_name, arguments)
+            print(f"[DEBUG PERMISSION] Setting subagent attrs: tool_name='{tool_name}', desc='{tool_description}', handler_id={id(input_handler)}")
+            input_handler._permission_tool_name = tool_name
+            input_handler._permission_arguments = arguments
+            input_handler._permission_description = tool_description
+            input_handler._permission_full_prompt = f"Allow {tool_name}? {tool_description}"
+            print(f"[DEBUG PERMISSION] After setting: _permission_tool_name={getattr(input_handler, '_permission_tool_name', 'NOT_SET')}")
+
         # Check session-level auto-approve
         if self.session_auto_approve or self.config.auto_approve_session:
             return ToolPermissionResult(
@@ -295,16 +306,6 @@ class ToolPermissionManager:
             return ToolPermissionResult(
                 allowed=True, reason="No input handler available"
             )
-
-        # For subagents, always set the tool information on the input handler
-        # even if we might skip the actual prompt logic
-        if hasattr(input_handler, "subagent_context"):
-            tool_description = format_tool_description(tool_name, arguments)
-            print(f"[DEBUG PERMISSION] Setting subagent attrs: tool_name='{tool_name}', desc='{tool_description}', handler_id={id(input_handler)}")
-            input_handler._permission_tool_name = tool_name
-            input_handler._permission_arguments = arguments
-            input_handler._permission_description = tool_description
-            print(f"[DEBUG PERMISSION] After setting: _permission_tool_name={getattr(input_handler, '_permission_tool_name', 'NOT_SET')}")
 
         return await self._prompt_user_for_permission(
             tool_name, arguments, input_handler
