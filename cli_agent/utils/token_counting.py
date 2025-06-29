@@ -14,27 +14,54 @@ from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
-# Import tokenization libraries with fallbacks
-try:
-    import tiktoken
-    TIKTOKEN_AVAILABLE = True
-except ImportError:
-    TIKTOKEN_AVAILABLE = False
-    logger.warning("tiktoken not available - falling back to estimation for OpenAI models")
+# Lazy import flags - imports only happen when needed
+TIKTOKEN_AVAILABLE = None
+TRANSFORMERS_AVAILABLE = None  
+ANTHROPIC_AVAILABLE = None
 
-try:
-    from transformers import AutoTokenizer
-    TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    TRANSFORMERS_AVAILABLE = False
-    logger.warning("transformers not available - falling back to estimation for some models")
+# Lazy import cache
+_tiktoken = None
+_transformers = None
+_anthropic = None
 
-try:
-    import anthropic
-    ANTHROPIC_AVAILABLE = True
-except ImportError:
-    ANTHROPIC_AVAILABLE = False
-    logger.warning("anthropic library not available - falling back to estimation for Claude models")
+def _get_tiktoken():
+    """Lazy import tiktoken only when needed."""
+    global _tiktoken, TIKTOKEN_AVAILABLE
+    if _tiktoken is None and TIKTOKEN_AVAILABLE is not False:
+        try:
+            import tiktoken
+            _tiktoken = tiktoken
+            TIKTOKEN_AVAILABLE = True
+        except ImportError:
+            TIKTOKEN_AVAILABLE = False
+            logger.warning("tiktoken not available - falling back to estimation for OpenAI models")
+    return _tiktoken
+
+def _get_transformers():
+    """Lazy import transformers only when needed."""
+    global _transformers, TRANSFORMERS_AVAILABLE
+    if _transformers is None and TRANSFORMERS_AVAILABLE is not False:
+        try:
+            from transformers import AutoTokenizer
+            _transformers = AutoTokenizer
+            TRANSFORMERS_AVAILABLE = True
+        except ImportError:
+            TRANSFORMERS_AVAILABLE = False
+            logger.warning("transformers not available - falling back to estimation for some models")
+    return _transformers
+
+def _get_anthropic():
+    """Lazy import anthropic only when needed."""
+    global _anthropic, ANTHROPIC_AVAILABLE
+    if _anthropic is None and ANTHROPIC_AVAILABLE is not False:
+        try:
+            import anthropic
+            _anthropic = anthropic
+            ANTHROPIC_AVAILABLE = True
+        except ImportError:
+            ANTHROPIC_AVAILABLE = False
+            logger.warning("anthropic library not available - falling back to estimation for Claude models")
+    return _anthropic
 
 
 class TokenCounter:
@@ -119,21 +146,27 @@ class TokenCounter:
         tokenizer = None
         
         try:
-            if family == "openai" and TIKTOKEN_AVAILABLE:
-                encoding = model_info.get("encoding", "cl100k_base")
-                tokenizer = tiktoken.get_encoding(encoding)
-                logger.debug(f"Loaded tiktoken encoding {encoding} for {model_name}")
+            if family == "openai":
+                tiktoken = _get_tiktoken()
+                if tiktoken:
+                    encoding = model_info.get("encoding", "cl100k_base")
+                    tokenizer = tiktoken.get_encoding(encoding)
+                    logger.debug(f"Loaded tiktoken encoding {encoding} for {model_name}")
                 
-            elif family == "anthropic" and ANTHROPIC_AVAILABLE:
-                # Anthropic provides a tokenizer through their library
-                tokenizer = anthropic.Anthropic().get_tokenizer()
-                logger.debug(f"Loaded Anthropic tokenizer for {model_name}")
+            elif family == "anthropic":
+                anthropic = _get_anthropic()
+                if anthropic:
+                    # Anthropic provides a tokenizer through their library
+                    tokenizer = anthropic.Anthropic().get_tokenizer()
+                    logger.debug(f"Loaded Anthropic tokenizer for {model_name}")
                 
-            elif family in ["llama", "mistral", "qwen"] and TRANSFORMERS_AVAILABLE:
-                hf_model = model_info.get("hf_model")
-                if hf_model:
-                    tokenizer = AutoTokenizer.from_pretrained(hf_model)
-                    logger.debug(f"Loaded HuggingFace tokenizer {hf_model} for {model_name}")
+            elif family in ["llama", "mistral", "qwen"]:
+                AutoTokenizer = _get_transformers()
+                if AutoTokenizer:
+                    hf_model = model_info.get("hf_model")
+                    if hf_model:
+                        tokenizer = AutoTokenizer.from_pretrained(hf_model)
+                        logger.debug(f"Loaded HuggingFace tokenizer {hf_model} for {model_name}")
                     
         except Exception as e:
             logger.warning(f"Failed to load tokenizer for {model_name}: {e}")
