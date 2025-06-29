@@ -297,12 +297,9 @@ class MCPHost(BaseLLMProvider):
                                 content_to_emit = reasoning_with_tags + content_to_emit
 
                             await self.event_emitter.emit_text(
-                                content=content_to_emit,
+                                content=content_to_emit + "\n",
                                 is_streaming=False,
                                 is_markdown=True,
-                            )
-                            await self.event_emitter.emit_text(
-                                content="\n", is_streaming=False, is_markdown=False
                             )
                             content_emitted = True
                             # Clear accumulated content since it was already emitted
@@ -394,14 +391,9 @@ class MCPHost(BaseLLMProvider):
                                         content_to_emit = reasoning_with_tags + content_to_emit
 
                                     await self.event_emitter.emit_text(
-                                        content=content_to_emit,
+                                        content=content_to_emit + "\n",
                                         is_streaming=False,
                                         is_markdown=True,
-                                    )
-                                    await self.event_emitter.emit_text(
-                                        content="\n",
-                                        is_streaming=False,
-                                        is_markdown=False,
                                     )
                                     content_emitted = True
                                     # Clear accumulated content since it was already emitted
@@ -495,13 +487,9 @@ class MCPHost(BaseLLMProvider):
                 logger.debug(
                     f"Emitting buffered content: {len(accumulated_content)} characters - '{accumulated_content[:200]}...'"
                 )
-                # Emit the complete response with markdown formatting
+                # Emit the complete response with markdown formatting and newline
                 await self.event_emitter.emit_text(
-                    content=accumulated_content, is_streaming=False, is_markdown=True
-                )
-                # Add newline after LLM response
-                await self.event_emitter.emit_text(
-                    content="\n", is_streaming=False, is_markdown=False
+                    content=accumulated_content + "\n", is_streaming=False, is_markdown=True
                 )
             else:
                 logger.debug(
