@@ -140,6 +140,37 @@ async def run_subagent_task(task_file_path: str):
             host = config.create_host_from_provider_model(is_subagent=True)
             emit_output_with_id(f"Created {config.default_provider_model} subagent")
 
+        # Disable permission manager entirely for subagents in stream-json mode
+        if os.environ.get("STREAM_JSON_MODE") == "true":
+            host.permission_manager = None
+            emit_output_with_id("Disabled permission manager for stream-json mode")
+
+        # Set up JSON handler if in stream-json mode (detected via environment)
+        if os.environ.get("STREAM_JSON_MODE") == "true":
+            try:
+                from streaming_json import StreamingJSONHandler
+                import uuid
+                
+                # Create JSON handler for subagent
+                json_handler = StreamingJSONHandler(session_id=str(uuid.uuid4()))
+                
+                # Set JSON handler on display manager to enable tool JSON emission
+                if hasattr(host, 'display_manager'):
+                    host.display_manager.json_handler = json_handler
+                    emit_output_with_id("Subagent configured for stream-json mode")
+                    
+                    # Send system init message for subagent
+                    json_handler.send_system_init(
+                        cwd=os.getcwd(),
+                        tools=list(host.available_tools.keys()),
+                        mcp_servers=[],
+                        model=host._get_current_runtime_model() if hasattr(host, '_get_current_runtime_model') else "subagent"
+                    )
+                else:
+                    emit_output_with_id("Warning: Host has no display_manager for JSON setup")
+            except ImportError as e:
+                emit_output_with_id(f"Warning: Could not set up JSON handler: {e}")
+
         # Create custom input handler for subagent that connects to main terminal
         from cli_agent.core.input_handler import InterruptibleInput
         
@@ -162,6 +193,10 @@ async def run_subagent_task(task_file_path: str):
                 multiline_mode: bool = False,
                 allow_escape_interrupt: bool = False,
             ):
+                # Auto-approve all tools when in stream-json mode (detected via environment)
+                if os.environ.get("STREAM_JSON_MODE") == "true":
+                    return "y"
+                
                 # For subagents, emit a permission request and wait for response via a temp file
                 try:
                     import os
@@ -447,9 +482,10 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
 
 
 if __name__ == "__main__":
+    # Parse arguments - simplified since stream-json mode is detected via environment
     if len(sys.argv) != 2:
         print("Usage: python subagent_runner.py <task_file>")
         sys.exit(1)
-
+    
     task_file = sys.argv[1]
     asyncio.run(run_subagent_task(task_file))

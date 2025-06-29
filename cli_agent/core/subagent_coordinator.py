@@ -90,9 +90,15 @@ class SubagentCoordinator:
                     response_file = message.data.get("response_file")
                     if response_file:
                         try:
+                            # Check if in stream-json mode and auto-approve
+                            if os.environ.get("STREAM_JSON_MODE") == "true":
+                                response = "y"  # Auto-approve for stream-json mode
+                                logger.info(f"Auto-approved subagent {task_id} in fallback (stream-json mode)")
+                            else:
+                                response = "n"  # Default to deny
                             with open(response_file, "w") as f:
-                                f.write("n")  # Default to deny
-                            logger.info(f"Created fallback denial response for {task_id}")
+                                f.write(response)
+                            logger.info(f"Created fallback response '{response}' for {task_id}")
                         except Exception as write_error:
                             logger.error(f"Failed to create fallback response: {write_error}")
                     return
@@ -108,15 +114,38 @@ class SubagentCoordinator:
             response_file = message.data.get("response_file")
             if response_file:
                 try:
+                    # Check if in stream-json mode and auto-approve
+                    if os.environ.get("STREAM_JSON_MODE") == "true":
+                        response = "y"  # Auto-approve for stream-json mode
+                        logger.info(f"Auto-approved subagent {task_id} in queue error fallback (stream-json mode)")
+                    else:
+                        response = "n"  # Default to deny
                     with open(response_file, "w") as f:
-                        f.write("n")  # Default to deny
-                    logger.info(f"Created fallback denial response for {task_id} due to queue error")
+                        f.write(response)
+                    logger.info(f"Created fallback response '{response}' for {task_id} due to queue error")
                 except Exception as write_error:
                     logger.error(f"Failed to create fallback response: {write_error}")
     
     async def _handle_subagent_permission_request_impl(self, message, task_id):
         """Internal implementation of permission request handling."""
         try:
+            # FIRST: Check if in stream-json mode and auto-approve IMMEDIATELY before ANY processing
+            if os.environ.get("STREAM_JSON_MODE") == "true":
+                response_file = message.data.get("response_file")
+                tool_name = message.data.get("tool_name", "unknown")
+                if response_file:
+                    try:
+                        with open(response_file, "w") as f:
+                            f.write("y")
+                        logger.info(f"Auto-approved subagent {task_id} tool {tool_name} for stream-json mode (immediate bypass)")
+                        return  # Exit immediately without ANY permission processing
+                    except Exception as e:
+                        logger.error(f"Error writing auto-approval response: {e}")
+                        return
+                else:
+                    logger.error("No response file in permission request")
+                    return
+
             # Extract permission request details
             request_id = message.data.get("request_id")
             response_file = message.data.get("response_file")
@@ -129,8 +158,14 @@ class SubagentCoordinator:
                 return
 
             logger.info(
-                f"Handling permission request from subagent {task_id}: {tool_name}"
+                f"[DEBUG] Handling permission request from subagent {task_id}: {tool_name}"
             )
+            
+            # Debug: Check if agent has display_manager and json_handler
+            has_display_manager = hasattr(self.agent, 'display_manager')
+            has_json_handler = has_display_manager and hasattr(self.agent.display_manager, 'json_handler')
+            json_handler_value = has_json_handler and self.agent.display_manager.json_handler
+            logger.info(f"[DEBUG] Agent has display_manager: {has_display_manager}, has json_handler: {has_json_handler}, json_handler value: {json_handler_value}")
 
             # Try to use clean permission display first
             use_clean_display = False
@@ -227,27 +262,33 @@ class SubagentCoordinator:
             # The subagent has displayed the permission prompt and is waiting for our response
             # We need to get the user's input and write it to the response file
             try:
-                # Use the main agent's input handler to get user input
-                if hasattr(self.agent, "_input_handler") and self.agent._input_handler:
-                    input_handler = self.agent._input_handler
+                # Check if in stream-json mode and auto-approve if so
+                if os.environ.get("STREAM_JSON_MODE") == "true":
+                    # Auto-approve for stream-json mode
+                    user_choice = "y"
+                    logger.info(f"Auto-approved subagent {task_id} tool {tool_name} for stream-json mode")
                 else:
-                    from cli_agent.core.input_handler import InterruptibleInput
+                    # Use the main agent's input handler to get user input
+                    if hasattr(self.agent, "_input_handler") and self.agent._input_handler:
+                        input_handler = self.agent._input_handler
+                    else:
+                        from cli_agent.core.input_handler import InterruptibleInput
 
-                    input_handler = InterruptibleInput()
+                        input_handler = InterruptibleInput()
 
-                # Temporarily update the persistent prompt for permission choice
-                from cli_agent.core.terminal_manager import get_terminal_manager
+                    # Temporarily update the persistent prompt for permission choice
+                    from cli_agent.core.terminal_manager import get_terminal_manager
 
-                terminal_manager = get_terminal_manager()
+                    terminal_manager = get_terminal_manager()
 
-                # Update the existing persistent prompt to show permission choice
-                terminal_manager.update_prompt("Choice [y/a/A/n/d]: ")
+                    # Update the existing persistent prompt to show permission choice
+                    terminal_manager.update_prompt("Choice [y/a/A/n/d]: ")
 
-                # Get user choice using the input handler (no prompt since it's persistent)
-                user_choice = input_handler.get_input("")
+                    # Get user choice using the input handler (no prompt since it's persistent)
+                    user_choice = input_handler.get_input("")
 
-                # Reset prompt back to normal
-                terminal_manager.update_prompt("> ")
+                    # Reset prompt back to normal
+                    terminal_manager.update_prompt("> ")
 
                 # Handle None return (EOF/interrupt)
                 if user_choice is None:
@@ -325,6 +366,39 @@ class SubagentCoordinator:
                 else "unknown"
             )
 
+            # In stream-json mode, filter out noise and only show essential messages
+            if os.environ.get("STREAM_JSON_MODE") == "true":
+                # Skip configuration/setup messages in stream-json mode
+                if message.type == "output":
+                    content = message.content.lower()
+                    # Filter out configuration and setup messages
+                    if any(phrase in content for phrase in [
+                        "configuration loaded", "created", "configured", "tool permission manager",
+                        "executing task with", "conversation iteration", "calling host.generate",
+                        "starting task", "disabled permission manager", "subagent configured"
+                    ]):
+                        return  # Skip these messages in stream-json mode
+                
+                # Skip status messages except for important ones
+                elif message.type == "status":
+                    status = message.data.get("status", "unknown") if message.data else "unknown"
+                    if status in ["started", "completed"]:
+                        pass  # Allow these
+                    else:
+                        return  # Skip other status messages
+                
+                # Handle permission requests silently
+                elif message.type == "permission_request":
+                    response_file = message.data.get("response_file")
+                    if response_file:
+                        try:
+                            with open(response_file, "w") as f:
+                                f.write("y")
+                            logger.info(f"Auto-approved subagent {task_id} permission for stream-json mode (no prompt)")
+                        except Exception as e:
+                            logger.error(f"Error writing auto-approval response: {e}")
+                    return  # Exit immediately without any permission processing
+
             if message.type == "output":
                 formatted = f"🤖 [SUBAGENT-{task_id}] {message.content}"
             elif message.type == "status":
@@ -358,6 +432,16 @@ class SubagentCoordinator:
     def display_subagent_message_immediately(self, formatted: str, message_type: str):
         """Display subagent message immediately during streaming or collection periods."""
         try:
+            # Check if in stream-json mode and emit JSON directly
+            if (os.environ.get("STREAM_JSON_MODE") == "true" 
+                and hasattr(self.agent, 'display_manager') 
+                and hasattr(self.agent.display_manager, 'json_handler') 
+                and self.agent.display_manager.json_handler):
+                
+                # Emit subagent message as JSON
+                self.agent.display_manager.json_handler.send_assistant_text(formatted)
+                return
+
             # Emit as event - event system is always available
             import asyncio
 

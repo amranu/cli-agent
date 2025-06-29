@@ -1388,9 +1388,10 @@ Then restart the agent.
             print(f"Error: Could not write to .env file: {e}")
             raise
 
-    def save_persistent_config(self):
+    def save_persistent_config(self, silent: bool = False):
         """Save persistent configuration to ~/.config/cli-agent/config.json."""
         import json
+        import os
         from pathlib import Path
 
         # Store persistent config in ~/.config/cli-agent/
@@ -1415,7 +1416,10 @@ Then restart the agent.
         try:
             with open(config_file, "w") as f:
                 json.dump(persistent_config, f, indent=2)
-            print(f"Configuration saved to {config_file}")
+            # Check global stream-json mode flag
+            suppress_output = silent or os.environ.get("STREAM_JSON_MODE") == "true"
+            if not suppress_output:
+                print(f"Configuration saved to {config_file}")
         except Exception as e:
             print(f"Warning: Could not save persistent configuration: {e}")
 
@@ -1493,20 +1497,20 @@ Then restart the agent.
             self.save_persistent_config()
             print(f"Migrated to provider-model: {self.default_provider_model}")
 
-    def set_last_session_id(self, session_id: str):
+    def set_last_session_id(self, session_id: str, silent: bool = False):
         """Set and persist the last session ID."""
         self.last_session_id = session_id
-        self.save_persistent_config()
+        self.save_persistent_config(silent=silent)
         logger.debug(f"Saved last session ID: {session_id}")
 
     def get_last_session_id(self) -> Optional[str]:
         """Get the last session ID."""
         return self.last_session_id
 
-    def clear_last_session_id(self):
+    def clear_last_session_id(self, silent: bool = False):
         """Clear the last session ID."""
         self.last_session_id = None
-        self.save_persistent_config()
+        self.save_persistent_config(silent=silent)
         logger.debug("Cleared last session ID")
 
 

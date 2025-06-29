@@ -62,7 +62,7 @@ class SubagentProcess:
         self.completed = False
         self.result = None
 
-    async def start(self, config) -> bool:
+    async def start(self, config, agent=None) -> bool:
         """Start the subagent subprocess."""
         try:
             # Create task file
@@ -85,8 +85,13 @@ class SubagentProcess:
             current_dir = os.path.dirname(os.path.abspath(__file__))
             runner_path = os.path.join(current_dir, "subagent_runner.py")
             cmd = ["python", runner_path, task_file]
+            
+            # Stream-json mode is inherited via environment variables
+            # Pass current environment including STREAM_JSON_MODE to subprocess
+            import os
+            env = os.environ.copy()
             self.process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
             )
 
             logger.info(f"Started subagent {self.task_id} with PID {self.process.pid}")
@@ -162,8 +167,9 @@ class SubagentProcess:
 class SubagentManager:
     """Manages multiple subagent processes with event-driven messaging."""
 
-    def __init__(self, config):
+    def __init__(self, config, agent=None):
         self.config = config
+        self.agent = agent
         self.subagents: Dict[str, SubagentProcess] = {}
         self.message_queue: asyncio.Queue = asyncio.Queue()
         self.message_callbacks: List[Callable[[SubagentMessage], None]] = []
@@ -190,7 +196,7 @@ class SubagentManager:
         )
 
         subagent = SubagentProcess(task_id, description, prompt, model=model)
-        success = await subagent.start(self.config)
+        success = await subagent.start(self.config, agent=self.agent)
 
         if success:
             self.subagents[task_id] = subagent

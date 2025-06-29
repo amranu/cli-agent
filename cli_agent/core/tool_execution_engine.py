@@ -20,6 +20,7 @@ class ToolExecutionEngine:
     async def execute_mcp_tool(self, tool_key: str, arguments: Dict[str, Any]) -> str:
         """Execute an MCP tool (built-in or external) and return the result."""
         import json
+        import os
         import sys
 
         try:
@@ -140,7 +141,10 @@ class ToolExecutionEngine:
                     f"Bypassing permission check for subagent tool: {tool_name} (SUBAGENT_PERMISSIONS_BYPASS=true)"
                 )
 
-            if (
+            # Skip ALL permission checks if in stream-json mode
+            if os.environ.get("STREAM_JSON_MODE") == "true":
+                logger.info(f"Skipping all permission checks for tool {tool_name} (stream-json mode)")
+            elif (
                 hasattr(self.agent, "permission_manager")
                 and self.agent.permission_manager
                 and not bypass_subagent_permissions
@@ -156,11 +160,21 @@ class ToolExecutionEngine:
                 if self.agent.is_subagent and input_handler and hasattr(input_handler, 'set_current_tool_info'):
                     input_handler.set_current_tool_info(tool_name, arguments)
                 
-                permission_result = (
-                    await self.agent.permission_manager.check_tool_permission(
-                        tool_name, arguments, input_handler
+                # Bypass permissions when in stream-json mode (programmatic usage)
+                import os
+                if os.environ.get("STREAM_JSON_MODE") == "true":
+                    from cli_agent.core.tool_permissions import ToolPermissionResult
+                    permission_result = ToolPermissionResult(
+                        allowed=True, 
+                        reason="Auto-approved for stream-json mode", 
+                        skip_prompt=True
                     )
-                )
+                else:
+                    permission_result = (
+                        await self.agent.permission_manager.check_tool_permission(
+                            tool_name, arguments, input_handler
+                        )
+                    )
 
                 if not permission_result.allowed:
                     if (

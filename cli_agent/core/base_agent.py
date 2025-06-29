@@ -65,7 +65,7 @@ class BaseMCPAgent(ABC):
                 # Import SubagentManager from the reorganized location
                 from cli_agent.subagents.subagent import SubagentManager
 
-                self.subagent_manager = SubagentManager(config)
+                self.subagent_manager = SubagentManager(config, agent=self)
 
                 # Event-driven message handling
                 self.subagent_message_queue = asyncio.Queue()
@@ -545,10 +545,20 @@ class BaseMCPAgent(ABC):
 
             # Emit tool call event
             if hasattr(self, "event_emitter"):
+                print(f"[DEBUG] Emitting tool call event: {tool_name}")
                 await self.event_emitter.emit_tool_call(
                     tool_name=tool_name,
                     tool_id=f"toolu_{i}_{tool_name}",
                     arguments=arguments,
+                )
+                
+            # Also emit JSON directly if display manager has json_handler
+            if hasattr(self, "display_manager") and hasattr(self.display_manager, "json_handler") and self.display_manager.json_handler:
+                print(f"[DEBUG] Emitting JSON tool use: {tool_name}")
+                self.display_manager.json_handler.send_assistant_tool_use(
+                    tool_name=tool_name,
+                    tool_input=arguments,
+                    tool_use_id=f"toolu_{i}_{tool_name}",
                 )
 
             # Generate tool use ID for tracking
@@ -613,6 +623,15 @@ class BaseMCPAgent(ABC):
                             tool_name=tool_name,
                             tool_id=tool_use_id,
                             result=str(tool_result),
+                            is_error=not tool_success,
+                        )
+                        
+                    # Also emit JSON directly if display manager has json_handler
+                    if hasattr(self, "display_manager") and hasattr(self.display_manager, "json_handler") and self.display_manager.json_handler:
+                        print(f"[DEBUG] Emitting JSON tool result: {tool_name}")
+                        self.display_manager.json_handler.send_tool_result(
+                            tool_use_id=tool_use_id,
+                            content=str(tool_result),
                             is_error=not tool_success,
                         )
 
@@ -1875,8 +1894,22 @@ class BaseMCPAgent(ABC):
             if subagent_result.get("cancelled"):
                 from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
 
-                print(subagent_result["interrupt_msg"], flush=True)
-                print(subagent_result["completion_msg"], flush=True)
+                # Check if we're in stream-json mode for cancellation messages too
+                if (hasattr(self, 'display_manager') 
+                    and hasattr(self.display_manager, 'json_handler') 
+                    and self.display_manager.json_handler):
+                    # For stream-json mode, send cancellation messages as assistant text
+                    json_handler = self.display_manager.json_handler
+                    interrupt_text = subagent_result["interrupt_msg"].strip()
+                    completion_text = subagent_result["completion_msg"].strip()
+                    
+                    if interrupt_text:
+                        json_handler.send_assistant_text(interrupt_text)
+                    if completion_text:
+                        json_handler.send_assistant_text(completion_text)
+                else:
+                    print(subagent_result["interrupt_msg"], flush=True)
+                    print(subagent_result["completion_msg"], flush=True)
                 # Raise exception to return to prompt immediately
                 raise ToolDeniedReturnToPrompt("Subagent cancelled due to tool denial")
 
@@ -1885,10 +1918,28 @@ class BaseMCPAgent(ABC):
                 # For streaming mode, store messages for the caller to yield
                 subagent_result["_should_yield_messages"] = True
             elif interactive:
-                # For non-streaming interactive mode, print messages immediately
-                print(subagent_result["interrupt_msg"], flush=True)
-                print(subagent_result["completion_msg"], flush=True)
-                print(subagent_result["restart_msg"], flush=True)
+                # Check if we're in stream-json mode
+                if (hasattr(self, 'display_manager') 
+                    and hasattr(self.display_manager, 'json_handler') 
+                    and self.display_manager.json_handler):
+                    # For stream-json mode, send messages as assistant text
+                    json_handler = self.display_manager.json_handler
+                    # Strip the \r\n from messages for clean JSON output
+                    interrupt_text = subagent_result["interrupt_msg"].strip()
+                    completion_text = subagent_result["completion_msg"].strip()
+                    restart_text = subagent_result["restart_msg"].strip()
+                    
+                    if interrupt_text:
+                        json_handler.send_assistant_text(interrupt_text)
+                    if completion_text:
+                        json_handler.send_assistant_text(completion_text)
+                    if restart_text:
+                        json_handler.send_assistant_text(restart_text)
+                else:
+                    # For non-streaming interactive mode, print messages immediately
+                    print(subagent_result["interrupt_msg"], flush=True)
+                    print(subagent_result["completion_msg"], flush=True)
+                    print(subagent_result["restart_msg"], flush=True)
 
             return current_messages, subagent_result, True
 

@@ -348,6 +348,16 @@ async def chat(
 ):
     """Start interactive chat session."""
     try:
+        # Set stream-json mode flag IMMEDIATELY at the start
+        if output_format == "stream-json":
+            import os
+            import logging
+            os.environ["STREAM_JSON_MODE"] = "true"
+            # Suppress all non-critical logging for clean JSON output
+            logging.getLogger().setLevel(logging.WARNING)
+            logging.getLogger("cli_agent").setLevel(logging.WARNING)
+            logging.getLogger("asyncio").setLevel(logging.WARNING)
+            
         # Parse tool permissions from CLI arguments
         def parse_tool_list(tool_args):
             """Parse comma or space-separated tool lists."""
@@ -368,34 +378,41 @@ async def chat(
         if continue_session:
             session_id = session_manager.continue_last_session()
             if session_id:
-                click.echo(f"Continuing session: {session_id[:8]}...")
+                if output_format != "stream-json":
+                    click.echo(f"Continuing session: {session_id[:8]}...")
                 messages = session_manager.get_messages()
-                click.echo(f"Restored {len(messages)} messages")
-                # Display recent chat history for context
-                _display_chat_history(messages)
+                if output_format != "stream-json":
+                    click.echo(f"Restored {len(messages)} messages")
+                    # Display recent chat history for context
+                    _display_chat_history(messages)
             else:
-                click.echo("No previous session found, starting new conversation")
+                if output_format != "stream-json":
+                    click.echo("No previous session found, starting new conversation")
                 session_id = session_manager.create_new_session()
                 messages = []
         elif resume_session_id:
             session_id = session_manager.resume_session(resume_session_id)
             if session_id:
-                click.echo(f"Resumed session: {session_id[:8]}...")
+                if output_format != "stream-json":
+                    click.echo(f"Resumed session: {session_id[:8]}...")
                 messages = session_manager.get_messages()
-                click.echo(f"Restored {len(messages)} messages")
-                # Display recent chat history for context
-                _display_chat_history(messages)
+                if output_format != "stream-json":
+                    click.echo(f"Restored {len(messages)} messages")
+                    # Display recent chat history for context
+                    _display_chat_history(messages)
             else:
-                click.echo(
-                    f"Session {resume_session_id} not found, starting new conversation"
-                )
+                if output_format != "stream-json":
+                    click.echo(
+                        f"Session {resume_session_id} not found, starting new conversation"
+                    )
                 session_id = session_manager.create_new_session()
                 messages = []
         else:
             # Start new session
             session_id = session_manager.create_new_session()
             messages = []
-            click.echo(f"Started new session: {session_id[:8]}...")
+            if output_format != "stream-json":
+                click.echo(f"Started new session: {session_id[:8]}...")
 
         # Initialize todo file for this session
         import json
@@ -416,6 +433,7 @@ async def chat(
                 "Error: Invalid format combination. Supported: text->text, stream-json->stream-json, or text->stream-json."
             )
             return
+
 
         # Handle streaming JSON mode
         if input_format == "stream-json" or output_format == "stream-json":
@@ -1072,6 +1090,10 @@ async def handle_streaming_json_chat(
     # Get available tools
     tool_names = list(host.available_tools.keys())
 
+    # Set up DisplayManager for JSON output globally (not just during response streaming)
+    if output_format == "stream-json" and hasattr(host, "display_manager"):
+        host.display_manager.json_handler = handler
+
     # Send system init
     if output_format == "stream-json":
         handler.send_system_init(
@@ -1155,6 +1177,10 @@ async def handle_streaming_json_chat(
                         messages.append({"role": "assistant", "content": response})
 
     finally:
+        # Clean up JSON handler
+        if output_format == "stream-json" and hasattr(host, "display_manager"):
+            host.display_manager.json_handler = None
+            
         # Clean up HTTP clients to prevent "Event loop is closed" errors
         try:
             from cli_agent.utils.http_client import http_client_manager
@@ -1173,22 +1199,15 @@ async def handle_streaming_json_chat(
 async def stream_json_response(host, handler, messages, model_name):
     """Stream response in JSON format using unified event system."""
 
-    # Set up DisplayManager to emit JSON instead of console output
-    if hasattr(host, "display_manager"):
-        host.display_manager.json_handler = handler
+    # JSON handler is now set globally in handle_streaming_json_chat, no need to set it here
+    
+    # Use streaming mode to ensure proper tool result integration and conversation state maintenance
+    # This ensures tool calls and tool results are properly added to the conversation
+    response = await host.generate_response(messages, stream=True)
 
-    try:
-        # Use normal generate_response - unified tool execution will happen
-        # Events will be automatically converted to JSON by DisplayManager
-        response = await host.generate_response(messages, stream=False)
-
-        # Send final response if it's text (for cases without tool calls)
-        if isinstance(response, str):
-            handler.send_assistant_text(response)
-    finally:
-        # Clean up
-        if hasattr(host, "display_manager"):
-            host.display_manager.json_handler = None
+    # Send final response if it's text (for cases without tool calls)
+    if isinstance(response, str):
+        handler.send_assistant_text(response)
 
 
 async def handle_text_chat(
