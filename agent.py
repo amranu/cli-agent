@@ -353,10 +353,12 @@ async def chat(
             import os
             import logging
             os.environ["STREAM_JSON_MODE"] = "true"
-            # Suppress all non-critical logging for clean JSON output
-            logging.getLogger().setLevel(logging.WARNING)
-            logging.getLogger("cli_agent").setLevel(logging.WARNING)
-            logging.getLogger("asyncio").setLevel(logging.WARNING)
+            # Suppress all non-critical logging for clean JSON output (unless debug is enabled)
+            current_level = logging.getLogger().getEffectiveLevel()
+            if current_level != logging.DEBUG:  # Don't suppress if debug mode is on
+                logging.getLogger().setLevel(logging.WARNING)
+                logging.getLogger("cli_agent").setLevel(logging.WARNING)
+                logging.getLogger("asyncio").setLevel(logging.WARNING)
             
         # Parse tool permissions from CLI arguments
         def parse_tool_list(tool_args):
