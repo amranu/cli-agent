@@ -417,13 +417,13 @@ class SubagentCoordinator:
                 formatted = f"📨 [SUBAGENT-{task_id}] {message.type}: {message.content}"
 
             # Display the message immediately
-            self.display_subagent_message_immediately(formatted, message.type)
+            self.display_subagent_message_immediately(formatted, message.type, message.content)
 
             logger.debug(f"Displayed subagent message: {message.type}")
         except Exception as e:
             logger.error(f"Error displaying subagent message: {e}")
 
-    def display_subagent_message_immediately(self, formatted: str, message_type: str):
+    def display_subagent_message_immediately(self, formatted: str, message_type: str, clean_content: str = None):
         """Display subagent message immediately during streaming or collection periods."""
         try:
             # Check if in stream-json mode and emit JSON directly
@@ -432,8 +432,9 @@ class SubagentCoordinator:
                 and hasattr(self.agent.display_manager, 'json_handler') 
                 and self.agent.display_manager.json_handler):
                 
-                # Emit subagent message as JSON
-                self.agent.display_manager.json_handler.send_assistant_text(formatted)
+                # In stream-json mode, emit clean content without SUBAGENT prefixes
+                if clean_content and clean_content.strip():
+                    self.agent.display_manager.json_handler.send_assistant_text(clean_content)
                 return
 
             # Emit as event - event system is always available
