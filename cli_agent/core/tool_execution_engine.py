@@ -142,6 +142,10 @@ class ToolExecutionEngine:
                     f"Bypassing permission check for subagent tool: {tool_name} (SUBAGENT_PERMISSIONS_BYPASS=true)"
                 )
 
+            # Debug logging for permission checks
+            if self.agent.is_subagent:
+                logger.debug(f"Subagent permission check for tool '{tool_name}': has_permission_manager={hasattr(self.agent, 'permission_manager')}, manager_is_not_none={self.agent.permission_manager is not None if hasattr(self.agent, 'permission_manager') else False}, bypass={bypass_subagent_permissions}")
+
             if (
                 hasattr(self.agent, "permission_manager")
                 and self.agent.permission_manager
@@ -153,6 +157,11 @@ class ToolExecutionEngine:
                 )
 
                 input_handler = getattr(self.agent, "_input_handler", None)
+                
+                # Debug logging for subagents
+                if self.agent.is_subagent:
+                    logger.debug(f"Subagent calling permission check: tool_name='{tool_name}', input_handler_type={type(input_handler).__name__ if input_handler else None}, has_subagent_context={hasattr(input_handler, 'subagent_context') if input_handler else False}")
+                
                 permission_result = (
                     await self.agent.permission_manager.check_tool_permission(
                         tool_name, arguments, input_handler

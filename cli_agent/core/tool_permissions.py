@@ -307,6 +307,10 @@ class ToolPermissionManager:
 
         tool_description = format_tool_description(tool_name, arguments)
         use_clean_display = False
+        
+        # Debug logging for subagents
+        if hasattr(input_handler, "subagent_context"):
+            logger.debug(f"Subagent permission prompt: tool_name='{tool_name}', description='{tool_description}', arguments={arguments}")
 
         # Try to use clean permission display first
         try:
