@@ -366,6 +366,9 @@ class ToolPermissionManager:
                 input_handler._permission_description = tool_description
                 input_handler._permission_full_prompt = full_prompt
                 
+                # Debug logging
+                logger.debug(f"Setting subagent permission details: tool_name='{tool_name}', description='{tool_description}'")
+                
                 # Send just the choice request, not the full prompt
                 response = input_handler.get_input("Choice [y/a/A/n/d]: ")
             else:

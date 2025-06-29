@@ -176,6 +176,9 @@ async def run_subagent_task(task_file_path: str):
                     tool_description = getattr(self, '_permission_description', 'Unknown tool')
                     full_prompt = getattr(self, '_permission_full_prompt', prompt_text)
                     
+                    # Debug logging to help identify the issue
+                    emit_output_with_id(f"DEBUG: Permission request for tool_name='{tool_name}', description='{tool_description}'")
+                    
                     emit_message(
                         "permission_request",
                         full_prompt,  # Send the full formatted prompt for display
