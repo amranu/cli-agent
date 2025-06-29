@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from cli_agent.core.permission_display import get_clean_permission_display, format_tool_description
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,6 +61,9 @@ class ToolPermissionManager:
         self.session_approvals: Set[str] = set()  # Tools approved for this session
         self.session_denials: Set[str] = set()  # Tools denied for this session
         self.session_auto_approve: bool = False  # Auto-approve all for this session
+        
+        # Get clean permission display manager
+        self.clean_permission_display = get_clean_permission_display()
 
         # Load persistent session permissions
         self._load_session_permissions()
@@ -300,9 +305,31 @@ class ToolPermissionManager:
     ) -> ToolPermissionResult:
         """Prompt the user for tool execution permission."""
 
-        tool_description = self._format_tool_description(tool_name, arguments)
+        tool_description = format_tool_description(tool_name, arguments)
+        use_clean_display = False
 
-        # Build complete permission prompt as a single message
+        # Try to use clean permission display first
+        try:
+            if self.clean_permission_display.can_use_clean_display():
+                use_clean_display = self.clean_permission_display.show_permission_request(
+                    tool_name=tool_name,
+                    tool_description=tool_description,
+                    arguments=arguments,
+                    task_id="main-process",
+                    queue_position=1,
+                    total_requests=1,
+                )
+                
+                if use_clean_display:
+                    logger.debug(f"Using clean display for main process permission request: {tool_name}")
+                else:
+                    logger.debug(f"Clean display failed, falling back to traditional for: {tool_name}")
+                    
+        except Exception as e:
+            logger.warning(f"Clean permission display failed: {e}, falling back to traditional")
+            use_clean_display = False
+
+        # Build complete permission prompt as a single message (for both clean and fallback)
         prompt_lines = [
             "🔧 Tool Execution Request:",
             f"Tool: {tool_name}",
@@ -399,14 +426,31 @@ class ToolPermissionManager:
                             pass
                 else:
                     # Fallback to direct prompt display for cases without queue
-                    print(full_prompt)
-                    print()  # Add newline to fix cursor position
+                    if not use_clean_display:
+                        print(full_prompt)
+                        print()  # Add newline to fix cursor position
                     response = input_handler.get_input("Choice [y/a/A/n/d]: ")
+                    
+            # Get the user response
             if response is None:
+                # Restore terminal state if using clean display
+                if use_clean_display:
+                    try:
+                        self.clean_permission_display.restore_terminal()
+                    except Exception as e:
+                        logger.warning(f"Failed to restore terminal state after interrupt: {e}")
+                        
                 return ToolPermissionResult(
                     allowed=False, reason="User interrupted input"
                 )
             response = response.strip().lower()
+            
+            # Restore terminal state if using clean display
+            if use_clean_display:
+                try:
+                    self.clean_permission_display.restore_terminal()
+                except Exception as e:
+                    logger.warning(f"Failed to restore terminal state: {e}")
 
             if response in ["y", "yes"]:
                 return ToolPermissionResult(allowed=True, reason="User approved once")

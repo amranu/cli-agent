@@ -7,6 +7,8 @@ import termios
 import tty
 from typing import Optional
 
+from cli_agent.core.terminal_state import get_terminal_state
+
 
 class TerminalManager:
     """Manages terminal display with persistent bottom prompt."""
@@ -18,6 +20,9 @@ class TerminalManager:
         self.terminal_height = 24  # Default fallback
         self.terminal_width = 80  # Default fallback
         self.original_settings = None
+        
+        # Get terminal state manager for advanced operations
+        self.terminal_state = get_terminal_state()
 
         if self.is_terminal:
             try:
@@ -181,6 +186,56 @@ class TerminalManager:
             except OSError:
                 # Keep current values if refresh fails
                 pass
+
+    def can_clear_screen(self) -> bool:
+        """Check if terminal supports screen clearing operations."""
+        return self.terminal_state.can_clear_screen()
+
+    def clear_screen(self) -> bool:
+        """Clear the entire screen and move cursor to top-left.
+        
+        Returns:
+            bool: True if clearing was successful, False otherwise
+        """
+        return self.terminal_state.clear_screen()
+
+    def restore_screen(self) -> bool:
+        """Restore the previous screen state.
+        
+        Returns:
+            bool: True if restoration was successful, False otherwise
+        """
+        return self.terminal_state.restore_screen()
+
+    def create_centered_box(self, content: str, title: str = "", width: Optional[int] = None) -> str:
+        """Create a centered box with content.
+        
+        Args:
+            content: Text content to box
+            title: Optional title for the box
+            width: Width of the box (defaults to fit content + padding)
+            
+        Returns:
+            Formatted and centered box with content
+        """
+        # Create the box
+        boxed_content = self.terminal_state.create_box(content, title, width)
+        
+        # Center horizontally
+        centered_box = self.terminal_state.center_text(boxed_content)
+        
+        # Position vertically
+        positioned_box = self.terminal_state.position_vertically_centered(centered_box)
+        
+        return positioned_box
+
+    def get_terminal_capabilities(self) -> dict:
+        """Get information about terminal capabilities.
+        
+        Returns:
+            Dictionary with terminal capability information
+        """
+        return self.terminal_state.get_terminal_info()
 
 
 # Global terminal manager instance

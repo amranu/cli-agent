@@ -8,6 +8,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from cli_agent.core.global_interrupt import get_global_interrupt_manager
+from cli_agent.core.permission_display import get_clean_permission_display, format_tool_description
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,9 @@ class SubagentCoordinator:
             from cli_agent.core.event_system import EventEmitter
 
             self.event_emitter = EventEmitter(agent.event_bus)
+        
+        # Get clean permission display manager
+        self.clean_permission_display = get_clean_permission_display()
         
         # Initialize permission queue immediately to avoid race conditions
         try:
@@ -116,15 +120,109 @@ class SubagentCoordinator:
             # Extract permission request details
             request_id = message.data.get("request_id")
             response_file = message.data.get("response_file")
-            prompt_text = message.content
+            tool_name = message.data.get("tool_name", "unknown")
+            arguments = message.data.get("arguments", {})
+            tool_description = message.data.get("description", f"Execute tool: {tool_name}")
 
             if not request_id or not response_file:
                 logger.error("Invalid permission request format")
                 return
 
             logger.info(
-                f"Handling permission request from subagent {task_id}: {prompt_text}"
+                f"Handling permission request from subagent {task_id}: {tool_name}"
             )
+
+            # Try to use clean permission display first
+            use_clean_display = False
+            
+            try:
+                # Calculate queue status
+                queue_size = self._permission_queue.qsize() if self._permission_queue else 0
+                total_requests = queue_size + 1  # Include current request
+                current_position = 1  # We're processing this one now
+                
+                # Attempt to show clean permission display
+                if self.clean_permission_display.can_use_clean_display():
+                    use_clean_display = self.clean_permission_display.show_permission_request(
+                        tool_name=tool_name,
+                        tool_description=tool_description,
+                        arguments=arguments,
+                        task_id=task_id,
+                        queue_position=current_position,
+                        total_requests=total_requests,
+                    )
+                    
+                    if use_clean_display:
+                        logger.debug(f"Using clean display for permission request from {task_id}")
+                    else:
+                        logger.debug(f"Clean display failed, falling back to traditional for {task_id}")
+                        
+            except Exception as e:
+                logger.warning(f"Clean permission display failed: {e}, falling back to traditional")
+                use_clean_display = False
+
+            # Fallback to traditional display if clean display not available or failed
+            if not use_clean_display and self.event_emitter:
+                # Check queue status
+                queue_size = self._permission_queue.qsize() if self._permission_queue else 0
+                total_requests = queue_size + 1  # Include current request
+                current_position = 1  # We're processing this one now
+                
+                # Show queue status if multiple requests
+                if total_requests > 1:
+                    await self.event_emitter.emit_system_message(
+                        f"📋 Permission Request {current_position} of {total_requests}",
+                        "queue_status",
+                        "📊",
+                    )
+                
+                # Force a clear line and add proper spacing
+                await self.event_emitter.emit_text(
+                    "\n\n" + "=" * 60 + "\n", is_markdown=False, is_streaming=False
+                )
+                # Format request source appropriately
+                if task_id == "main-process":
+                    source_description = "Main process is requesting tool permission:"
+                else:
+                    source_description = f"Subagent {task_id} is requesting tool permission:"
+                
+                await self.event_emitter.emit_system_message(
+                    source_description,
+                    "permission_request",
+                    "🔐",
+                )
+                
+                # Format the permission prompt content
+                prompt_lines = [
+                    f"Tool: {tool_name}",
+                    f"Action: {tool_description}",
+                ]
+                
+                # Show arguments if they're not sensitive
+                if tool_name != "bash_execute" or len(str(arguments)) < 100:
+                    prompt_lines.append(f"Arguments: {arguments}")
+                
+                prompt_lines.extend([
+                    "",
+                    "Allow this tool to execute?",
+                    "[y] Yes, execute once",
+                    f"[a] Yes, and allow '{tool_name}' for the rest of this session",
+                    "[A] Yes, and auto-approve ALL tools for this session",
+                    "[n] No, deny this execution",
+                    f"[d] No, and deny '{tool_name}' for the rest of this session",
+                ])
+                
+                prompt_text = "\n".join(prompt_lines)
+                
+                await self.event_emitter.emit_text(
+                    f"\n{prompt_text}\n", is_markdown=False, is_streaming=False
+                )
+                await self.event_emitter.emit_text(
+                    "=" * 60 + "\n", is_markdown=False, is_streaming=False
+                )
+
+                # Wait for events to be processed and display to settle
+                await asyncio.sleep(0.5)
 
             # The subagent has displayed the permission prompt and is waiting for our response
             # We need to get the user's input and write it to the response file
@@ -136,48 +234,6 @@ class SubagentCoordinator:
                     from cli_agent.core.input_handler import InterruptibleInput
 
                     input_handler = InterruptibleInput()
-
-                # Display the permission prompt to the user via event system
-                if self.event_emitter:
-                    # Check queue status
-                    queue_size = self._permission_queue.qsize() if self._permission_queue else 0
-                    total_requests = queue_size + 1  # Include current request
-                    current_position = 1  # We're processing this one now
-                    
-                    # Show queue status if multiple requests
-                    if total_requests > 1:
-                        await self.event_emitter.emit_system_message(
-                            f"📋 Permission Request {current_position} of {total_requests}",
-                            "queue_status",
-                            "📊",
-                        )
-                    
-                    # Force a clear line and add proper spacing
-                    await self.event_emitter.emit_text(
-                        "\n\n" + "=" * 60 + "\n", is_markdown=False, is_streaming=False
-                    )
-                    # Format request source appropriately
-                    if task_id == "main-process":
-                        source_description = "Main process is requesting tool permission:"
-                    else:
-                        source_description = f"Subagent {task_id} is requesting tool permission:"
-                    
-                    await self.event_emitter.emit_system_message(
-                        source_description,
-                        "permission_request",
-                        "🔐",
-                    )
-                    await self.event_emitter.emit_text(
-                        f"\n{prompt_text}\n", is_markdown=False, is_streaming=False
-                    )
-                    await self.event_emitter.emit_text(
-                        "=" * 60 + "\n", is_markdown=False, is_streaming=False
-                    )
-
-                    # Wait for events to be processed and display to settle
-                    import asyncio
-
-                    await asyncio.sleep(0.5)
 
                 # Temporarily update the persistent prompt for permission choice
                 from cli_agent.core.terminal_manager import get_terminal_manager
@@ -218,15 +274,38 @@ class SubagentCoordinator:
             except Exception as e:
                 logger.error(f"Error writing permission response: {e}")
                 
+            # Restore terminal state if using clean display
+            if use_clean_display:
+                try:
+                    self.clean_permission_display.restore_terminal()
+                except Exception as e:
+                    logger.warning(f"Failed to restore terminal state: {e}")
+                
             # Show remaining requests in queue
             if self._permission_queue:
                 remaining = self._permission_queue.qsize()
-                if remaining > 0 and self.event_emitter:
-                    await self.event_emitter.emit_system_message(
-                        f"✅ Permission handled. Processing next request ({remaining} remaining)...",
-                        "queue_update",
-                        "➡️",
-                    )
+                if remaining > 0:
+                    if use_clean_display:
+                        # Show clean queue update
+                        try:
+                            self.clean_permission_display.show_queue_update(remaining)
+                        except Exception as e:
+                            logger.warning(f"Failed to show clean queue update: {e}")
+                            # Fallback to event system
+                            if self.event_emitter:
+                                await self.event_emitter.emit_system_message(
+                                    f"✅ Permission handled. Processing next request ({remaining} remaining)...",
+                                    "queue_update",
+                                    "➡️",
+                                )
+                    else:
+                        # Traditional queue update
+                        if self.event_emitter:
+                            await self.event_emitter.emit_system_message(
+                                f"✅ Permission handled. Processing next request ({remaining} remaining)...",
+                                "queue_update",
+                                "➡️",
+                            )
 
         except Exception as e:
             logger.error(f"Error handling subagent permission request: {e}")
