@@ -247,24 +247,13 @@ class TerminalManager:
                 token_text = f"{color}Tokens: {current_tokens:,}/{token_limit:,} ({percentage:.1f}%)\033[0m"
         
         try:
-            # Refresh terminal size in case of window resize
-            self._refresh_terminal_size()
-            
-            # Save current cursor position
-            self._save_cursor()
-            
-            # Move to the hint line (second-to-last line)
-            hint_line = self.terminal_height - 1
-            sys.stdout.write(f"\033[{hint_line};1H")
-            self._clear_line()
-            sys.stdout.write(f"\n{token_text}")
-            
-            # Restore cursor position
-            self._restore_cursor()
+            # Simple approach: print token info with proper spacing
+            # This will appear above the next prompt automatically
+            print(f"\r{token_text}")
             sys.stdout.flush()
             
         except Exception as e:
-            # If positioning fails, silently continue
+            # If display fails, silently continue
             pass
     
     def _get_token_color(self, percentage: float) -> str:

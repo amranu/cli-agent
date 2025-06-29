@@ -123,6 +123,9 @@ class ChatInterface:
                         await asyncio.sleep(0.5)
                         continue
 
+                # Update token display right before prompting for input
+                self._update_token_display(messages)
+                
                 # Get user input with proper prompt - let prompt_toolkit handle the display
                 user_input = input_handler.get_multiline_input("> ")
 
