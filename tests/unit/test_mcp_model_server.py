@@ -13,7 +13,10 @@ from typing import Dict, List, Any
 
 # Add the project root to Python path for imports
 import sys
-sys.path.insert(0, '/home/andrew/Github/cli-agent')
+import os
+test_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(test_dir))  # Go up two levels from tests/unit/
+sys.path.insert(0, project_root)
 
 from cli_agent.mcp.model_server import (
     ConversationManager,

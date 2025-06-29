@@ -7,13 +7,16 @@ command-line argument parsing, and transport initialization.
 
 import pytest
 import sys
+import os
 import tempfile
 import subprocess
 from unittest.mock import Mock, patch, AsyncMock
 from io import StringIO
 
 # Add the project root to Python path for imports
-sys.path.insert(0, '/home/andrew/Github/cli-agent')
+test_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(test_dir))  # Go up two levels from tests/unit/
+sys.path.insert(0, project_root)
 
 import mcp_server
 
@@ -227,9 +230,18 @@ class TestMCPServerIntegration:
     @pytest.mark.integration
     def test_mcp_server_script_help(self):
         """Test that the MCP server script shows help correctly."""
+        # Find the mcp_server.py script relative to this test file
+        import os
+        test_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(test_dir))  # Go up two levels from tests/unit/
+        mcp_server_path = os.path.join(project_root, 'mcp_server.py')
+        
+        if not os.path.exists(mcp_server_path):
+            pytest.skip(f"MCP server script not found at {mcp_server_path}")
+        
         try:
             result = subprocess.run(
-                [sys.executable, '/home/andrew/Github/cli-agent/mcp_server.py', '--help'],
+                [sys.executable, mcp_server_path, '--help'],
                 capture_output=True,
                 text=True,
                 timeout=10
@@ -251,9 +263,18 @@ class TestMCPServerIntegration:
     @pytest.mark.integration
     def test_mcp_server_script_invalid_args(self):
         """Test that the MCP server script handles invalid arguments."""
+        # Find the mcp_server.py script relative to this test file
+        import os
+        test_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(test_dir))  # Go up two levels from tests/unit/
+        mcp_server_path = os.path.join(project_root, 'mcp_server.py')
+        
+        if not os.path.exists(mcp_server_path):
+            pytest.skip(f"MCP server script not found at {mcp_server_path}")
+        
         try:
             result = subprocess.run(
-                [sys.executable, '/home/andrew/Github/cli-agent/mcp_server.py', '--invalid-arg'],
+                [sys.executable, mcp_server_path, '--invalid-arg'],
                 capture_output=True,
                 text=True,
                 timeout=10
