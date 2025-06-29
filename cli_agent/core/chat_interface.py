@@ -123,8 +123,8 @@ class ChatInterface:
                         await asyncio.sleep(0.5)
                         continue
 
-                # Update token display right before prompting for input
-                self._update_token_display(messages)
+                # Update and show token display right before prompting for input
+                self._update_token_display(messages, show_display=True)
                 
                 # Get user input with proper prompt - let prompt_toolkit handle the display
                 user_input = input_handler.get_multiline_input("> ")
@@ -775,8 +775,13 @@ class ChatInterface:
         # Final fallback: compact if too many messages
         return len(messages) > 50
 
-    def _update_token_display(self, messages: List[Dict[str, Any]]):
-        """Update the token count display below the prompt."""
+    def _update_token_display(self, messages: List[Dict[str, Any]], show_display: bool = False):
+        """Update the token count display.
+        
+        Args:
+            messages: Current conversation messages
+            show_display: Whether to actually print the display (True only before user input)
+        """
         try:
             if hasattr(self.agent, "token_manager") and self.agent.token_manager:
                 # Update token manager with current model
@@ -802,7 +807,8 @@ class ChatInterface:
                 self.terminal_manager.update_token_display(
                     current_tokens=current_tokens,
                     token_limit=token_limit,
-                    model_name=model_name
+                    model_name=model_name,
+                    show_display=show_display
                 )
                 
         except Exception as e:

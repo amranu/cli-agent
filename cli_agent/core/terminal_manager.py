@@ -189,14 +189,15 @@ class TerminalManager:
                 # Keep current values if refresh fails
                 pass
 
-    def update_token_display(self, current_tokens: int, token_limit: int, model_name: str = "", percentage: float = None):
-        """Update the token count display below the prompt.
+    def update_token_display(self, current_tokens: int, token_limit: int, model_name: str = "", percentage: float = None, show_display: bool = False):
+        """Update the token count display.
         
         Args:
             current_tokens: Current token count in conversation
             token_limit: Maximum token limit for the model
             model_name: Name of the current model
             percentage: Pre-calculated percentage (optional)
+            show_display: Whether to actually print the display (True only before user input)
         """
         if not self.token_display_enabled:
             return
@@ -213,8 +214,8 @@ class TerminalManager:
             "percentage": percentage
         }
         
-        # Draw the token display only if in terminal
-        if self.is_terminal:
+        # Draw the token display only if in terminal AND we should show it
+        if self.is_terminal and show_display:
             self._draw_token_display()
     
     def _draw_token_display(self):
