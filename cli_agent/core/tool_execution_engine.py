@@ -26,6 +26,11 @@ class ToolExecutionEngine:
             # Debug logging for tool calls
             logger.debug(f"Tool call: {tool_key} with args: {arguments}")
             
+            # Debug: Show what we're working with for subagents
+            if self.agent.is_subagent:
+                logger.debug(f"Subagent tool execution: tool_key='{tool_key}', available_tools_count={len(self.agent.available_tools)}")
+                logger.debug(f"Available tool keys: {list(self.agent.available_tools.keys())[:5]}...")
+            
             # Handle special case for emit:result calls from subagents
             if tool_key == "emit:result" and self.agent.is_subagent:
                 # Redirect to the proper emit_result tool
@@ -33,20 +38,13 @@ class ToolExecutionEngine:
                 logger.debug(f"Redirected emit:result to {tool_key}")
 
             if tool_key not in self.agent.available_tools:
-                # For subagents with normalized tool names, don't try to convert back to colon format
-                # This prevents the OpenAI tool name format error
-                if self.agent.is_subagent and "_" in tool_key and ":" not in tool_key:
-                    # This is likely a normalized tool name from OpenAI format conversion
-                    # Keep it as-is since the subagent should have both formats available
-                    pass
-                else:
-                    # Use centralized tool key resolution
-                    resolved_key = ToolNameUtils.resolve_tool_key(
-                        tool_key, self.agent.available_tools
-                    )
-                    if resolved_key:
-                        logger.debug(f"Resolved tool '{tool_key}' to '{resolved_key}'")
-                        tool_key = resolved_key
+                # Always try to resolve tool key using the centralized resolver
+                resolved_key = ToolNameUtils.resolve_tool_key(
+                    tool_key, self.agent.available_tools
+                )
+                if resolved_key:
+                    logger.debug(f"Resolved tool '{tool_key}' to '{resolved_key}'")
+                    tool_key = resolved_key
 
                 # Final check if tool still not found
                 if tool_key not in self.agent.available_tools:
@@ -58,6 +56,10 @@ class ToolExecutionEngine:
 
             tool_info = self.agent.available_tools[tool_key]
             tool_name = tool_info["name"]
+            
+            # Debug: Show tool resolution results for subagents
+            if self.agent.is_subagent:
+                logger.debug(f"Subagent resolved tool_key='{tool_key}' to tool_name='{tool_name}', tool_info keys: {list(tool_info.keys())}")
 
             # Show diff preview for replace_in_file and multiedit before permission check
             if tool_name == "replace_in_file" and not self.agent.is_subagent:
@@ -142,10 +144,6 @@ class ToolExecutionEngine:
                     f"Bypassing permission check for subagent tool: {tool_name} (SUBAGENT_PERMISSIONS_BYPASS=true)"
                 )
 
-            # Debug logging for permission checks
-            if self.agent.is_subagent:
-                logger.debug(f"Subagent permission check for tool '{tool_name}': has_permission_manager={hasattr(self.agent, 'permission_manager')}, manager_is_not_none={self.agent.permission_manager is not None if hasattr(self.agent, 'permission_manager') else False}, bypass={bypass_subagent_permissions}")
-
             if (
                 hasattr(self.agent, "permission_manager")
                 and self.agent.permission_manager
@@ -158,15 +156,19 @@ class ToolExecutionEngine:
 
                 input_handler = getattr(self.agent, "_input_handler", None)
                 
-                # Debug logging for subagents
+                # DEBUG PRINT for subagents
                 if self.agent.is_subagent:
-                    logger.debug(f"Subagent calling permission check: tool_name='{tool_name}', input_handler_type={type(input_handler).__name__ if input_handler else None}, has_subagent_context={hasattr(input_handler, 'subagent_context') if input_handler else False}")
+                    print(f"[DEBUG SUBAGENT] About to call permission check: tool_name='{tool_name}', input_handler_id={id(input_handler)}")
                 
                 permission_result = (
                     await self.agent.permission_manager.check_tool_permission(
                         tool_name, arguments, input_handler
                     )
                 )
+                
+                # DEBUG PRINT result
+                if self.agent.is_subagent:
+                    print(f"[DEBUG SUBAGENT] Permission result: allowed={permission_result.allowed}, reason='{permission_result.reason}'")
 
                 if not permission_result.allowed:
                     if (

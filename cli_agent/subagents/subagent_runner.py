@@ -171,13 +171,13 @@ async def run_subagent_task(task_file_path: str):
 
                     # Emit permission request to main process
                     # Get permission details if available
+                    print(f"[DEBUG INPUT_HANDLER] get_input called, handler_id={id(self)}")
+                    print(f"[DEBUG INPUT_HANDLER] Available attrs: {[attr for attr in dir(self) if attr.startswith('_permission')]}")
                     tool_name = getattr(self, '_permission_tool_name', 'unknown')
                     tool_arguments = getattr(self, '_permission_arguments', {})
                     tool_description = getattr(self, '_permission_description', 'Unknown tool')
                     full_prompt = getattr(self, '_permission_full_prompt', prompt_text)
-                    
-                    # Debug logging to help identify the issue
-                    emit_output_with_id(f"DEBUG: Permission request for tool_name='{tool_name}', description='{tool_description}'")
+                    print(f"[DEBUG INPUT_HANDLER] Retrieved: tool_name='{tool_name}', desc='{tool_description}'")
                     
                     emit_message(
                         "permission_request",

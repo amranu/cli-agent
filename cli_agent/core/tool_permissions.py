@@ -296,6 +296,16 @@ class ToolPermissionManager:
                 allowed=True, reason="No input handler available"
             )
 
+        # For subagents, always set the tool information on the input handler
+        # even if we might skip the actual prompt logic
+        if hasattr(input_handler, "subagent_context"):
+            tool_description = format_tool_description(tool_name, arguments)
+            print(f"[DEBUG PERMISSION] Setting subagent attrs: tool_name='{tool_name}', desc='{tool_description}', handler_id={id(input_handler)}")
+            input_handler._permission_tool_name = tool_name
+            input_handler._permission_arguments = arguments
+            input_handler._permission_description = tool_description
+            print(f"[DEBUG PERMISSION] After setting: _permission_tool_name={getattr(input_handler, '_permission_tool_name', 'NOT_SET')}")
+
         return await self._prompt_user_for_permission(
             tool_name, arguments, input_handler
         )
@@ -307,10 +317,6 @@ class ToolPermissionManager:
 
         tool_description = format_tool_description(tool_name, arguments)
         use_clean_display = False
-        
-        # Debug logging for subagents
-        if hasattr(input_handler, "subagent_context"):
-            logger.debug(f"Subagent permission prompt: tool_name='{tool_name}', description='{tool_description}', arguments={arguments}")
 
         # Try to use clean permission display first
         try:
@@ -369,9 +375,6 @@ class ToolPermissionManager:
                 input_handler._permission_arguments = arguments
                 input_handler._permission_description = tool_description
                 input_handler._permission_full_prompt = full_prompt
-                
-                # Debug logging
-                logger.debug(f"Setting subagent permission details: tool_name='{tool_name}', description='{tool_description}'")
                 
                 # Send just the choice request, not the full prompt
                 response = input_handler.get_input("Choice [y/a/A/n/d]: ")
