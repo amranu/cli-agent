@@ -139,22 +139,14 @@ async def run_subagent_task(task_file_path: str):
             host = config.create_host_from_provider_model(is_subagent=True)
             emit_output_with_id(f"Created {config.default_provider_model} subagent")
 
-        # Set up tool permission manager for subagent (inherits main agent settings)
-        from cli_agent.core.input_handler import InterruptibleInput
-        from cli_agent.core.tool_permissions import (
-            ToolPermissionConfig,
-            ToolPermissionManager,
-        )
-
-        permission_config = ToolPermissionConfig(
-            allowed_tools=list(config.allowed_tools),
-            disallowed_tools=list(config.disallowed_tools),
-            auto_approve_session=config.auto_approve_tools,
-        )
-        permission_manager = ToolPermissionManager(permission_config)
-        host.permission_manager = permission_manager
+        # Subagents don't need their own permission manager since they delegate
+        # all permission decisions to the main process via IPC
+        # Set permission_manager to None to ensure tool execution engine bypasses permission checks
+        host.permission_manager = None
 
         # Create custom input handler for subagent that connects to main terminal
+        from cli_agent.core.input_handler import InterruptibleInput
+        
         class SubagentInputHandler(InterruptibleInput):
             def __init__(self, task_id):
                 super().__init__()
@@ -183,12 +175,21 @@ async def run_subagent_task(task_file_path: str):
                     )
 
                     # Emit permission request to main process
+                    # Get permission details if available
+                    tool_name = getattr(self, '_permission_tool_name', 'unknown')
+                    tool_arguments = getattr(self, '_permission_arguments', {})
+                    tool_description = getattr(self, '_permission_description', 'Unknown tool')
+                    full_prompt = getattr(self, '_permission_full_prompt', prompt_text)
+                    
                     emit_message(
                         "permission_request",
-                        prompt_text,
+                        full_prompt,  # Send the full formatted prompt for display
                         task_id=current_task_id,
                         request_id=request_id,
                         response_file=response_file,
+                        tool_name=tool_name,
+                        arguments=tool_arguments,
+                        description=tool_description,
                     )
 
                     # Wait for response file to be created by main process

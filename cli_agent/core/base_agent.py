@@ -449,19 +449,8 @@ class BaseMCPAgent(ABC):
                     formatted = f"❌ [SUBAGENT-{task_id}] {message.content}"
                 elif message.type == "result":
                     formatted = f"✅ [SUBAGENT-{task_id}] Result: {message.content}"
-
-            if message.type == "permission_request":
-                # Handle permission request from subagent
-                import asyncio
-
-                asyncio.create_task(
-                    self.subagent_coordinator.handle_subagent_permission_request(
-                        message, task_id
-                    )
-                )
-                return  # Don't display permission requests, handle them directly
-            else:
-                formatted = f"[SUBAGENT-{task_id} {message.type}] {message.content}"
+                else:
+                    formatted = f"[SUBAGENT-{task_id} {message.type}] {message.content}"
 
             # Only display immediately if we're in yielding mode (subagents active)
             # This ensures clean separation between main agent and subagent output

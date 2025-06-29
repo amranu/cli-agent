@@ -6,6 +6,7 @@ Provides user prompts for tool execution with configurable allowed/disallowed to
 session-based permission tracking, and pattern matching similar to Claude Code.
 """
 
+import asyncio
 import fnmatch
 import json
 import logging
@@ -329,16 +330,78 @@ class ToolPermissionManager:
 
         try:
             # For subagents, pass the full prompt to the input handler
-            # For regular agents, display the prompt and ask for choice
+            # For regular agents, check if we should use the permission queue
             if hasattr(input_handler, "subagent_context"):
-                # Subagent: send full prompt via permission request message
-                choice_prompt = f"{full_prompt}\n\nChoice [y/a/A/n/d]: "
-                response = input_handler.get_input(choice_prompt)
-            else:
-                # Regular agent: display prompt and ask for choice
-                print(full_prompt)
-                print()  # Add newline to fix cursor position
+                # Subagent: don't display prompt immediately, let main process queue handle it
+                # Store the prompt details for the permission request
+                input_handler._permission_tool_name = tool_name
+                input_handler._permission_arguments = arguments
+                input_handler._permission_description = tool_description
+                input_handler._permission_full_prompt = full_prompt
+                
+                # Send just the choice request, not the full prompt
                 response = input_handler.get_input("Choice [y/a/A/n/d]: ")
+            else:
+                # Check if we have access to the subagent coordinator permission queue
+                # If so, use it for consistent queuing of all permission requests
+                agent = getattr(input_handler, '_agent', None)
+                if (agent and hasattr(agent, 'subagent_coordinator') and 
+                    hasattr(agent.subagent_coordinator, '_permission_queue') and
+                    agent.subagent_coordinator._permission_queue is not None):
+                    # Use the shared permission queue for consistent handling
+                    import tempfile
+                    import uuid
+                    import time
+                    import os
+                    
+                    # Create a mock subagent message for queue processing
+                    request_id = str(uuid.uuid4())
+                    temp_dir = tempfile.gettempdir()
+                    response_file = os.path.join(temp_dir, f"main_process_response_{request_id}.txt")
+                    
+                    # Create a mock message similar to subagent permission requests
+                    class MockMessage:
+                        def __init__(self, content, data):
+                            self.type = "permission_request"
+                            self.content = content
+                            self.data = data
+                    
+                    mock_message = MockMessage(
+                        full_prompt,
+                        {
+                            "request_id": request_id,
+                            "response_file": response_file,
+                            "tool_name": tool_name,
+                            "arguments": arguments,
+                            "description": tool_description
+                        }
+                    )
+                    
+                    # Queue the permission request
+                    await agent.subagent_coordinator._permission_queue.put((mock_message, "main-process"))
+                    
+                    # Wait for response file
+                    timeout = 60
+                    start_time = time.time()
+                    while not os.path.exists(response_file):
+                        if time.time() - start_time > timeout:
+                            response = "n"  # Default to deny on timeout
+                            break
+                        await asyncio.sleep(0.1)
+                    else:
+                        # Read response from file
+                        with open(response_file, "r") as f:
+                            response = f.read().strip()
+                        # Clean up temp file
+                        try:
+                            os.remove(response_file)
+                        except:
+                            pass
+                else:
+                    # Fallback to direct prompt display for cases without queue
+                    print(full_prompt)
+                    print()  # Add newline to fix cursor position
+                    response = input_handler.get_input("Choice [y/a/A/n/d]: ")
             if response is None:
                 return ToolPermissionResult(
                     allowed=False, reason="User interrupted input"

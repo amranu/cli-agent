@@ -26,9 +26,92 @@ class SubagentCoordinator:
             from cli_agent.core.event_system import EventEmitter
 
             self.event_emitter = EventEmitter(agent.event_bus)
+        
+        # Initialize permission queue immediately to avoid race conditions
+        try:
+            self._permission_queue = asyncio.Queue()
+            self._permission_processor_task = asyncio.create_task(self._process_permission_requests())
+            logger.info("Permission queue and processor initialized")
+        except RuntimeError:
+            # No event loop yet - will be initialized when first permission request arrives
+            self._permission_queue = None
+            self._permission_processor_task = None
+            logger.debug("Permission queue initialization deferred (no event loop)")
+
+    def _start_permission_processor(self):
+        """Start the background task that processes permission requests sequentially."""
+        import asyncio
+        
+        # Only start if we have an event loop and haven't started yet
+        try:
+            if self._permission_queue is None:
+                self._permission_queue = asyncio.Queue()
+            
+            if self._permission_processor_task is None or self._permission_processor_task.done():
+                self._permission_processor_task = asyncio.create_task(self._process_permission_requests())
+        except RuntimeError:
+            # No event loop running yet - will be started later
+            pass
+
+    async def _process_permission_requests(self):
+        """Background task that processes permission requests one at a time."""
+        while True:
+            try:
+                # Wait for next permission request
+                message, task_id = await self._permission_queue.get()
+                
+                # Process the request (this will block until user responds)
+                await self._handle_subagent_permission_request_impl(message, task_id)
+                
+                # Mark task as done
+                self._permission_queue.task_done()
+                
+            except Exception as e:
+                logger.error(f"Error processing permission request: {e}")
 
     async def handle_subagent_permission_request(self, message, task_id):
-        """Handle permission requests from subagents."""
+        """Handle permission requests from subagents by queueing them for sequential processing."""
+        # Ensure permission processor is started with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                self._start_permission_processor()
+                if self._permission_queue is not None:
+                    break
+            except Exception as e:
+                logger.warning(f"Failed to start permission processor (attempt {attempt + 1}): {e}")
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to start permission processor after {max_retries} retries")
+                    # Create a default denial response file to prevent subagent from hanging
+                    response_file = message.data.get("response_file")
+                    if response_file:
+                        try:
+                            with open(response_file, "w") as f:
+                                f.write("n")  # Default to deny
+                            logger.info(f"Created fallback denial response for {task_id}")
+                        except Exception as write_error:
+                            logger.error(f"Failed to create fallback response: {write_error}")
+                    return
+                await asyncio.sleep(0.1)
+        
+        # Add to queue for sequential processing instead of concurrent execution
+        try:
+            await self._permission_queue.put((message, task_id))
+            logger.info(f"Queued permission request from subagent {task_id}")
+        except Exception as e:
+            logger.error(f"Failed to queue permission request from {task_id}: {e}")
+            # Create a fallback response to prevent hanging
+            response_file = message.data.get("response_file")
+            if response_file:
+                try:
+                    with open(response_file, "w") as f:
+                        f.write("n")  # Default to deny
+                    logger.info(f"Created fallback denial response for {task_id} due to queue error")
+                except Exception as write_error:
+                    logger.error(f"Failed to create fallback response: {write_error}")
+    
+    async def _handle_subagent_permission_request_impl(self, message, task_id):
+        """Internal implementation of permission request handling."""
         try:
             # Extract permission request details
             request_id = message.data.get("request_id")
@@ -60,8 +143,14 @@ class SubagentCoordinator:
                     await self.event_emitter.emit_text(
                         "\n\n" + "=" * 60 + "\n", is_markdown=False, is_streaming=False
                     )
+                    # Format request source appropriately
+                    if task_id == "main-process":
+                        source_description = "Main process is requesting tool permission:"
+                    else:
+                        source_description = f"Subagent {task_id} is requesting tool permission:"
+                    
                     await self.event_emitter.emit_system_message(
-                        f"Subagent {task_id} is requesting tool permission:",
+                        source_description,
                         "permission_request",
                         "🔐",
                     )
@@ -146,9 +235,10 @@ class SubagentCoordinator:
             elif message.type == "error":
                 formatted = f"❌ [SUBAGENT-{task_id}] Error: {message.content}"
             elif message.type == "permission_request":
-                # Handle permission requests asynchronously
+                # Queue permission request for sequential processing instead of concurrent execution
                 import asyncio
-
+                
+                # This creates a task but it just adds to queue and returns immediately
                 asyncio.create_task(
                     self.handle_subagent_permission_request(message, task_id)
                 )

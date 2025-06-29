@@ -47,6 +47,9 @@ class ChatInterface:
 
         # Store input handler on agent for permission system
         self.agent._input_handler = input_handler
+        
+        # Store agent reference on input handler for accessing subagent coordinator
+        input_handler._agent = self.agent
 
         # Initialize messages from existing if provided
         messages = existing_messages[:] if existing_messages else []
