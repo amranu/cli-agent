@@ -69,6 +69,9 @@ class ChatInterface:
         if not existing_messages:
             await self.display_welcome_message()
 
+        # Initialize token display
+        self._update_token_display(messages)
+
         current_task = None
 
         while self.is_conversation_active():
@@ -235,6 +238,9 @@ class ChatInterface:
                 if processed_input.strip():
                     messages.append({"role": "user", "content": processed_input})
 
+                    # Update token display after adding user message
+                    self._update_token_display(messages)
+
                     # Check if we should auto-compact before making the API call
                     if self.should_compact_conversation(messages):
                         tokens_before = self.agent._estimate_token_count(messages)
@@ -248,6 +254,8 @@ class ChatInterface:
                             await self._emit_status(
                                 f"Compacted to ~{tokens_after} tokens", "info"
                             )
+                            # Update token display after compaction
+                            self._update_token_display(messages)
                         except Exception as e:
                             await self._emit_error(
                                 f"Auto-compact failed: {e}", "compaction_error"
@@ -432,11 +440,16 @@ class ChatInterface:
 
                             # Add the new messages (tool calls and results) to conversation
                             messages.extend(new_messages)
+                            # Update token display after tool execution
+                            self._update_token_display(messages)
                         elif response_content:
                             # Fallback: just add the assistant response if no tool execution occurred
                             messages.append(
                                 {"role": "assistant", "content": response_content}
                             )
+
+                        # Update token display after assistant response
+                        self._update_token_display(messages)
 
                         # Reset interrupt count and clear interrupt state after successful operation
                         from cli_agent.core.global_interrupt import (
@@ -523,6 +536,8 @@ class ChatInterface:
 
         # Stop persistent prompt and display goodbye message
         self.terminal_manager.stop_persistent_prompt()
+        # Clear token display when conversation ends
+        self.terminal_manager.clear_token_display()
         if not existing_messages:
             await self.display_goodbye_message()
 
@@ -757,6 +772,37 @@ class ChatInterface:
         # Final fallback: compact if too many messages
         return len(messages) > 50
 
+    def _update_token_display(self, messages: List[Dict[str, Any]]):
+        """Update the token count display below the prompt."""
+        try:
+            if hasattr(self.agent, "token_manager") and self.agent.token_manager:
+                # Update token manager with current model
+                self.agent._update_token_manager_model()
+                
+                # Get current token count
+                current_tokens = self.agent.token_manager.count_conversation_tokens(messages)
+                
+                # Get token limit (try to get from model if possible)
+                token_limit = self.agent.token_manager.get_token_limit()
+                
+                # Get model name
+                model_name = ""
+                try:
+                    model_name = self.agent._get_current_runtime_model()
+                except:
+                    model_name = "Unknown"
+                
+                # Update the terminal display
+                self.terminal_manager.update_token_display(
+                    current_tokens=current_tokens,
+                    token_limit=token_limit,
+                    model_name=model_name
+                )
+                
+        except Exception as e:
+            # Token display is non-critical, so we just log and continue
+            logger.debug(f"Failed to update token display: {e}")
+
     # Event emission helper methods
     async def _emit_interruption(self, reason: str, interrupt_type: str = "user"):
         """Emit interruption event instead of print statement."""
@@ -867,9 +913,14 @@ class ChatInterface:
                         original_length = len(messages)
                         new_messages = updated_messages[original_length:]
                         messages.extend(new_messages)
+                        # Update token display after tool execution
+                        self._update_token_display(messages)
                 elif response_content:
                     # Just add the assistant response
                     messages.append({"role": "assistant", "content": response_content})
+
+                # Update token display after assistant response
+                self._update_token_display(messages)
 
                 # Reset prompt to ready state for next input
                 self.terminal_manager.update_prompt("> ")

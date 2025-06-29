@@ -20,6 +20,8 @@ class TerminalManager:
         self.terminal_height = 24  # Default fallback
         self.terminal_width = 80  # Default fallback
         self.original_settings = None
+        self.token_display_enabled = True
+        self.current_token_info = None
         
         # Get terminal state manager for advanced operations
         self.terminal_state = get_terminal_state()
@@ -186,6 +188,139 @@ class TerminalManager:
             except OSError:
                 # Keep current values if refresh fails
                 pass
+
+    def update_token_display(self, current_tokens: int, token_limit: int, model_name: str = "", percentage: float = None):
+        """Update the token count display below the prompt.
+        
+        Args:
+            current_tokens: Current token count in conversation
+            token_limit: Maximum token limit for the model
+            model_name: Name of the current model
+            percentage: Pre-calculated percentage (optional)
+        """
+        if not self.token_display_enabled:
+            return
+        
+        # Calculate percentage if not provided
+        if percentage is None:
+            percentage = (current_tokens / token_limit) * 100 if token_limit > 0 else 0
+        
+        # Store current token info for redrawing
+        self.current_token_info = {
+            "current_tokens": current_tokens,
+            "token_limit": token_limit,
+            "model_name": model_name,
+            "percentage": percentage
+        }
+        
+        # Draw the token display only if in terminal
+        if self.is_terminal:
+            self._draw_token_display()
+    
+    def _draw_token_display(self):
+        """Draw the token display using current token info."""
+        if not self.is_terminal or not self.current_token_info:
+            return
+        
+        info = self.current_token_info
+        current_tokens = info["current_tokens"]
+        token_limit = info["token_limit"]
+        model_name = info["model_name"]
+        percentage = info["percentage"]
+        
+        # Get color based on token usage percentage
+        color = self._get_token_color(percentage)
+        
+        # Format the token display text
+        if model_name:
+            token_text = f"{color}Tokens: {current_tokens:,}/{token_limit:,} ({percentage:.1f}%) | Model: {model_name}\033[0m"
+        else:
+            token_text = f"{color}Tokens: {current_tokens:,}/{token_limit:,} ({percentage:.1f}%)\033[0m"
+        
+        # Truncate if too long for terminal width
+        if len(token_text) > self.terminal_width - 10:  # Leave some margin
+            # Remove ANSI codes for length calculation
+            plain_text = f"Tokens: {current_tokens:,}/{token_limit:,} ({percentage:.1f}%)"
+            if len(plain_text) > self.terminal_width - 10:
+                token_text = f"{color}Tokens: {current_tokens:,} ({percentage:.1f}%)\033[0m"
+            else:
+                token_text = f"{color}Tokens: {current_tokens:,}/{token_limit:,} ({percentage:.1f}%)\033[0m"
+        
+        try:
+            # Refresh terminal size in case of window resize
+            self._refresh_terminal_size()
+            
+            # Save current cursor position
+            self._save_cursor()
+            
+            # Move to the hint line (second-to-last line)
+            hint_line = self.terminal_height - 1
+            sys.stdout.write(f"\033[{hint_line};1H")
+            self._clear_line()
+            sys.stdout.write(token_text)
+            
+            # Restore cursor position
+            self._restore_cursor()
+            sys.stdout.flush()
+            
+        except Exception as e:
+            # If positioning fails, silently continue
+            pass
+    
+    def _get_token_color(self, percentage: float) -> str:
+        """Get ANSI color code based on token usage percentage.
+        
+        Args:
+            percentage: Token usage percentage (0-100)
+            
+        Returns:
+            ANSI color escape sequence
+        """
+        if percentage < 60:
+            return "\033[32m"  # Green - safe usage
+        elif percentage < 80:
+            return "\033[33m"  # Yellow - moderate usage
+        else:
+            return "\033[31m"  # Red - high usage, approaching limit
+    
+    def clear_token_display(self):
+        """Clear the token display line."""
+        self.current_token_info = None
+        
+        if not self.is_terminal:
+            return
+        
+        try:
+            # Save current cursor position
+            self._save_cursor()
+            
+            # Move to the hint line and clear it
+            hint_line = self.terminal_height - 1
+            sys.stdout.write(f"\033[{hint_line};1H")
+            self._clear_line()
+            
+            # Restore cursor position
+            self._restore_cursor()
+            sys.stdout.flush()
+            
+        except Exception:
+            # If clearing fails, silently continue
+            pass
+    
+    def enable_token_display(self, enabled: bool = True):
+        """Enable or disable the token display.
+        
+        Args:
+            enabled: Whether to enable token display
+        """
+        self.token_display_enabled = enabled
+        if not enabled:
+            self.clear_token_display()
+    
+    def redraw_token_display(self):
+        """Redraw the token display (useful after screen changes)."""
+        if self.current_token_info:
+            self._draw_token_display()
 
     def can_clear_screen(self) -> bool:
         """Check if terminal supports screen clearing operations."""
