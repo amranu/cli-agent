@@ -362,27 +362,8 @@ class SubagentCoordinator:
 
             # In stream-json mode, filter out noise and only show essential messages
             if os.environ.get("STREAM_JSON_MODE") == "true":
-                # Skip configuration/setup messages in stream-json mode
-                if message.type == "output":
-                    content = message.content.lower()
-                    # Filter out configuration and setup messages
-                    if any(phrase in content for phrase in [
-                        "configuration loaded", "created", "configured", "tool permission manager",
-                        "executing task with", "conversation iteration", "calling host.generate",
-                        "starting task", "disabled permission manager", "subagent configured"
-                    ]):
-                        return  # Skip these messages in stream-json mode
-                
-                # Skip status messages except for important ones
-                elif message.type == "status":
-                    status = message.data.get("status", "unknown") if message.data else "unknown"
-                    if status in ["started", "completed"]:
-                        pass  # Allow these
-                    else:
-                        return  # Skip other status messages
-                
                 # Handle permission requests silently
-                elif message.type == "permission_request":
+                if message.type == "permission_request":
                     response_file = message.data.get("response_file")
                     if response_file:
                         try:
@@ -392,6 +373,19 @@ class SubagentCoordinator:
                         except Exception as e:
                             logger.error(f"Error writing auto-approval response: {e}")
                     return  # Exit immediately without any permission processing
+                
+                # Skip ALL output messages except those that start with tool commands
+                elif message.type == "output":
+                    content = message.content.strip()
+                    # Only allow final result/response messages, skip debug/setup output
+                    if not any(content.startswith(prefix) for prefix in [
+                        "total", "drwx", "-rw-", "-rwx", "Summary:", "Error:", "Result:"
+                    ]):
+                        return  # Skip setup/debug output messages
+                
+                # Skip ALL status messages in stream-json mode
+                elif message.type == "status":
+                    return  # Skip all status messages
 
             if message.type == "output":
                 formatted = f"🤖 [SUBAGENT-{task_id}] {message.content}"

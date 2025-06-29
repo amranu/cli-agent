@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 # Add current directory to Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -373,7 +374,17 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                     tool_name = tool_key.split(":")[-1] if ":" in tool_key else tool_key
                     host._input_handler.set_current_tool_info(tool_name, arguments)
                 
-                result = await original_execute_mcp_tool(tool_key, arguments)
+                # Generate request_id and emit tool request
+                tool_name = tool_key.split(":")[-1] if ":" in tool_key else tool_key
+                request_id = f"subagent_{current_task_id}_{tool_name}_{int(time.time())}"
+                emit_tool_request(tool_name, arguments, request_id)
+                
+                try:
+                    result = await original_execute_mcp_tool(tool_key, arguments)
+                except Exception as e:
+                    # Emit tool error result
+                    emit_tool_result(str(e), request_id, is_error=True)
+                    raise
 
                 # Check if tool was denied by user
                 if isinstance(result, str) and "Tool execution denied" in result:
@@ -394,9 +405,8 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                     emit_result_called = True
                     emit_output_with_id("✅ Task completed - emit_result called")
 
-                # Emit tool result immediately for real-time feedback
-                tool_name = tool_key.split(":")[-1]
-                emit_output_with_id(f"🔧 {tool_name}: {str(result)}")
+                # Emit tool result event  
+                emit_tool_result(str(result), request_id, is_error=False)
 
                 return result
 
