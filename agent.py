@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# This script implements the main command-line interface for the MCP Agent.
-"""Main CLI interface for the MCP Agent with modular imports."""
+# This script implements the main command-line interface for the CLI Agent.
+"""Main CLI interface for the CLI Agent with modular imports."""
 
 import asyncio
 import json
@@ -175,7 +175,7 @@ def create_host(
 )
 @click.pass_context
 def cli(ctx, config_file, debug, verbose):
-    """MCP Agent - Run AI models with MCP tool integration."""
+    """CLI Agent - Run AI models with MCP tool integration."""
     ctx.ensure_object(dict)
     ctx.obj["config_file"] = config_file
 
