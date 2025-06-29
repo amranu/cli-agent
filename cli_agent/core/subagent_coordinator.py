@@ -404,6 +404,46 @@ class SubagentCoordinator:
                 formatted = f"🤖 [SUBAGENT-{task_id}] 🤖 Response: {message.content}"
             elif message.type == "error":
                 formatted = f"❌ [SUBAGENT-{task_id}] Error: {message.content}"
+            elif message.type == "tool_request":
+                # Handle tool requests from subagents  
+                tool_name = message.data.get("tool_name", "unknown_tool")
+                arguments = message.data.get("arguments", {})
+                request_id = message.data.get("request_id", f"subagent_{task_id}")
+                
+                # In stream-json mode, emit proper tool_use JSON event
+                if (os.environ.get("STREAM_JSON_MODE") == "true" 
+                    and hasattr(self.agent, 'display_manager') 
+                    and hasattr(self.agent.display_manager, 'json_handler') 
+                    and self.agent.display_manager.json_handler):
+                    
+                    self.agent.display_manager.json_handler.send_assistant_tool_use(
+                        tool_name=tool_name,
+                        tool_input=arguments,
+                        tool_use_id=request_id
+                    )
+                    return
+                    
+                formatted = f"🔧 [SUBAGENT-{task_id}] Tool: {tool_name}({arguments})"
+            elif message.type == "tool_result":
+                # Handle tool results from subagents
+                request_id = message.data.get("request_id", f"subagent_{task_id}")
+                is_error = message.data.get("is_error", False)
+                
+                # In stream-json mode, emit proper tool_result JSON event  
+                if (os.environ.get("STREAM_JSON_MODE") == "true" 
+                    and hasattr(self.agent, 'display_manager') 
+                    and hasattr(self.agent.display_manager, 'json_handler') 
+                    and self.agent.display_manager.json_handler):
+                    
+                    self.agent.display_manager.json_handler.send_tool_result(
+                        tool_use_id=request_id,
+                        content=message.content,
+                        is_error=is_error
+                    )
+                    return
+                    
+                status_icon = "❌" if is_error else "✅"
+                formatted = f"{status_icon} [SUBAGENT-{task_id}] Tool result: {message.content}"
             elif message.type == "permission_request":
                 # Queue permission request for sequential processing instead of concurrent execution
                 import asyncio

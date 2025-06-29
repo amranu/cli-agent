@@ -16,7 +16,7 @@ if current_dir not in sys.path:
 
 from cli_agent.utils.tool_name_utils import ToolNameUtils
 from config import load_config
-from subagent import emit_error, emit_message, emit_output, emit_result, emit_status
+from subagent import emit_error, emit_message, emit_output, emit_result, emit_status, emit_tool_request, emit_tool_result
 
 # Global task_id for use in emit functions
 current_task_id = None

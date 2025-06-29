@@ -317,6 +317,16 @@ def emit_tool_request(tool_name: str, arguments: dict, request_id: str = None):
     return request_id
 
 
+def emit_tool_result(result: str, request_id: str, is_error: bool = False):
+    """Emit a tool execution result."""
+    emit_message(
+        "tool_result",
+        result,
+        request_id=request_id,
+        is_error=is_error,
+    )
+
+
 def emit_status(status: str, details: str = ""):
     """Emit status update."""
     emit_message("status", f"Status: {status}", status=status, details=details)
