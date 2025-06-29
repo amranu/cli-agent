@@ -740,17 +740,21 @@ class ChatInterface:
         return cleaned
 
     def should_compact_conversation(self, messages: List[Dict[str, Any]]) -> bool:
-        """Determine if conversation should be compacted."""
-        if hasattr(self.agent, "get_token_limit"):
-            # Use agent's token management logic
-            try:
+        """Determine if conversation should be compacted using accurate token counting."""
+        try:
+            # Use the enhanced token manager
+            if hasattr(self.agent, "token_manager") and self.agent.token_manager:
+                return self.agent.token_manager.should_compact(messages)
+            
+            # Fallback to simple token counting
+            elif hasattr(self.agent, "get_token_limit"):
                 token_count = self.agent._estimate_token_count(messages)
                 token_limit = self.agent.get_token_limit()
                 return token_count > (token_limit * 0.8)  # 80% threshold
-            except Exception:
-                pass
+        except Exception as e:
+            logger.debug(f"Token-based compaction check failed: {e}")
 
-        # Fallback: compact if too many messages
+        # Final fallback: compact if too many messages
         return len(messages) > 50
 
     # Event emission helper methods

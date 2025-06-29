@@ -111,7 +111,7 @@ class BaseMCPAgent(ABC):
             logger.warning(f"Failed to import tool permission manager: {e}")
             self.permission_manager = None
 
-        # Initialize token manager
+        # Initialize token manager (model name will be set after subclass initialization)
         self.token_manager = TokenManager(config)
         logger.debug("Initialized token manager")
 
@@ -1183,6 +1183,26 @@ class BaseMCPAgent(ABC):
     def _get_current_runtime_model(self) -> str:
         """Get the actual model being used at runtime. Must be implemented by subclasses."""
         pass
+
+    def _update_token_manager_model(self):
+        """Update token manager with current model name for accurate counting."""
+        try:
+            current_model = self._get_current_runtime_model()
+            if current_model:
+                self.token_manager.model_name = current_model
+                logger.debug(f"Updated token manager model to: {current_model}")
+        except Exception as e:
+            logger.warning(f"Failed to update token manager model: {e}")
+
+    def _estimate_token_count(self, messages: List[Dict[str, Any]]) -> int:
+        """Estimate token count for messages using accurate tokenization."""
+        self._update_token_manager_model()
+        return self.token_manager.count_conversation_tokens(messages)
+
+    async def compact_conversation(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Compact conversation using the token manager's intelligent compaction."""
+        self._update_token_manager_model()
+        return await self.token_manager.compact_conversation(messages, self.generate_response)
 
     # ============================================================================
     # CENTRALIZED MESSAGE PROCESSING FRAMEWORK
