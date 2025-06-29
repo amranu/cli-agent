@@ -165,6 +165,14 @@ def create_host(
     is_flag=True,
     help="Enable verbose logging (shows more detailed info)",
 )
+@click.option(
+    "--version",
+    is_flag=True,
+    expose_value=False,
+    is_eager=True,
+    callback=lambda ctx, param, value: ctx.exit(click.echo("mcp-cli-agent 1.0.0")) if value else None,
+    help="Show version and exit",
+)
 @click.pass_context
 def cli(ctx, config_file, debug, verbose):
     """MCP Agent - Run AI models with MCP tool integration."""
