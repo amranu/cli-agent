@@ -301,9 +301,6 @@ class MCPHost(BaseLLMProvider):
                                 is_streaming=False,
                                 is_markdown=True,
                             )
-                            await self.event_emitter.emit_text(
-                                content="\n", is_streaming=False, is_markdown=False
-                            )
                             content_emitted = True
                             # Clear accumulated content since it was already emitted
                             accumulated_content = ""
@@ -397,11 +394,6 @@ class MCPHost(BaseLLMProvider):
                                         content=content_to_emit,
                                         is_streaming=False,
                                         is_markdown=True,
-                                    )
-                                    await self.event_emitter.emit_text(
-                                        content="\n",
-                                        is_streaming=False,
-                                        is_markdown=False,
                                     )
                                     content_emitted = True
                                     # Clear accumulated content since it was already emitted
@@ -498,10 +490,6 @@ class MCPHost(BaseLLMProvider):
                 # Emit the complete response with markdown formatting
                 await self.event_emitter.emit_text(
                     content=accumulated_content, is_streaming=False, is_markdown=True
-                )
-                # Add newline after LLM response
-                await self.event_emitter.emit_text(
-                    content="\n", is_streaming=False, is_markdown=False
                 )
             else:
                 logger.debug(

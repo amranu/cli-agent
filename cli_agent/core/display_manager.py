@@ -239,7 +239,10 @@ class DisplayManager:
 
     async def _display_tool_execution_start(self, event: ToolExecutionStartEvent):
         """Display tool execution start notification."""
-        if self.interactive:
+        if self.json_handler:
+            # In JSON streaming mode, suppress tool execution start messages
+            return
+        elif self.interactive:
             args_summary = self._format_tool_arguments(event.arguments)
             display_text = f"🔧 Executing {event.tool_name}({args_summary})\n"
 
@@ -253,9 +256,12 @@ class DisplayManager:
         """Display tool execution results."""
         if self.json_handler:
             # JSON streaming mode - emit tool result message
-            self.json_handler.send_tool_result(
-                tool_use_id=event.tool_id, content=event.result, is_error=event.is_error
-            )
+            try:
+                self.json_handler.send_tool_result(
+                    tool_use_id=event.tool_id, content=event.result, is_error=event.is_error
+                )
+            except Exception as e:
+                logger.error(f"Error sending tool_result JSON event: {e}")
         elif self.interactive:
             status_icon = "❌" if event.is_error else "✅"
             time_info = (
@@ -271,7 +277,10 @@ class DisplayManager:
 
     async def _display_status_event(self, event: StatusEvent):
         """Display status updates."""
-        if self.interactive:
+        if self.json_handler:
+            # In JSON streaming mode, suppress status messages
+            return
+        elif self.interactive:
             level_icons = {"info": "ℹ️", "warning": "⚠️", "error": "❌"}
             icon = level_icons.get(event.level, "📊")
 
@@ -344,11 +353,14 @@ class DisplayManager:
         """Display tool call request event."""
         if self.json_handler:
             # JSON streaming mode - emit tool use message
-            self.json_handler.send_assistant_tool_use(
-                tool_name=event.tool_name,
-                tool_input=event.arguments,
-                tool_use_id=event.tool_id,
-            )
+            try:
+                self.json_handler.send_assistant_tool_use(
+                    tool_name=event.tool_name,
+                    tool_input=event.arguments,
+                    tool_use_id=event.tool_id,
+                )
+            except Exception as e:
+                logger.error(f"Error sending tool_use JSON event: {e}")
         elif self.interactive:
             args_summary = self._format_tool_arguments(event.arguments)
             description = f" - {event.description}" if event.description else ""

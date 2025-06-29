@@ -337,14 +337,8 @@ class ResponseHandler:
                                     f"replace_in_file args - old_text: {repr(old_text)}, new_text: {repr(new_text)}"
                                 )
 
-                        # Emit tool call and execution start events if event bus is available
+                        # Emit only tool execution start event - tool_call events create duplication
                         if hasattr(self.agent, "event_bus") and self.agent.event_bus:
-                            # Emit tool call event for JSON output
-                            await self.agent.event_emitter.emit_tool_call(
-                                tool_name=tool_name,
-                                tool_id=tool_call_id,
-                                arguments=tool_args,
-                            )
                             # Emit tool execution start event
                             await self.agent.event_emitter.emit_tool_execution_start(
                                 tool_name=tool_name,

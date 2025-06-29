@@ -1203,6 +1203,14 @@ async def stream_json_response(host, handler, messages, model_name):
 
     # JSON handler is now set globally in handle_streaming_json_chat, no need to set it here
     
+    # Start event bus processing if available and not already running
+    if (
+        hasattr(host, "event_bus")
+        and host.event_bus
+        and not host.event_bus.is_running
+    ):
+        await host.event_bus.start_processing()
+    
     # Use streaming mode to ensure proper tool result integration and conversation state maintenance
     # This ensures tool calls and tool results are properly added to the conversation
     response = await host.generate_response(messages, stream=True)
