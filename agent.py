@@ -1215,9 +1215,8 @@ async def stream_json_response(host, handler, messages, model_name):
     # This ensures tool calls and tool results are properly added to the conversation
     response = await host.generate_response(messages, stream=True)
 
-    # Send final response if it's text (for cases without tool calls)
-    if isinstance(response, str):
-        handler.send_assistant_text(response)
+    # Note: Text responses are handled by the event system in stream-json mode
+    # No need to send directly to handler as events handle all display
 
 
 async def handle_text_chat(
