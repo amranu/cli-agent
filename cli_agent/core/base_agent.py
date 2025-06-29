@@ -545,20 +545,10 @@ class BaseMCPAgent(ABC):
 
             # Emit tool call event
             if hasattr(self, "event_emitter"):
-                print(f"[DEBUG] Emitting tool call event: {tool_name}")
                 await self.event_emitter.emit_tool_call(
                     tool_name=tool_name,
                     tool_id=f"toolu_{i}_{tool_name}",
                     arguments=arguments,
-                )
-                
-            # Also emit JSON directly if display manager has json_handler
-            if hasattr(self, "display_manager") and hasattr(self.display_manager, "json_handler") and self.display_manager.json_handler:
-                print(f"[DEBUG] Emitting JSON tool use: {tool_name}")
-                self.display_manager.json_handler.send_assistant_tool_use(
-                    tool_name=tool_name,
-                    tool_input=arguments,
-                    tool_use_id=f"toolu_{i}_{tool_name}",
                 )
 
             # Generate tool use ID for tracking
@@ -623,15 +613,6 @@ class BaseMCPAgent(ABC):
                             tool_name=tool_name,
                             tool_id=tool_use_id,
                             result=str(tool_result),
-                            is_error=not tool_success,
-                        )
-                        
-                    # Also emit JSON directly if display manager has json_handler
-                    if hasattr(self, "display_manager") and hasattr(self.display_manager, "json_handler") and self.display_manager.json_handler:
-                        print(f"[DEBUG] Emitting JSON tool result: {tool_name}")
-                        self.display_manager.json_handler.send_tool_result(
-                            tool_use_id=tool_use_id,
-                            content=str(tool_result),
                             is_error=not tool_success,
                         )
 

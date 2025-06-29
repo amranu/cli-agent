@@ -158,14 +158,8 @@ class SubagentCoordinator:
                 return
 
             logger.info(
-                f"[DEBUG] Handling permission request from subagent {task_id}: {tool_name}"
+                f"Handling permission request from subagent {task_id}: {tool_name}"
             )
-            
-            # Debug: Check if agent has display_manager and json_handler
-            has_display_manager = hasattr(self.agent, 'display_manager')
-            has_json_handler = has_display_manager and hasattr(self.agent.display_manager, 'json_handler')
-            json_handler_value = has_json_handler and self.agent.display_manager.json_handler
-            logger.info(f"[DEBUG] Agent has display_manager: {has_display_manager}, has json_handler: {has_json_handler}, json_handler value: {json_handler_value}")
 
             # Try to use clean permission display first
             use_clean_display = False

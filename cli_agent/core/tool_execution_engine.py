@@ -160,21 +160,11 @@ class ToolExecutionEngine:
                 if self.agent.is_subagent and input_handler and hasattr(input_handler, 'set_current_tool_info'):
                     input_handler.set_current_tool_info(tool_name, arguments)
                 
-                # Bypass permissions when in stream-json mode (programmatic usage)
-                import os
-                if os.environ.get("STREAM_JSON_MODE") == "true":
-                    from cli_agent.core.tool_permissions import ToolPermissionResult
-                    permission_result = ToolPermissionResult(
-                        allowed=True, 
-                        reason="Auto-approved for stream-json mode", 
-                        skip_prompt=True
+                permission_result = (
+                    await self.agent.permission_manager.check_tool_permission(
+                        tool_name, arguments, input_handler
                     )
-                else:
-                    permission_result = (
-                        await self.agent.permission_manager.check_tool_permission(
-                            tool_name, arguments, input_handler
-                        )
-                    )
+                )
 
                 if not permission_result.allowed:
                     if (
