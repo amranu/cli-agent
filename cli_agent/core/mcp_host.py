@@ -187,11 +187,6 @@ class MCPHost(BaseLLMProvider):
         Buffers full response for proper markdown formatting, handles tool execution, and status updates.
         """
         from cli_agent.core.event_system import StatusEvent, TextEvent, ToolCallEvent
-        
-        # Debug: Track if this method is being called multiple times
-        import os
-        if os.environ.get("STREAM_JSON_MODE") == "true":
-            logger.warning(f"_process_streaming_chunks_with_events called for response {id(response)}")
 
         accumulated_content = ""
         accumulated_reasoning_content = ""
@@ -301,8 +296,6 @@ class MCPHost(BaseLLMProvider):
                                     reasoning_with_tags = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
                                 content_to_emit = reasoning_with_tags + content_to_emit
 
-                            if os.environ.get(\"STREAM_JSON_MODE\") == \"true\":
-                                logger.warning(f\"EMISSION 1: Emitting content before tool calls: {len(content_to_emit)} chars\")
                             await self.event_emitter.emit_text(
                                 content=content_to_emit + "\n",
                                 is_streaming=False,
@@ -397,8 +390,6 @@ class MCPHost(BaseLLMProvider):
                                             reasoning_with_tags = f"<reasoning>\n{accumulated_reasoning_content}\n</reasoning>\n\n"
                                         content_to_emit = reasoning_with_tags + content_to_emit
 
-                                    if os.environ.get(\"STREAM_JSON_MODE\") == \"true\":
-                                        logger.warning(f\"EMISSION 2: Emitting Gemini content before tool calls: {len(content_to_emit)} chars\")
                                     await self.event_emitter.emit_text(
                                         content=content_to_emit + "\n",
                                         is_streaming=False,
@@ -497,8 +488,6 @@ class MCPHost(BaseLLMProvider):
                     f"Emitting buffered content: {len(accumulated_content)} characters - '{accumulated_content[:200]}...'"
                 )
                 # Emit the complete response with markdown formatting and newline
-                if os.environ.get(\"STREAM_JSON_MODE\") == \"true\":
-                    logger.warning(f\"EMISSION 3: Emitting final content: {len(accumulated_content)} chars\")
                 await self.event_emitter.emit_text(
                     content=accumulated_content + "\n", is_streaming=False, is_markdown=True
                 )
