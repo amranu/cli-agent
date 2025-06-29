@@ -779,8 +779,11 @@ class ChatInterface:
                 # Update token manager with current model
                 self.agent._update_token_manager_model()
                 
-                # Get current token count
-                current_tokens = self.agent.token_manager.count_conversation_tokens(messages)
+                # Create a full message list including system prompt and tools
+                full_messages = self._prepare_full_message_context(messages)
+                
+                # Get current token count including system prompt and tools
+                current_tokens = self.agent.token_manager.count_conversation_tokens(full_messages)
                 
                 # Get token limit (try to get from model if possible)
                 token_limit = self.agent.token_manager.get_token_limit()
@@ -802,6 +805,63 @@ class ChatInterface:
         except Exception as e:
             # Token display is non-critical, so we just log and continue
             logger.debug(f"Failed to update token display: {e}")
+    
+    def _prepare_full_message_context(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Prepare full message context including system prompt and tools for accurate token counting."""
+        full_messages = []
+        
+        # Add system prompt if available
+        try:
+            if hasattr(self.agent, '_create_system_prompt'):
+                system_prompt = self.agent._create_system_prompt()
+                if system_prompt and system_prompt.strip():
+                    full_messages.append({
+                        "role": "system",
+                        "content": system_prompt
+                    })
+        except Exception as e:
+            logger.debug(f"Failed to get system prompt for token counting: {e}")
+        
+        # Add the conversation messages
+        full_messages.extend(messages)
+        
+        # Add tool information for models that include tools in token calculation
+        try:
+            if hasattr(self.agent, 'available_tools') and self.agent.available_tools:
+                # Create a summary of available tools to include in token count
+                tool_summary = self._create_tool_summary()
+                if tool_summary:
+                    # Add as a system message or append to existing system message
+                    if full_messages and full_messages[0].get("role") == "system":
+                        full_messages[0]["content"] += f"\n\nAvailable tools: {tool_summary}"
+                    else:
+                        full_messages.insert(0, {
+                            "role": "system", 
+                            "content": f"Available tools: {tool_summary}"
+                        })
+        except Exception as e:
+            logger.debug(f"Failed to add tools for token counting: {e}")
+        
+        return full_messages
+    
+    def _create_tool_summary(self) -> str:
+        """Create a brief summary of available tools for token counting."""
+        try:
+            if not hasattr(self.agent, 'available_tools') or not self.agent.available_tools:
+                return ""
+            
+            tool_names = []
+            for tool_key, tool_info in self.agent.available_tools.items():
+                if isinstance(tool_info, dict) and 'name' in tool_info:
+                    tool_names.append(tool_info['name'])
+                else:
+                    # Fallback to tool key
+                    tool_names.append(tool_key.split(':')[-1] if ':' in tool_key else tool_key)
+            
+            return f"{len(tool_names)} tools ({', '.join(tool_names[:5])}{'...' if len(tool_names) > 5 else ''})"
+        except Exception as e:
+            logger.debug(f"Failed to create tool summary: {e}")
+            return ""
 
     # Event emission helper methods
     async def _emit_interruption(self, reason: str, interrupt_type: str = "user"):

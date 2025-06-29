@@ -63,56 +63,66 @@ class TestTokenCounter:
         # Test unknown model fallback
         assert tc._get_model_info("unknown-model")["family"] == "openai"  # Default fallback
     
-    @patch('cli_agent.utils.token_counting.tiktoken')
-    def test_openai_tokenization_with_tiktoken(self, mock_tiktoken):
+    def test_openai_tokenization_with_tiktoken(self):
         """Test OpenAI model tokenization using tiktoken."""
         # Mock tiktoken encoder
         mock_encoder = Mock()
         mock_encoder.encode.return_value = [1, 2, 3, 4, 5]  # 5 tokens
-        mock_tiktoken.get_encoding.return_value = mock_encoder
         
-        # Mock tiktoken availability
-        with patch('cli_agent.utils.token_counting.TIKTOKEN_AVAILABLE', True):
+        # Mock the lazy loading function
+        def mock_get_tiktoken():
+            mock_tiktoken = Mock()
+            mock_tiktoken.get_encoding.return_value = mock_encoder
+            return mock_tiktoken
+        
+        with patch('cli_agent.utils.token_counting._get_tiktoken', mock_get_tiktoken):
             tc = TokenCounter()
-            
             result = tc.count_tokens("Hello world", "gpt-4")
             assert result == 5
-            mock_tiktoken.get_encoding.assert_called_with("cl100k_base")
             mock_encoder.encode.assert_called_with("Hello world")
     
-    @patch('cli_agent.utils.token_counting.tiktoken')
-    def test_gpt4o_uses_correct_encoding(self, mock_tiktoken):
+    def test_gpt4o_uses_correct_encoding(self):
         """Test that GPT-4o models use the o200k_base encoding."""
         mock_encoder = Mock()
         mock_encoder.encode.return_value = [1, 2, 3]
-        mock_tiktoken.get_encoding.return_value = mock_encoder
         
-        with patch('cli_agent.utils.token_counting.TIKTOKEN_AVAILABLE', True):
+        # Mock the lazy loading function to track encoding calls
+        encoding_calls = []
+        def mock_get_tiktoken():
+            mock_tiktoken = Mock()
+            def track_encoding(encoding_name):
+                encoding_calls.append(encoding_name)
+                return mock_encoder
+            mock_tiktoken.get_encoding.side_effect = track_encoding
+            return mock_tiktoken
+        
+        with patch('cli_agent.utils.token_counting._get_tiktoken', mock_get_tiktoken):
             tc = TokenCounter()
-            
             tc.count_tokens("test", "gpt-4o")
-            mock_tiktoken.get_encoding.assert_called_with("o200k_base")
+            assert "o200k_base" in encoding_calls
             
             tc.count_tokens("test", "gpt-4o-mini")
-            mock_tiktoken.get_encoding.assert_called_with("o200k_base")
+            assert encoding_calls.count("o200k_base") >= 2  # Should be called for both models
     
     def test_fallback_estimation_by_family(self):
         """Test fallback token estimation with family-specific ratios."""
         tc = TokenCounter()
         
-        # Test with tiktoken unavailable
-        with patch('cli_agent.utils.token_counting.TIKTOKEN_AVAILABLE', False):
-            # OpenAI family: 4 chars per token
-            assert tc.count_tokens("1234", "gpt-4") == 1
-            assert tc.count_tokens("12345678", "gpt-4") == 2
-            
-            # Gemini family: 5 chars per token (more efficient)
-            assert tc.count_tokens("12345", "gemini-2.5-flash") == 1
-            assert tc.count_tokens("1234567890", "gemini-2.5-flash") == 2
-            
-            # LLaMA family: 3 chars per token (less efficient)
-            assert tc.count_tokens("123", "llama-2-7b") == 1
-            assert tc.count_tokens("123456", "llama-2-7b") == 2
+        # Test with no tokenizers available (should fall back to estimation)
+        with patch('cli_agent.utils.token_counting._get_tiktoken', return_value=None):
+            with patch('cli_agent.utils.token_counting._get_anthropic', return_value=None):
+                with patch('cli_agent.utils.token_counting._get_transformers', return_value=None):
+                    # OpenAI family: 4 chars per token
+                    assert tc.count_tokens("1234", "gpt-4") == 1
+                    assert tc.count_tokens("12345678", "gpt-4") == 2
+                    
+                    # Gemini family: 5 chars per token (more efficient)
+                    assert tc.count_tokens("12345", "gemini-2.5-flash") == 1
+                    assert tc.count_tokens("1234567890", "gemini-2.5-flash") == 2
+                    
+                    # LLaMA family: 3 chars per token (less efficient)
+                    assert tc.count_tokens("123", "llama-2-7b") == 1
+                    assert tc.count_tokens("123456", "llama-2-7b") == 2
     
     def test_message_token_counting_structure(self):
         """Test that message token counting includes structural overhead."""

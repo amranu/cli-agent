@@ -257,7 +257,7 @@ class TerminalManager:
             hint_line = self.terminal_height - 1
             sys.stdout.write(f"\033[{hint_line};1H")
             self._clear_line()
-            sys.stdout.write(token_text)
+            sys.stdout.write(f"\n{token_text}")
             
             # Restore cursor position
             self._restore_cursor()
