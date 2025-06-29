@@ -449,7 +449,11 @@ class ChatInterface:
                             )
 
                         # Update and show token display after assistant response
-                        self._update_token_display(messages, show_display=True)
+                        # Check for auto-compaction and update messages if needed
+                        compaction_result = await self._update_token_display_async(messages, show_display=True)
+                        if compaction_result and compaction_result.get("auto_compacted"):
+                            # Replace messages with compacted version
+                            messages[:] = compaction_result["compacted_messages"]
 
                         # Reset interrupt count and clear interrupt state after successful operation
                         from cli_agent.core.global_interrupt import (
@@ -773,11 +777,14 @@ class ChatInterface:
         return len(messages) > 50
 
     def _update_token_display(self, messages: List[Dict[str, Any]], show_display: bool = False):
-        """Update the token count display.
+        """Update the token count display and check for automatic compaction.
         
         Args:
             messages: Current conversation messages
             show_display: Whether to actually print the display (True only before user input)
+            
+        Returns:
+            Dict with compaction info if auto-compaction was triggered, None otherwise
         """
         try:
             if hasattr(self.agent, "token_manager") and self.agent.token_manager:
@@ -800,6 +807,60 @@ class ChatInterface:
                 except:
                     model_name = "Unknown"
                 
+                # Update the terminal display (sync version - no auto-compaction)
+                # Auto-compaction is only available in the async version
+                self.terminal_manager.update_token_display(
+                    current_tokens=current_tokens,
+                    token_limit=token_limit,
+                    model_name=model_name,
+                    show_display=show_display
+                )
+                
+                return None
+                
+        except Exception as e:
+            # Token display is non-critical, so we just log and continue
+            logger.debug(f"Failed to update token display: {e}")
+            return None
+    
+    async def _update_token_display_async(self, messages: List[Dict[str, Any]], show_display: bool = False):
+        """Async version of _update_token_display that can perform auto-compaction.
+        
+        Args:
+            messages: Current conversation messages
+            show_display: Whether to actually print the display (True only before user input)
+            
+        Returns:
+            Dict with compaction info if auto-compaction was triggered, None otherwise
+        """
+        try:
+            if hasattr(self.agent, "token_manager") and self.agent.token_manager:
+                # Update token manager with current model
+                self.agent._update_token_manager_model()
+                
+                # Create a full message list including system prompt and tools
+                full_messages = self._prepare_full_message_context(messages)
+                
+                # Get current token count including system prompt and tools
+                current_tokens = self.agent.token_manager.count_conversation_tokens(full_messages)
+                
+                # Get token limit (try to get from model if possible)
+                token_limit = self.agent.token_manager.get_token_limit()
+                
+                # Get model name
+                model_name = ""
+                try:
+                    model_name = self.agent._get_current_runtime_model()
+                except:
+                    model_name = "Unknown"
+                
+                # Check for automatic compaction (95% threshold)
+                percentage = (current_tokens / token_limit) * 100 if token_limit > 0 else 0
+                
+                # Auto-compact if above 95% and we have enough messages to compact
+                if percentage >= 95 and len(messages) > 5:
+                    return await self._perform_auto_compaction(messages, current_tokens, token_limit, model_name)
+                
                 # Update the terminal display
                 self.terminal_manager.update_token_display(
                     current_tokens=current_tokens,
@@ -808,9 +869,12 @@ class ChatInterface:
                     show_display=show_display
                 )
                 
+                return None
+                
         except Exception as e:
             # Token display is non-critical, so we just log and continue
             logger.debug(f"Failed to update token display: {e}")
+            return None
     
     def _prepare_full_message_context(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Prepare full message context including system prompt and tools for accurate token counting."""
@@ -868,6 +932,77 @@ class ChatInterface:
         except Exception as e:
             logger.debug(f"Failed to create tool summary: {e}")
             return ""
+    
+    async def _perform_auto_compaction(self, messages: List[Dict[str, Any]], current_tokens: int, token_limit: int, model_name: str) -> Dict[str, Any]:
+        """Perform automatic conversation compaction when token usage is too high.
+        
+        Args:
+            messages: Current conversation messages
+            current_tokens: Current token count
+            token_limit: Token limit for the model
+            model_name: Current model name
+            
+        Returns:
+            Dict with compaction result and new messages
+        """
+        try:
+            logger.info(f"Auto-compacting conversation: {current_tokens}/{token_limit} tokens (95%+ usage)")
+            
+            # Emit a notification about auto-compaction
+            await self._emit_system_message(
+                f"🗜️ Auto-compacting conversation ({current_tokens:,}/{token_limit:,} tokens, 95%+ usage)",
+                "auto_compact",
+                "🔄"
+            )
+            
+            # Perform the compaction using the agent's method
+            if hasattr(self.agent, "compact_conversation"):
+                compacted_messages = await self.agent.compact_conversation(messages)
+                
+                # Calculate new token count
+                full_compacted = self._prepare_full_message_context(compacted_messages)
+                new_tokens = self.agent.token_manager.count_conversation_tokens(full_compacted)
+                
+                # Emit success notification
+                await self._emit_system_message(
+                    f"✅ Conversation auto-compacted: {len(messages)} → {len(compacted_messages)} messages, "
+                    f"{current_tokens:,} → {new_tokens:,} tokens",
+                    "auto_compact_success",
+                    "📉"
+                )
+                
+                # Update the token display with new values
+                self.terminal_manager.update_token_display(
+                    current_tokens=new_tokens,
+                    token_limit=token_limit,
+                    model_name=model_name,
+                    show_display=False  # Don't show display during auto-compaction
+                )
+                
+                return {
+                    "auto_compacted": True,
+                    "compacted_messages": compacted_messages,
+                    "tokens_before": current_tokens,
+                    "tokens_after": new_tokens,
+                    "messages_before": len(messages),
+                    "messages_after": len(compacted_messages)
+                }
+            else:
+                await self._emit_system_message(
+                    "❌ Auto-compaction failed: feature not available for this agent",
+                    "auto_compact_error",
+                    "⚠️"
+                )
+                return None
+                
+        except Exception as e:
+            logger.error(f"Auto-compaction failed: {e}")
+            await self._emit_system_message(
+                f"❌ Auto-compaction failed: {str(e)}",
+                "auto_compact_error",
+                "⚠️"
+            )
+            return None
 
     # Event emission helper methods
     async def _emit_interruption(self, reason: str, interrupt_type: str = "user"):
