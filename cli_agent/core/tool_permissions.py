@@ -268,12 +268,14 @@ class ToolPermissionManager:
         # This must happen before any early returns so the info is available for display
         if input_handler is not None and hasattr(input_handler, "subagent_context"):
             tool_description = format_tool_description(tool_name, arguments)
-            print(f"[DEBUG PERMISSION] Setting subagent attrs: tool_name='{tool_name}', desc='{tool_description}', handler_id={id(input_handler)}")
+            # Use the attribute names that SubagentInputHandler actually reads
+            input_handler.current_tool_name = tool_name
+            input_handler.current_tool_arguments = arguments
+            # Also set the permission-specific attributes for consistency
             input_handler._permission_tool_name = tool_name
             input_handler._permission_arguments = arguments
             input_handler._permission_description = tool_description
             input_handler._permission_full_prompt = f"Allow {tool_name}? {tool_description}"
-            print(f"[DEBUG PERMISSION] After setting: _permission_tool_name={getattr(input_handler, '_permission_tool_name', 'NOT_SET')}")
 
         # Check session-level auto-approve
         if self.session_auto_approve or self.config.auto_approve_session:
@@ -371,7 +373,10 @@ class ToolPermissionManager:
             # For regular agents, check if we should use the permission queue
             if hasattr(input_handler, "subagent_context"):
                 # Subagent: don't display prompt immediately, let main process queue handle it
-                # Store the prompt details for the permission request
+                # Store the prompt details for the permission request using correct attribute names
+                input_handler.current_tool_name = tool_name
+                input_handler.current_tool_arguments = arguments
+                # Also set permission-specific attributes for consistency
                 input_handler._permission_tool_name = tool_name
                 input_handler._permission_arguments = arguments
                 input_handler._permission_description = tool_description

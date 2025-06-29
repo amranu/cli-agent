@@ -57,10 +57,6 @@ class ToolExecutionEngine:
             tool_info = self.agent.available_tools[tool_key]
             tool_name = tool_info["name"]
             
-            # Debug: Show tool resolution results for subagents
-            if self.agent.is_subagent:
-                logger.debug(f"Subagent resolved tool_key='{tool_key}' to tool_name='{tool_name}', tool_info keys: {list(tool_info.keys())}")
-
             # Show diff preview for replace_in_file and multiedit before permission check
             if tool_name == "replace_in_file" and not self.agent.is_subagent:
                 try:
@@ -156,19 +152,15 @@ class ToolExecutionEngine:
 
                 input_handler = getattr(self.agent, "_input_handler", None)
                 
-                # DEBUG PRINT for subagents
-                if self.agent.is_subagent:
-                    print(f"[DEBUG SUBAGENT] About to call permission check: tool_name='{tool_name}', input_handler_id={id(input_handler)}")
+                # For subagents, set current tool information on input handler BEFORE permission check
+                if self.agent.is_subagent and input_handler and hasattr(input_handler, 'set_current_tool_info'):
+                    input_handler.set_current_tool_info(tool_name, arguments)
                 
                 permission_result = (
                     await self.agent.permission_manager.check_tool_permission(
                         tool_name, arguments, input_handler
                     )
                 )
-                
-                # DEBUG PRINT result
-                if self.agent.is_subagent:
-                    print(f"[DEBUG SUBAGENT] Permission result: allowed={permission_result.allowed}, reason='{permission_result.reason}'")
 
                 if not permission_result.allowed:
                     if (

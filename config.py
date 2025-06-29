@@ -1459,7 +1459,8 @@ Then restart the agent.
             # Migrate legacy model settings to provider-model format
             self._migrate_legacy_model_settings()
 
-            print(f"Loaded persistent configuration from {config_file}")
+            # Config loading message suppressed - subagents emit their own message
+            # The persistent configuration has been loaded but we don't print it here
         except Exception as e:
             print(f"Warning: Could not load persistent configuration: {e}")
 

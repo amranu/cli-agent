@@ -115,6 +115,7 @@ async def run_subagent_task(task_file_path: str):
 
         # Load config and create host
         config = load_config()
+        emit_output_with_id("Configuration loaded successfully")
 
         # Use new provider-model architecture for subagents
         # Check if task specifies a specific model to use
@@ -146,6 +147,14 @@ async def run_subagent_task(task_file_path: str):
             def __init__(self, task_id):
                 super().__init__()
                 self.subagent_context = task_id
+                # Store tool info for permission requests
+                self.current_tool_name = None
+                self.current_tool_arguments = None
+
+            def set_current_tool_info(self, tool_name: str, arguments: dict):
+                """Set the current tool information for permission requests."""
+                self.current_tool_name = tool_name
+                self.current_tool_arguments = arguments
 
             def get_input(
                 self,
@@ -170,19 +179,29 @@ async def run_subagent_task(task_file_path: str):
                     )
 
                     # Emit permission request to main process
-                    # Get permission details if available
-                    print(f"[DEBUG INPUT_HANDLER] get_input called, handler_id={id(self)}")
-                    print(f"[DEBUG INPUT_HANDLER] Available attrs: {[attr for attr in dir(self) if attr.startswith('_permission')]}")
-                    tool_name = getattr(self, '_permission_tool_name', 'unknown')
-                    tool_arguments = getattr(self, '_permission_arguments', {})
-                    tool_description = getattr(self, '_permission_description', 'Unknown tool')
-                    full_prompt = getattr(self, '_permission_full_prompt', prompt_text)
-                    print(f"[DEBUG INPUT_HANDLER] Retrieved: tool_name='{tool_name}', desc='{tool_description}'")
+                    # Use current tool info if available, otherwise fall back to basic values
+                    tool_name = self.current_tool_name or 'unknown'
+                    tool_arguments = self.current_tool_arguments or {}
+                    
+                    # Create simple description from tool name and arguments  
+                    if tool_name != 'unknown':
+                        if tool_name == 'bash_execute' and 'command' in tool_arguments:
+                            tool_description = f"Execute bash command: {tool_arguments['command']}"
+                        elif tool_name == 'read_file' and 'file_path' in tool_arguments:
+                            tool_description = f"Read file: {tool_arguments['file_path']}"
+                        elif tool_name == 'write_file' and 'file_path' in tool_arguments:
+                            tool_description = f"Write to file: {tool_arguments['file_path']}"
+                        else:
+                            tool_description = f"Execute tool: {tool_name}"
+                    else:
+                        tool_description = 'Unknown tool'
+                    
+                    full_prompt = f"Allow {tool_name}? {tool_description}"
                     
                     emit_message(
                         "permission_request",
                         full_prompt,  # Send the full formatted prompt for display
-                        task_id=current_task_id,
+                        task_id=self.subagent_context,
                         request_id=request_id,
                         response_file=response_file,
                         tool_name=tool_name,
@@ -312,6 +331,13 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
 
             async def track_emit_result_tool(tool_key, arguments):
                 nonlocal emit_result_called
+                
+                # Set tool information on input handler before execution for permission display
+                if hasattr(host, '_input_handler') and host._input_handler and hasattr(host._input_handler, 'set_current_tool_info'):
+                    # Resolve tool name from tool_key
+                    tool_name = tool_key.split(":")[-1] if ":" in tool_key else tool_key
+                    host._input_handler.set_current_tool_info(tool_name, arguments)
+                
                 result = await original_execute_mcp_tool(tool_key, arguments)
 
                 # Check if tool was denied by user
