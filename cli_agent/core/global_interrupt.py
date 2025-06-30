@@ -79,8 +79,8 @@ class GlobalInterruptManager:
                 )
 
                 if self._interrupt_count == 1:
-                    # First Ctrl+C: For now, always clear input and require second Ctrl+C
-                    # TODO: Re-enable empty prompt detection once thoroughly tested
+                    # First Ctrl+C: Always clear and interrupt for now
+                    # TODO: The empty prompt detection needs more work - too many edge cases
                     self.set_interrupted(True)
                     print(
                         "\n🛑 Operation interrupted and input cleared. Press Ctrl+C again to exit.",
@@ -161,70 +161,70 @@ class GlobalInterruptManager:
         """Check if the current prompt is empty (no active input or operations).
         
         Returns:
-            True if prompt is empty and safe to exit, False if there's active input/operations
+            True ONLY if we're at an empty prompt waiting for user input,
+            False in all other cases (active operations, partial input, etc.)
         """
         try:
-            # Check if we have any active operations (interrupt state indicates active operations)
+            # ALWAYS return False if we have any active operations
             if self._interrupted:
-                # There's an active operation that was interrupted
                 return False
             
-            # Check if we have access to the current input handler
-            input_handler = self.get_current_input_handler()
-            if input_handler:
-                # Check if we're currently waiting for input and if there's any current text
-                if hasattr(input_handler, '_waiting_for_input') and input_handler._waiting_for_input:
-                    # We're waiting for input - check if there's any current text
-                    current_text = getattr(input_handler, '_current_input_text', '')
-                    if current_text.strip():
-                        # There's partial input, don't exit
-                        return False
-                    else:
-                        # Empty prompt while waiting for input - safe to exit
-                        return True
-            
-            # Check if we're in the middle of specific operations by looking at the frame stack
+            # Check the call stack to determine our context
             import inspect
             current_frame = inspect.currentframe()
             try:
-                # Walk up the call stack to see if we're in any active operations
                 frame = current_frame
+                in_prompt_input = False
+                in_active_operation = False
                 
                 while frame:
                     frame_info = inspect.getframeinfo(frame)
                     filename = frame_info.filename
                     function_name = frame_info.function
                     
-                    # Check for active LLM operations (but not the interrupt handler itself)
-                    if function_name not in ['interrupt_handler', '_check_if_prompt_is_empty']:
-                        if any(name in filename for name in ['base_llm_provider', 'interrupt_aware_streaming']):
-                            if any(func in function_name for func in ['generate_response', '_make_api_request', 'run_with_interrupt_monitoring', '_generate_completion']):
-                                # We're in an active LLM operation
-                                return False
-                        
-                        # Check for active tool operations
-                        if 'builtin_tool_executor' in filename:
-                            if any(func in function_name for func in ['bash_execute', 'execute_tool_call']):
-                                # We're in an active tool operation
-                                return False
+                    # Skip our own functions
+                    if function_name in ['interrupt_handler', '_check_if_prompt_is_empty']:
+                        frame = frame.f_back
+                        continue
+                    
+                    # Check if we're in prompt_toolkit input (waiting for user input)
+                    if 'prompt_toolkit' in filename and function_name in ['prompt', 'read_input']:
+                        in_prompt_input = True
+                    
+                    # Check if we're in our input handler but just waiting
+                    if 'input_handler' in filename and function_name in ['get_input', 'get_multiline_input']:
+                        in_prompt_input = True
+                    
+                    # Check for active operations that should prevent exit
+                    if any(name in filename for name in [
+                        'base_llm_provider', 'interrupt_aware_streaming', 
+                        'builtin_tool_executor', 'response_handler', 'tool_execution'
+                    ]):
+                        if any(func in function_name for func in [
+                            'generate_response', '_make_api_request', 'run_with_interrupt_monitoring',
+                            '_generate_completion', 'bash_execute', 'execute_tool_call',
+                            'handle_complete_response', '_process_streaming_chunks'
+                        ]):
+                            in_active_operation = True
+                            break
                     
                     frame = frame.f_back
                     
             finally:
-                del current_frame  # Prevent reference cycles
+                del current_frame
             
-            # If we're in interactive mode and no operations detected, consider it empty
-            import sys
-            if sys.stdin.isatty():
-                # We're in interactive mode and no operations detected
-                return True
-            else:
-                # Non-interactive mode, be more conservative
-                return False
+            # Only return True if we're in prompt input AND not in active operation
+            if in_prompt_input and not in_active_operation:
+                # Additional safety: make sure we're in interactive mode
+                import sys
+                if sys.stdin.isatty():
+                    return True
+            
+            return False
             
         except Exception as e:
             logger.debug(f"Error checking prompt state: {e}")
-            # If we can't determine state, be conservative and don't exit
+            # Always be conservative on errors
             return False
 
     def get_interrupt_count(self) -> int:
