@@ -352,7 +352,8 @@ async def run_with_interrupt_monitoring(
             except KeyboardInterrupt:
                 logger.info(f"{operation_name} cancelled due to interrupt")
                 main_task.cancel()
-                raise
+                # Don't re-raise KeyboardInterrupt - let the main logic handle it
+                return
 
             await asyncio.sleep(check_interval)
 
