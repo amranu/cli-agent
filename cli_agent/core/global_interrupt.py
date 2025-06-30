@@ -239,7 +239,12 @@ class GlobalInterruptManager:
         # Check for interrupts while waiting
         while not finished.is_set():
             if self.is_interrupted():
-                raise KeyboardInterrupt("Operation interrupted")
+                # Check interrupt count to decide whether to raise KeyboardInterrupt or FirstInterruptException
+                from cli_agent.core.interrupt_aware_streaming import FirstInterruptException
+                if self._interrupt_count >= 2:
+                    raise KeyboardInterrupt("Operation interrupted - multiple interrupts")
+                else:
+                    raise FirstInterruptException("Operation interrupted - first interrupt")
             finished.wait(check_interval)
 
         # Re-raise any exception from the operation
@@ -265,7 +270,12 @@ class GlobalInterruptManager:
                         await task
                     except asyncio.CancelledError:
                         pass
-                    raise KeyboardInterrupt("Operation interrupted")
+                    # Check interrupt count to decide whether to raise KeyboardInterrupt or FirstInterruptException
+                    from cli_agent.core.interrupt_aware_streaming import FirstInterruptException
+                    if self._interrupt_count >= 2:
+                        raise KeyboardInterrupt("Operation interrupted - multiple interrupts")
+                    else:
+                        raise FirstInterruptException("Operation interrupted - first interrupt")
 
                 # Wait a bit before checking again
                 try:
@@ -275,7 +285,12 @@ class GlobalInterruptManager:
 
             return await task
         except asyncio.CancelledError:
-            raise KeyboardInterrupt("Operation interrupted")
+            # Check interrupt count to decide whether to raise KeyboardInterrupt or FirstInterruptException
+            from cli_agent.core.interrupt_aware_streaming import FirstInterruptException
+            if self._interrupt_count >= 2:
+                raise KeyboardInterrupt("Operation interrupted - multiple interrupts")
+            else:
+                raise FirstInterruptException("Operation interrupted - first interrupt")
 
     def restore_handlers(self):
         """Restore original signal handlers."""
