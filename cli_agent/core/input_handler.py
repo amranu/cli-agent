@@ -60,6 +60,8 @@ class InterruptibleInput:
         self.interrupted = False
         self.global_interrupt_manager = get_global_interrupt_manager()
         self.agent = agent  # Store agent reference for tool name completion
+        self._current_input_text = ""  # Track current input text for empty prompt detection
+        self._waiting_for_input = False  # Track if we're currently waiting for user input
         self._setup_history()
         self._setup_prompt_toolkit()
 
@@ -383,29 +385,36 @@ class InterruptibleInput:
         Raises:
             None: All exceptions are caught and handled gracefully
         """
-        if not self._available:
-            # Fallback to basic input if prompt_toolkit unavailable
-            try:
-                result = input(prompt_text)
-                if result:
-                    self._add_to_history(result)
-                return result
-            except KeyboardInterrupt:
-                self.interrupted = True
-                # Manually trigger the global interrupt manager since basic input intercepted the signal
-                import os
-                import signal
-
-                os.kill(
-                    os.getpid(), signal.SIGINT
-                )  # Re-send SIGINT to trigger our global handler
-                return None
-            except EOFError:
-                # End of input (e.g., pipe closed)
-                self.interrupted = True
-                return None
-
+        # Register this input handler for empty prompt detection
+        self.global_interrupt_manager.set_current_input_handler(self)
+        
+        # Track that we're waiting for input
+        self._waiting_for_input = True
+        self._current_input_text = ""
+        
         try:
+            if not self._available:
+                # Fallback to basic input if prompt_toolkit unavailable
+                try:
+                    result = input(prompt_text)
+                    if result:
+                        self._add_to_history(result)
+                    return result
+                except KeyboardInterrupt:
+                    self.interrupted = True
+                    # Manually trigger the global interrupt manager since basic input intercepted the signal
+                    import os
+                    import signal
+
+                    os.kill(
+                        os.getpid(), signal.SIGINT
+                    )  # Re-send SIGINT to trigger our global handler
+                    return None
+                except EOFError:
+                    # End of input (e.g., pipe closed)
+                    self.interrupted = True
+                    return None
+
             # Set up escape interrupt behavior
             self._allow_escape_interrupt = allow_escape_interrupt
 
@@ -486,6 +495,10 @@ class InterruptibleInput:
             except EOFError:
                 self.interrupted = True
                 return None
+        finally:
+            # Clean up input state
+            self._waiting_for_input = False
+            self._current_input_text = ""
 
     def check_for_interrupt(self) -> bool:
         """Check if an interrupt signal is pending without blocking.
@@ -564,6 +577,9 @@ class InterruptibleInput:
         Returns:
             Optional[str]: The user's input string, or None if interrupted
         """
+        # Register this input handler for empty prompt detection
+        self.global_interrupt_manager.set_current_input_handler(self)
+        
         if not self._available:
             # Fallback behavior
             try:
