@@ -266,6 +266,70 @@ class TestTokenManager:
         with patch.object(tm, 'count_conversation_tokens', return_value=80000):
             # Should compact when 80000 > 80% of 99000 (79200)
             assert tm.should_compact(messages, context_length=100000)
+    
+    def test_has_reliable_token_info(self):
+        """Test token reliability detection for different models."""
+        tm = TokenManager()
+        
+        # Known models should be reliable
+        assert tm.has_reliable_token_info("gpt-4-turbo") == True
+        assert tm.has_reliable_token_info("claude-3-5-sonnet-20241022") == True
+        assert tm.has_reliable_token_info("gemini-2.5-flash") == True
+        assert tm.has_reliable_token_info("deepseek-chat") == True
+        
+        # Unknown models should be unreliable
+        assert tm.has_reliable_token_info("unknown-model") == False
+        assert tm.has_reliable_token_info("my-custom-llm") == False
+        assert tm.has_reliable_token_info("gpt-5-future") == False
+        
+        # Partial matches should be unreliable (falls back to pattern matching)
+        assert tm.has_reliable_token_info("gpt-4-some-new-variant") == False
+        assert tm.has_reliable_token_info("claude-4-future") == False
+        
+        # With explicit context_length, should be reliable even for unknown models
+        assert tm.has_reliable_token_info("unknown-model", context_length=100000) == True
+        assert tm.has_reliable_token_info("custom-llm", context_length=50000) == True
+        
+        # With zero or negative context_length, should be unreliable
+        assert tm.has_reliable_token_info("unknown-model", context_length=0) == False
+        assert tm.has_reliable_token_info("unknown-model", context_length=-1) == False
+
+
+class TestTokenDisplayReliability:
+    """Test integration between token reliability detection and display system."""
+    
+    def test_token_display_respects_reliability(self):
+        """Test that token display is hidden for unreliable token information."""
+        from cli_agent.core.terminal_manager import TerminalManager
+        from unittest.mock import Mock
+        
+        tm = TokenManager()
+        terminal_manager = TerminalManager()
+        
+        # Mock the actual display method to capture calls
+        display_calls = []
+        def mock_draw_display():
+            display_calls.append("display_called")
+        
+        terminal_manager._draw_token_display = mock_draw_display
+        terminal_manager.is_terminal = True
+        terminal_manager.token_display_enabled = True
+        
+        # Test with reliable token info (should display when show_display=True)
+        display_calls.clear()
+        terminal_manager.update_token_display(
+            current_tokens=1000,
+            token_limit=10000,
+            model_name="gpt-4-turbo",
+            show_display=True
+        )
+        # Should have been called since we passed show_display=True
+        assert len(display_calls) == 1, f"Expected 1 display call for reliable token info, got {len(display_calls)}"
+        
+        # Test that terminal manager stores token info regardless of display
+        assert terminal_manager.current_token_info is not None
+        assert terminal_manager.current_token_info["current_tokens"] == 1000
+        assert terminal_manager.current_token_info["token_limit"] == 10000
 
 
 class TestConvenienceFunctions:

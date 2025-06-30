@@ -55,11 +55,38 @@ class TestSlashCommandManager:
 
     @pytest.mark.asyncio
     async def test_tokens_command(self, mock_base_agent):
-        """Test /tokens command."""
+        """Test /tokens command with reliable and unreliable token info."""
+        from unittest.mock import Mock
+        
         manager = SlashCommandManager(mock_base_agent)
 
         # Mock messages
         messages = [{"role": "user", "content": "test"}]
+        
+        # Test with reliable token information
+        mock_token_manager = Mock()
+        mock_token_manager.has_reliable_token_info.return_value = True
+        mock_base_agent.token_manager = mock_token_manager
+        
+        # Add the missing method to mock_base_agent
+        mock_base_agent.count_conversation_tokens = Mock(return_value=100)
+        mock_base_agent.get_token_limit = Mock(return_value=1000)
+        
+        result = await manager.handle_slash_command("/tokens", messages)
+        assert isinstance(result, str)
+        assert "📊 Token usage" in result
+        assert "100/1000" in result
+        
+        # Test with unreliable token information
+        mock_token_manager.has_reliable_token_info.return_value = False
+        
+        result = await manager.handle_slash_command("/tokens", messages)
+        assert isinstance(result, str)
+        assert "Token information not available" in result
+        assert "known model limits" in result
+        
+        # Test without token manager
+        mock_base_agent.token_manager = None
         result = await manager.handle_slash_command("/tokens", messages)
         assert isinstance(result, str)
 

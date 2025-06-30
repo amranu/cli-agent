@@ -229,6 +229,11 @@ Custom Commands:"""
         if messages is None or len(messages) == 0:
             return "No conversation history to analyze."
 
+        # Check if we have reliable token information
+        if hasattr(self.agent, "token_manager") and hasattr(self.agent.token_manager, "has_reliable_token_info"):
+            if not self.agent.token_manager.has_reliable_token_info():
+                return "⚠️  Token information not available for this model. Accurate token counting requires known model limits."
+
         tokens = self.agent.count_conversation_tokens(messages)
         limit = (
             self.agent.get_token_limit()

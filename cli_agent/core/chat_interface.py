@@ -807,14 +807,18 @@ class ChatInterface:
                 except:
                     model_name = "Unknown"
                 
-                # Update the terminal display (sync version - no auto-compaction)
+                # Check if we have reliable token information
+                has_reliable_info = self.agent.token_manager.has_reliable_token_info()
+                
+                # Only show token display if we have reliable info (sync version - no auto-compaction)
                 # Auto-compaction is only available in the async version
-                self.terminal_manager.update_token_display(
-                    current_tokens=current_tokens,
-                    token_limit=token_limit,
-                    model_name=model_name,
-                    show_display=show_display
-                )
+                if has_reliable_info:
+                    self.terminal_manager.update_token_display(
+                        current_tokens=current_tokens,
+                        token_limit=token_limit,
+                        model_name=model_name,
+                        show_display=show_display
+                    )
                 
                 return None
                 
@@ -854,20 +858,26 @@ class ChatInterface:
                 except:
                     model_name = "Unknown"
                 
-                # Check for automatic compaction (95% threshold)
-                percentage = (current_tokens / token_limit) * 100 if token_limit > 0 else 0
+                # Check if we have reliable token information
+                has_reliable_info = self.agent.token_manager.has_reliable_token_info()
                 
-                # Auto-compact if above 95% and we have enough messages to compact
-                if percentage >= 95 and len(messages) > 5:
-                    return await self._perform_auto_compaction(messages, current_tokens, token_limit, model_name)
-                
-                # Update the terminal display
-                self.terminal_manager.update_token_display(
-                    current_tokens=current_tokens,
-                    token_limit=token_limit,
-                    model_name=model_name,
-                    show_display=show_display
-                )
+                # Only perform auto-compaction and show token display if we have reliable info
+                if has_reliable_info:
+                    # Check for automatic compaction (95% threshold)
+                    percentage = (current_tokens / token_limit) * 100 if token_limit > 0 else 0
+                    
+                    # Auto-compact if above 95% and we have enough messages to compact
+                    if percentage >= 95 and len(messages) > 5:
+                        return await self._perform_auto_compaction(messages, current_tokens, token_limit, model_name)
+                    
+                    # Update the terminal display
+                    self.terminal_manager.update_token_display(
+                        current_tokens=current_tokens,
+                        token_limit=token_limit,
+                        model_name=model_name,
+                        show_display=show_display
+                    )
+                # If we don't have reliable info, don't show token display or auto-compact
                 
                 return None
                 

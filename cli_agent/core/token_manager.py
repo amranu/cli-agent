@@ -81,6 +81,32 @@ class TokenManager:
         # Conservative default
         return 32000
 
+    def has_reliable_token_info(self, model_name: Optional[str] = None, context_length: Optional[int] = None) -> bool:
+        """Check if we have reliable token information for the specified model.
+        
+        Returns True if we have explicit model limits or context length, False if using fallback.
+        """
+        model_name = model_name or self.model_name or self._get_current_model_name()
+        
+        # If we have explicit context_length, we have reliable info
+        if context_length and context_length > 0:
+            return True
+        
+        # Check if we have the model in our known limits
+        model_limits = self._get_enhanced_model_token_limits()
+        
+        if model_name and model_name in model_limits:
+            return True
+            
+        # Check for exact pattern matches (not partial matches)
+        if model_name:
+            for pattern in model_limits.keys():
+                if model_name.lower() == pattern.lower():
+                    return True
+        
+        # If we're falling back to pattern matching or conservative default, it's unreliable
+        return False
+
     def _get_enhanced_model_token_limits(self) -> Dict[str, int]:
         """Enhanced token limits based on comprehensive model survey."""
         return {
