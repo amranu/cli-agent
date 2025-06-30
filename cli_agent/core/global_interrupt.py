@@ -78,21 +78,13 @@ class GlobalInterruptManager:
                     f"Global interrupt signal received: {signum} (count: {self._interrupt_count})"
                 )
 
-                # Check if we should exit immediately or interrupt
-                should_exit_immediately = self._should_exit_immediately()
-                
-                if should_exit_immediately:
-                    # Empty prompt and no operations - exit immediately
-                    print("\n👋 Exiting...", flush=True)
-                    import sys
-                    sys.exit(0)
-                else:
-                    # Content in prompt or active operations - interrupt and clear
-                    self.set_interrupted(True)
-                    print(
-                        "\n🛑 Input cleared.",
-                        flush=True,
-                    )
+                # Always interrupt operations and continue - don't exit from signal handler
+                # The prompt_toolkit key binding will handle empty prompt exits
+                self.set_interrupted(True)
+                print(
+                    "\n🛑 Operation interrupted.",
+                    flush=True,
+                )
 
             # Call all registered callbacks
             for callback in self._callbacks[

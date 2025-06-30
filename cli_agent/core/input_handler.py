@@ -367,14 +367,17 @@ class InterruptibleInput:
                 # Get current buffer text
                 current_text = event.app.current_buffer.text
                 
-                # Check if prompt is empty and no operations are running
-                if not current_text.strip() and not self.global_interrupt_manager.is_interrupted():
-                    # Empty prompt - exit immediately
+                # Check if we have active operations
+                has_active_operations = self.global_interrupt_manager.is_interrupted()
+                
+                # Only exit immediately if prompt is empty AND no operations are running
+                if not current_text.strip() and not has_active_operations:
+                    # Empty prompt and no operations - exit immediately
                     event.app.exit(exception=KeyboardInterrupt("immediate_exit"))
                 else:
-                    # Has content or operations - clear and continue
+                    # Has content or operations are running - clear input and continue
                     event.app.current_buffer.reset()
-                    # Still raise KeyboardInterrupt to trigger global handler
+                    # Raise KeyboardInterrupt to trigger operation cancellation if needed
                     event.app.exit(exception=KeyboardInterrupt("clear_input"))
 
             self._completer = AdvancedCompleter(self.agent)
