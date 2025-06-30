@@ -467,8 +467,7 @@ class InterruptibleInput:
                 return result
 
         except KeyboardInterrupt:
-            # Don't set self.interrupted - let global interrupt manager handle the logic
-            # Just re-send the signal to trigger our global handler
+            # Re-send the signal to trigger our global handler which will decide exit vs clear
             import os
             import signal
 
@@ -476,7 +475,7 @@ class InterruptibleInput:
                 os.getpid(), signal.SIGINT
             )  # Re-send SIGINT to trigger our global handler
             
-            # Return None to clear the prompt - global handler will decide exit vs continue
+            # Return None to clear the prompt - global handler handles exit decision
             return None
         except EOFError:
             # Handle Ctrl+D gracefully

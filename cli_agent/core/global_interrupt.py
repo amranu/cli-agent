@@ -78,19 +78,19 @@ class GlobalInterruptManager:
                     f"Global interrupt signal received: {signum} (count: {self._interrupt_count})"
                 )
 
-                # Simple approach: check if we should exit immediately or interrupt
+                # Check if we should exit immediately or interrupt
                 should_exit_immediately = self._should_exit_immediately()
                 
                 if should_exit_immediately:
-                    # No operation running and prompt is empty - exit immediately
+                    # Empty prompt and no operations - exit immediately
                     print("\n👋 Exiting...", flush=True)
                     import sys
                     sys.exit(0)
                 else:
-                    # Operation running or prompt has content - interrupt and continue
+                    # Content in prompt or active operations - interrupt and clear
                     self.set_interrupted(True)
                     print(
-                        "\n🛑 Operation interrupted and input cleared.",
+                        "\n🛑 Input cleared.",
                         flush=True,
                     )
 
@@ -159,11 +159,23 @@ class GlobalInterruptManager:
         """Check if we should exit immediately on Ctrl+C.
         
         Returns:
-            True if no operation is running and prompt is empty,
-            False if there are active operations or prompt content.
+            True if prompt is empty and no operations are running,
+            False if there's content in prompt or active operations.
         """
         try:
-            # If we have any active operations, don't exit
+            # Check if there's content in the current prompt
+            try:
+                from prompt_toolkit.application import get_app
+                app = get_app()
+                current_text = app.current_buffer.text
+                if current_text and current_text.strip():
+                    # There's content in the prompt - don't exit
+                    return False
+            except Exception:
+                # If we can't access prompt content, be conservative
+                return False
+            
+            # Check if we have any active operations
             if self._interrupted:
                 return False
             
@@ -201,7 +213,7 @@ class GlobalInterruptManager:
             finally:
                 del current_frame
             
-            # If we get here, no active operations detected
+            # If we get here: empty prompt, no active operations
             # Only exit if we're in interactive mode (TTY)
             import sys
             return sys.stdin.isatty()
