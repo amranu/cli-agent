@@ -7,6 +7,11 @@ from typing import Any, AsyncIterator, Callable, Optional
 logger = logging.getLogger(__name__)
 
 
+class FirstInterruptException(Exception):
+    """Exception raised for first interrupt that should be handled gracefully."""
+    pass
+
+
 class InterruptAwareStream:
     """Wrapper that adds interrupt checking to async streaming responses."""
 
@@ -373,11 +378,31 @@ async def run_with_interrupt_monitoring(
             return main_task.result()
         else:
             # Monitor task completed first (interrupt detected)
-            raise KeyboardInterrupt("Operation interrupted by user")
+            # Check interrupt count to decide whether to raise or return gracefully
+            from cli_agent.core.global_interrupt import get_global_interrupt_manager
+            interrupt_manager = get_global_interrupt_manager()
+            interrupt_count = interrupt_manager.get_interrupt_count()
+            
+            if interrupt_count >= 2:
+                # Second or more interrupts: raise to exit application
+                raise KeyboardInterrupt("Operation interrupted by user - multiple interrupts")
+            else:
+                # First interrupt: raise special exception that can be caught gracefully
+                raise FirstInterruptException("Operation interrupted by user - first interrupt")
 
     except asyncio.CancelledError:
         logger.info(f"{operation_name} was cancelled")
-        raise KeyboardInterrupt("Operation cancelled")
+        # Check interrupt count for cancelled operations too
+        from cli_agent.core.global_interrupt import get_global_interrupt_manager
+        interrupt_manager = get_global_interrupt_manager()
+        interrupt_count = interrupt_manager.get_interrupt_count()
+        
+        if interrupt_count >= 2:
+            # Second or more interrupts: raise to exit application
+            raise KeyboardInterrupt("Operation cancelled - multiple interrupts")
+        else:
+            # First interrupt: raise special exception that can be caught gracefully
+            raise FirstInterruptException("Operation cancelled - first interrupt")
     except Exception as e:
         # Ensure all tasks are cancelled on any error
         for task in [main_task, monitor_task]:

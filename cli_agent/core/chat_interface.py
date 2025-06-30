@@ -155,6 +155,7 @@ class ChatInterface:
                     # If interrupted (EOF), exit the conversation
                     if input_handler.interrupted:
                         input_handler.interrupted = False
+                        self.interrupt_received = True  # Mark that we're exiting due to interruption
                         break
                     continue
 
@@ -421,11 +422,35 @@ class ChatInterface:
                             and not current_task.cancelled()
                         ):
                             logger.info("Task completed successfully")
-                            response = current_task.result()
-                            logger.info(
-                                f"Response received: {type(response)} - {repr(response[:100] if isinstance(response, str) else response)}"
-                            )
-                            current_task = None
+                            try:
+                                response = current_task.result()
+                                logger.info(
+                                    f"Response received: {type(response)} - {repr(response[:100] if isinstance(response, str) else response)}"
+                                )
+                                current_task = None
+                            except Exception as e:
+                                # Check for different types of interruptions
+                                from cli_agent.core.interrupt_aware_streaming import FirstInterruptException
+                                
+                                if isinstance(e, FirstInterruptException):
+                                    # First interrupt: handle gracefully and continue
+                                    logger.info(f"First interrupt detected, handling gracefully: {e}")
+                                    current_task = None
+                                    await self._emit_interruption(
+                                        "Operation interrupted by user", "user"
+                                    )
+                                    # Let the main loop handle clearing the interrupt state
+                                    continue
+                                elif isinstance(e, KeyboardInterrupt):
+                                    # KeyboardInterrupt (second+ interrupt): re-raise to exit application
+                                    logger.info(f"KeyboardInterrupt detected, re-raising: {e}")
+                                    current_task = None
+                                    raise
+                                else:
+                                    # Other exception: re-raise
+                                    logger.error(f"Other exception in task result: {type(e).__name__}: {e}")
+                                    current_task = None
+                                    raise
                         elif current_task and current_task.done() and current_task.cancelled():
                             # Task was cancelled, clean up and continue
                             logger.info("Task was cancelled, returning to prompt")
@@ -585,6 +610,10 @@ class ChatInterface:
         if not existing_messages:
             await self.display_goodbye_message()
 
+        # Check if we're exiting due to interruption (EOF or Ctrl+C)
+        if self.interrupt_received:
+            return {"interrupted": True, "messages": messages}
+            
         return messages
 
     def setup_signal_handlers(self):

@@ -43,6 +43,7 @@ class GlobalInterruptManager:
             return
 
         self._interrupted = False
+        self._exit_requested = False  # Flag for graceful exit
         self._interrupt_count = 0
         self._last_interrupt_time = 0
         self._interrupt_timeout = 2.0  # Reset count after 2 seconds
