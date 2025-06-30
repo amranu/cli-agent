@@ -127,6 +127,14 @@ class ChatInterface:
                 # self.terminal_manager.update_prompt("Processing... ")
 
                 if user_input is None:  # Interrupted or EOF
+                    # Check if this is an immediate exit from empty prompt
+                    if hasattr(input_handler, 'immediate_exit_requested') and input_handler.immediate_exit_requested:
+                        # Immediate exit - don't show operation cancelled message
+                        input_handler.immediate_exit_requested = False
+                        self.interrupt_received = True
+                        break
+                    
+                    # Regular interruption handling
                     if current_task and not current_task.done():
                         current_task.cancel()
                         await self._emit_interruption(

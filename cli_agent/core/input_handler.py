@@ -58,6 +58,7 @@ class InterruptibleInput:
             agent: Optional reference to the agent for accessing tool names
         """
         self.interrupted = False
+        self.immediate_exit_requested = False  # Flag for immediate exit from empty prompt
         self.global_interrupt_manager = get_global_interrupt_manager()
         self.agent = agent  # Store agent reference for tool name completion
         self._current_input_text = ""  # Track current input text for empty prompt detection
@@ -492,11 +493,11 @@ class InterruptibleInput:
         except KeyboardInterrupt as e:
             # Check if this is an immediate exit request
             if str(e) == "immediate_exit":
-                # Empty prompt - set interrupted flag and exit
-                self.interrupted = True
+                # Empty prompt - set immediate exit flag and return None
+                self.immediate_exit_requested = True
                 return None
             elif str(e) == "clear_input":
-                # Had content - just clear and continue (don't set interrupted flag)
+                # Had content - just clear and continue (don't set any flags)
                 return None
             else:
                 # Fallback - re-send signal to global handler
