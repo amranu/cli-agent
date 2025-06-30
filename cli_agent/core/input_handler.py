@@ -237,6 +237,40 @@ class InterruptibleInput:
                                 if provider.startswith(current):
                                     yield Completion(provider, start_position=-len(current))
                     
+                    # Handle /switch command with provider:model completion
+                    elif command == "/switch":
+                        if len(parts) == 1 and text.endswith(" "):
+                            # Show all provider:model combinations after space: "/switch "
+                            provider_models = self._get_available_provider_models()
+                            for provider, models in provider_models.items():
+                                for model in models:
+                                    provider_model = f"{provider}:{model}"
+                                    yield Completion(provider_model, start_position=0)
+                        elif len(parts) == 2:
+                            # Complete partial provider:model: "/switch anth" or "/switch anthropic:cl"
+                            current = parts[1]
+                            provider_models = self._get_available_provider_models()
+                            
+                            if ":" in current:
+                                # Completing model part: "/switch anthropic:cl"
+                                provider_part, model_part = current.split(":", 1)
+                                if provider_part in provider_models:
+                                    for model in provider_models[provider_part]:
+                                        if model.startswith(model_part):
+                                            provider_model = f"{provider_part}:{model}"
+                                            yield Completion(provider_model, start_position=-len(current))
+                            else:
+                                # Completing provider part or showing provider:model combinations
+                                for provider, models in provider_models.items():
+                                    if provider.startswith(current):
+                                        # Complete just the provider part with colon
+                                        yield Completion(f"{provider}:", start_position=-len(current))
+                                        # Also show specific models for this provider
+                                        for model in models[:3]:  # Limit to first 3 models to avoid clutter
+                                            provider_model = f"{provider}:{model}"
+                                            if provider_model.startswith(current):
+                                                yield Completion(provider_model, start_position=-len(current))
+                    
                     # Handle other slash commands (basic completion)
                     elif len(parts) == 1 and not text.endswith(" "):
                         # Only complete slash command names if not followed by space
@@ -267,6 +301,33 @@ class InterruptibleInput:
                     
                     # Remove duplicates and sort
                     return sorted(list(set(tool_names)))
+
+                def _get_available_provider_models(self):
+                    """Get available provider-model combinations for completion."""
+                    if not self.agent or not hasattr(self.agent, 'config'):
+                        # Fallback to basic providers and models if no agent config
+                        return {
+                            "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+                            "openai": ["gpt-4-turbo-preview", "gpt-4", "gpt-3.5-turbo", "o1-preview"],
+                            "deepseek": ["deepseek-chat", "deepseek-reasoner"],
+                            "google": ["gemini-2.5-flash", "gemini-1.5-pro"],
+                            "openrouter": ["anthropic/claude-3.5-sonnet", "openai/gpt-4-turbo-preview"],
+                            "ollama": ["llama2", "llama3"]
+                        }
+                    
+                    try:
+                        # Try to get actual available models from config
+                        return self.agent.config.get_available_provider_models()
+                    except Exception:
+                        # Fallback if config method fails
+                        return {
+                            "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+                            "openai": ["gpt-4-turbo-preview", "gpt-4", "gpt-3.5-turbo", "o1-preview"],
+                            "deepseek": ["deepseek-chat", "deepseek-reasoner"],
+                            "google": ["gemini-2.5-flash", "gemini-1.5-pro"],
+                            "openrouter": ["anthropic/claude-3.5-sonnet", "openai/gpt-4-turbo-preview"],
+                            "ollama": ["llama2", "llama3"]
+                        }
 
             self._prompt = prompt
             self._patch_stdout = patch_stdout
