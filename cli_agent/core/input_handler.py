@@ -357,6 +357,26 @@ class InterruptibleInput:
                     self.interrupted = True
                     event.app.exit(exception=KeyboardInterrupt)
 
+            @self._bindings.add(Keys.ControlC)
+            def handle_ctrl_c(event):
+                """Handle Ctrl+C with buffer content awareness.
+
+                Args:
+                    event: The key event from prompt_toolkit
+                """
+                # Get current buffer text
+                current_text = event.app.current_buffer.text
+                
+                # Check if prompt is empty and no operations are running
+                if not current_text.strip() and not self.global_interrupt_manager.is_interrupted():
+                    # Empty prompt - exit immediately
+                    event.app.exit(exception=KeyboardInterrupt("immediate_exit"))
+                else:
+                    # Has content or operations - clear and continue
+                    event.app.current_buffer.reset()
+                    # Still raise KeyboardInterrupt to trigger global handler
+                    event.app.exit(exception=KeyboardInterrupt("clear_input"))
+
             self._completer = AdvancedCompleter(self.agent)
 
         except ImportError:
@@ -435,7 +455,7 @@ class InterruptibleInput:
                     """
                     return self._prompt(
                         prompt_text,
-                        key_bindings=self._bindings if allow_escape_interrupt else None,
+                        key_bindings=self._bindings,  # Always use our key bindings for Ctrl+C handling
                         multiline=multiline_mode,
                         wrap_lines=True,
                         enable_history_search=True,
@@ -455,7 +475,7 @@ class InterruptibleInput:
                 # No event loop running, safe to use prompt_toolkit directly
                 result = self._prompt(
                     prompt_text,
-                    key_bindings=self._bindings if allow_escape_interrupt else None,
+                    key_bindings=self._bindings,  # Always use our key bindings for Ctrl+C handling
                     multiline=multiline_mode,
                     wrap_lines=True,
                     enable_history_search=True,
@@ -466,17 +486,21 @@ class InterruptibleInput:
                 )
                 return result
 
-        except KeyboardInterrupt:
-            # Re-send the signal to trigger our global handler which will decide exit vs clear
-            import os
-            import signal
-
-            os.kill(
-                os.getpid(), signal.SIGINT
-            )  # Re-send SIGINT to trigger our global handler
-            
-            # Return None to clear the prompt - global handler handles exit decision
-            return None
+        except KeyboardInterrupt as e:
+            # Check if this is an immediate exit request
+            if str(e) == "immediate_exit":
+                # Empty prompt - set interrupted flag and exit
+                self.interrupted = True
+                return None
+            elif str(e) == "clear_input":
+                # Had content - just clear and continue (don't set interrupted flag)
+                return None
+            else:
+                # Fallback - re-send signal to global handler
+                import os
+                import signal
+                os.kill(os.getpid(), signal.SIGINT)
+                return None
         except EOFError:
             # Handle Ctrl+D gracefully
             self.interrupted = True
