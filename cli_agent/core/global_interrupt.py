@@ -78,23 +78,21 @@ class GlobalInterruptManager:
                     f"Global interrupt signal received: {signum} (count: {self._interrupt_count})"
                 )
 
-                if self._interrupt_count == 1:
-                    # First Ctrl+C: Always clear and interrupt for now
-                    # TODO: The empty prompt detection needs more work - too many edge cases
+                # Simple approach: check if we should exit immediately or interrupt
+                should_exit_immediately = self._should_exit_immediately()
+                
+                if should_exit_immediately:
+                    # No operation running and prompt is empty - exit immediately
+                    print("\n👋 Exiting...", flush=True)
+                    import sys
+                    sys.exit(0)
+                else:
+                    # Operation running or prompt has content - interrupt and continue
                     self.set_interrupted(True)
                     print(
-                        "\n🛑 Operation interrupted and input cleared. Press Ctrl+C again to exit.",
+                        "\n🛑 Operation interrupted and input cleared.",
                         flush=True,
                     )
-
-                elif self._interrupt_count >= 2:
-                    # Second Ctrl+C: exit application
-                    print(
-                        f"\n👋 Exiting... (count: {self._interrupt_count})", flush=True
-                    )
-                    import sys
-
-                    sys.exit(0)
 
             # Call all registered callbacks
             for callback in self._callbacks[
@@ -157,74 +155,60 @@ class GlobalInterruptManager:
         """Get the current input handler."""
         return GlobalInterruptManager._current_input_handler
 
-    def _check_if_prompt_is_empty(self) -> bool:
-        """Check if the current prompt is empty (no active input or operations).
+    def _should_exit_immediately(self) -> bool:
+        """Check if we should exit immediately on Ctrl+C.
         
         Returns:
-            True ONLY if we're at an empty prompt waiting for user input,
-            False in all other cases (active operations, partial input, etc.)
+            True if no operation is running and prompt is empty,
+            False if there are active operations or prompt content.
         """
         try:
-            # ALWAYS return False if we have any active operations
+            # If we have any active operations, don't exit
             if self._interrupted:
                 return False
             
-            # Check the call stack to determine our context
+            # Check the call stack for active operations
             import inspect
             current_frame = inspect.currentframe()
             try:
                 frame = current_frame
-                in_prompt_input = False
-                in_active_operation = False
                 
                 while frame:
                     frame_info = inspect.getframeinfo(frame)
                     filename = frame_info.filename
                     function_name = frame_info.function
                     
-                    # Skip our own functions
-                    if function_name in ['interrupt_handler', '_check_if_prompt_is_empty']:
+                    # Skip signal handler functions
+                    if function_name in ['interrupt_handler', '_should_exit_immediately']:
                         frame = frame.f_back
                         continue
                     
-                    # Check if we're in prompt_toolkit input (waiting for user input)
-                    if 'prompt_toolkit' in filename and function_name in ['prompt', 'read_input']:
-                        in_prompt_input = True
-                    
-                    # Check if we're in our input handler but just waiting
-                    if 'input_handler' in filename and function_name in ['get_input', 'get_multiline_input']:
-                        in_prompt_input = True
-                    
-                    # Check for active operations that should prevent exit
+                    # Check for active LLM operations
                     if any(name in filename for name in [
                         'base_llm_provider', 'interrupt_aware_streaming', 
-                        'builtin_tool_executor', 'response_handler', 'tool_execution'
+                        'response_handler', 'builtin_tool_executor'
                     ]):
                         if any(func in function_name for func in [
                             'generate_response', '_make_api_request', 'run_with_interrupt_monitoring',
                             '_generate_completion', 'bash_execute', 'execute_tool_call',
                             'handle_complete_response', '_process_streaming_chunks'
                         ]):
-                            in_active_operation = True
-                            break
+                            # Active operation detected - don't exit
+                            return False
                     
                     frame = frame.f_back
                     
             finally:
                 del current_frame
             
-            # Only return True if we're in prompt input AND not in active operation
-            if in_prompt_input and not in_active_operation:
-                # Additional safety: make sure we're in interactive mode
-                import sys
-                if sys.stdin.isatty():
-                    return True
-            
-            return False
+            # If we get here, no active operations detected
+            # Only exit if we're in interactive mode (TTY)
+            import sys
+            return sys.stdin.isatty()
             
         except Exception as e:
-            logger.debug(f"Error checking prompt state: {e}")
-            # Always be conservative on errors
+            logger.debug(f"Error checking exit conditions: {e}")
+            # Be conservative on errors - don't exit
             return False
 
     def get_interrupt_count(self) -> int:

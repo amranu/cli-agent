@@ -76,10 +76,8 @@ class ChatInterface:
 
         while self.is_conversation_active():
             try:
-                # Check for global interrupt first - this should ALWAYS return to prompt
+                # Check for global interrupt - clear and continue
                 if self.global_interrupt_manager.is_interrupted():
-                    interrupt_count = self.global_interrupt_manager.get_interrupt_count()
-                    
                     if current_task and not current_task.done():
                         current_task.cancel()
                         try:
@@ -89,29 +87,12 @@ class ChatInterface:
                         except Exception:
                             pass
                     
-                    if interrupt_count == 1:
-                        # First interrupt: clear input and cancel operations, continue conversation
-                        await self._emit_interruption(
-                            "Operation cancelled and input cleared", "global"
-                        )
-                        # Clear interrupt state AND reset count after first interrupt to allow normal operation
-                        self.global_interrupt_manager.clear_interrupt()
-                        self.global_interrupt_manager.reset_interrupt_count()
-                        input_handler.interrupted = False
-                        # Clear input queue on interruption
-                        self.input_queue.clear()
-                        current_task = None
-                        continue
-                    else:
-                        # Second or more interrupts: prepare for exit
-                        await self._emit_interruption(
-                            "Multiple interrupts received, preparing to exit", "global"
-                        )
-                        # Don't clear interrupt state - let it accumulate for exit
-                        input_handler.interrupted = False
-                        self.input_queue.clear()
-                        current_task = None
-                        continue
+                    # Clear interrupt state and continue conversation
+                    self.global_interrupt_manager.clear_interrupt()
+                    input_handler.interrupted = False
+                    self.input_queue.clear()
+                    current_task = None
+                    continue
 
                 # Check if we were interrupted during a previous operation
                 if input_handler.interrupted:

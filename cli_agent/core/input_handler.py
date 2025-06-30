@@ -408,11 +408,6 @@ class InterruptibleInput:
                     os.kill(
                         os.getpid(), signal.SIGINT
                     )  # Re-send SIGINT to trigger our global handler
-                    
-                    # Check if this was a second interrupt (should exit) or first interrupt (should clear)
-                    interrupt_count = self.global_interrupt_manager.get_interrupt_count()
-                    if interrupt_count >= 2:
-                        self.interrupted = True
                     return None
                 except EOFError:
                     # End of input (e.g., pipe closed)
@@ -472,8 +467,8 @@ class InterruptibleInput:
                 return result
 
         except KeyboardInterrupt:
-            # Don't set self.interrupted immediately - let global interrupt manager decide
-            # Re-send the signal to trigger our global handler which has the two-interrupt logic
+            # Don't set self.interrupted - let global interrupt manager handle the logic
+            # Just re-send the signal to trigger our global handler
             import os
             import signal
 
@@ -481,12 +476,7 @@ class InterruptibleInput:
                 os.getpid(), signal.SIGINT
             )  # Re-send SIGINT to trigger our global handler
             
-            # Check if this was a second interrupt (should exit) or first interrupt (should clear)
-            interrupt_count = self.global_interrupt_manager.get_interrupt_count()
-            if interrupt_count >= 2:
-                # Second interrupt - should exit
-                self.interrupted = True
-            # For first interrupt, don't set interrupted flag - just return None to clear prompt
+            # Return None to clear the prompt - global handler will decide exit vs continue
             return None
         except EOFError:
             # Handle Ctrl+D gracefully
@@ -501,10 +491,7 @@ class InterruptibleInput:
                     self._add_to_history(result)
                 return result
             except KeyboardInterrupt:
-                # Check interrupt count before setting interrupted flag
-                interrupt_count = self.global_interrupt_manager.get_interrupt_count()
-                if interrupt_count >= 2:
-                    self.interrupted = True
+                # Let global interrupt manager handle the logic
                 return None
             except EOFError:
                 self.interrupted = True
@@ -602,10 +589,7 @@ class InterruptibleInput:
                     self._add_to_history(result)
                 return result
             except KeyboardInterrupt:
-                # Check interrupt count before setting interrupted flag
-                interrupt_count = self.global_interrupt_manager.get_interrupt_count()
-                if interrupt_count >= 2:
-                    self.interrupted = True
+                # Let global interrupt manager handle the logic
                 return None
             except EOFError:
                 # End of input (e.g., pipe closed)
