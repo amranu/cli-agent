@@ -77,10 +77,10 @@ class GlobalInterruptManager:
                 )
 
                 if self._interrupt_count == 1:
-                    # First Ctrl+C: interrupt current operation and return to prompt
+                    # First Ctrl+C: Clear current prompt input and interrupt operations
                     self.set_interrupted(True)
                     print(
-                        "\n🛑 Operation interrupted. Press Ctrl+C again to exit.",
+                        "\n🛑 Operation interrupted and input cleared. Press Ctrl+C again to exit.",
                         flush=True,
                     )
 

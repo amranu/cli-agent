@@ -78,6 +78,8 @@ class ChatInterface:
             try:
                 # Check for global interrupt first - this should ALWAYS return to prompt
                 if self.global_interrupt_manager.is_interrupted():
+                    interrupt_count = self.global_interrupt_manager.get_interrupt_count()
+                    
                     if current_task and not current_task.done():
                         current_task.cancel()
                         try:
@@ -86,16 +88,30 @@ class ChatInterface:
                             pass
                         except Exception:
                             pass
-                    await self._emit_interruption(
-                        "Operation cancelled, returning to prompt", "global"
-                    )
-                    # Don't clear interrupt state immediately - let user press Ctrl+C again to exit
-                    # self.global_interrupt_manager.clear_interrupt()
-                    input_handler.interrupted = False
-                    # Clear input queue on interruption
-                    self.input_queue.clear()
-                    current_task = None
-                    continue
+                    
+                    if interrupt_count == 1:
+                        # First interrupt: clear input and cancel operations, continue conversation
+                        await self._emit_interruption(
+                            "Operation cancelled and input cleared", "global"
+                        )
+                        # Clear interrupt state AND reset count after first interrupt to allow normal operation
+                        self.global_interrupt_manager.clear_interrupt()
+                        self.global_interrupt_manager.reset_interrupt_count()
+                        input_handler.interrupted = False
+                        # Clear input queue on interruption
+                        self.input_queue.clear()
+                        current_task = None
+                        continue
+                    else:
+                        # Second or more interrupts: prepare for exit
+                        await self._emit_interruption(
+                            "Multiple interrupts received, preparing to exit", "global"
+                        )
+                        # Don't clear interrupt state - let it accumulate for exit
+                        input_handler.interrupted = False
+                        self.input_queue.clear()
+                        current_task = None
+                        continue
 
                 # Check if we were interrupted during a previous operation
                 if input_handler.interrupted:
@@ -371,11 +387,21 @@ class ChatInterface:
                         for task in pending:
                             task.cancel()
 
-                        # Check for any kind of interruption (global or local)
+                        # Check for any kind of interruption (global or local) first
                         if (
                             input_handler.interrupted
                             or self.global_interrupt_manager.is_interrupted()
                         ):
+                            # Cancel task if it's still running
+                            if current_task and not current_task.done():
+                                current_task.cancel()
+                                try:
+                                    await current_task
+                                except asyncio.CancelledError:
+                                    pass
+                                except Exception:
+                                    pass
+                            
                             # Try to emit as event if event bus is available
                             await self._emit_interruption(
                                 "Request cancelled by user", "user"
@@ -388,6 +414,7 @@ class ChatInterface:
                             current_task = None
                             continue
 
+                        # Only process successful, non-cancelled tasks
                         if (
                             current_task
                             and current_task.done()
@@ -399,8 +426,13 @@ class ChatInterface:
                                 f"Response received: {type(response)} - {repr(response[:100] if isinstance(response, str) else response)}"
                             )
                             current_task = None
+                        elif current_task and current_task.done() and current_task.cancelled():
+                            # Task was cancelled, clean up and continue
+                            logger.info("Task was cancelled, returning to prompt")
+                            current_task = None
+                            continue
                         else:
-                            continue  # Request was cancelled, go back to input
+                            continue  # Task not done yet, keep waiting
 
                         # Handle the response
                         if hasattr(response, "__aiter__"):
