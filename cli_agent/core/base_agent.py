@@ -767,31 +767,6 @@ class BaseMCPAgent(ABC):
             result = e
         return result, keepalive_messages
 
-    def _create_system_prompt(self, for_first_message: bool = False) -> str:
-        """Create a centralized system prompt with LLM-specific customization points."""
-        # Build the system prompt using centralized template system
-        base_prompt = self.system_prompt_builder.build_base_system_prompt()
-
-        # Add LLM-specific customizations
-        llm_customizations = self._get_llm_specific_instructions()
-
-        if llm_customizations:
-            final_prompt = base_prompt + "\n\n" + llm_customizations
-        else:
-            final_prompt = base_prompt
-
-        return final_prompt
-
-    def _get_llm_specific_instructions(self) -> str:
-        """Override in subclasses to add LLM-specific instructions.
-
-        This is a hook for LLM implementations to add:
-        - Model-specific behavior instructions
-        - API usage guidelines
-        - Tool execution requirements
-        - Context management specifics
-        """
-        return ""
 
     # Centralized Tool Result Integration
     # ===================================
@@ -1179,30 +1154,6 @@ class BaseMCPAgent(ABC):
         """Generate completion using the specific LLM. Must be implemented by subclasses."""
         pass
 
-    @abstractmethod
-    def _get_current_runtime_model(self) -> str:
-        """Get the actual model being used at runtime. Must be implemented by subclasses."""
-        pass
-
-    def _update_token_manager_model(self):
-        """Update token manager with current model name for accurate counting."""
-        try:
-            current_model = self._get_current_runtime_model()
-            if current_model:
-                self.token_manager.model_name = current_model
-                logger.debug(f"Updated token manager model to: {current_model}")
-        except Exception as e:
-            logger.warning(f"Failed to update token manager model: {e}")
-
-    def _estimate_token_count(self, messages: List[Dict[str, Any]]) -> int:
-        """Estimate token count for messages using accurate tokenization."""
-        self._update_token_manager_model()
-        return self.token_manager.count_conversation_tokens(messages)
-
-    async def compact_conversation(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Compact conversation using the token manager's intelligent compaction."""
-        self._update_token_manager_model()
-        return await self.token_manager.compact_conversation(messages, self.generate_response)
 
     # ============================================================================
     # CENTRALIZED MESSAGE PROCESSING FRAMEWORK

@@ -455,3 +455,88 @@ class BaseLLMProvider(BaseMCPAgent):
             Formatted content string
         """
         return ""  # Default: no special content formatting
+
+    # ============================================================================
+    # SYSTEM PROMPT MANAGEMENT - Moved from BaseMCPAgent
+    # ============================================================================
+
+    def _create_system_prompt(self, for_first_message: bool = False) -> str:
+        """Create a centralized system prompt with LLM-specific customization points."""
+        # Build the system prompt using centralized template system
+        base_prompt = self.system_prompt_builder.build_base_system_prompt()
+
+        # Add LLM-specific customizations
+        llm_customizations = self._get_llm_specific_instructions()
+
+        if llm_customizations:
+            final_prompt = base_prompt + "\n\n" + llm_customizations
+        else:
+            final_prompt = base_prompt
+
+        return final_prompt
+
+    def _get_llm_specific_instructions(self) -> str:
+        """Override in subclasses to add LLM-specific instructions.
+
+        This is a hook for LLM implementations to add:
+        - Model-specific behavior instructions
+        - API usage guidelines
+        - Tool execution requirements
+        - Context management specifics
+        """
+        return ""
+
+    # ============================================================================
+    # TOKEN MANAGEMENT - Moved from BaseMCPAgent
+    # ============================================================================
+
+    def _update_token_manager_model(self):
+        """Update token manager with current model name for accurate counting."""
+        try:
+            current_model = self._get_current_runtime_model()
+            if current_model:
+                self.token_manager.model_name = current_model
+                logger.debug(f"Updated token manager model to: {current_model}")
+        except Exception as e:
+            logger.warning(f"Failed to update token manager model: {e}")
+
+    def _estimate_token_count(self, messages: List[Dict[str, Any]]) -> int:
+        """Estimate token count for messages using accurate tokenization."""
+        self._update_token_manager_model()
+        return self.token_manager.count_conversation_tokens(messages)
+
+    async def compact_conversation(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Compact conversation using the token manager's intelligent compaction."""
+        self._update_token_manager_model()
+        return await self.token_manager.compact_conversation(messages, self.generate_response)
+
+    @abstractmethod
+    def _get_current_runtime_model(self) -> str:
+        """Get the actual model being used at runtime. Must be implemented by subclasses."""
+        pass
+
+    # ============================================================================
+    # MESSAGE ENHANCEMENT - Generic LLM operations moved from MCPHost
+    # ============================================================================
+
+    def _enhance_messages_generic(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Generic LLM message enhancement (AGENT.md, basic processing)."""
+        enhanced_messages = messages.copy()
+
+        # Enhance first message with AGENT.md content if available
+        is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
+        if is_first_message and not self.is_subagent:
+            enhanced_messages = (
+                self.system_prompt_builder.enhance_first_message_with_agent_md(
+                    enhanced_messages
+                )
+            )
+
+        return enhanced_messages
+
+    def _should_add_system_prompt(self, messages: List[Dict[str, Any]]) -> bool:
+        """Determine if system prompt should be added based on LLM context."""
+        is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
+        return self.is_subagent or is_first_message

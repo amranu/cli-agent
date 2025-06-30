@@ -717,46 +717,45 @@ class MCPHost(BaseLLMProvider):
     def _enhance_messages_for_model(
         self, messages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """Model-specific message enhancement."""
-        enhanced_messages = messages.copy()
+        """Model-specific message enhancement (system prompt style handling)."""
+        # First apply generic LLM enhancement
+        enhanced_messages = self._enhance_messages_generic(messages)
 
-        # Enhance first message with AGENT.md content if available
-        is_first_message = len(messages) == 1 and messages[0].get("role") == "user"
-        if is_first_message and not self.is_subagent:
-            enhanced_messages = (
-                self.system_prompt_builder.enhance_first_message_with_agent_md(
-                    enhanced_messages
-                )
+        # Then apply model-specific system prompt handling
+        if self._should_add_system_prompt(messages):
+            system_prompt = self._create_system_prompt(for_first_message=True)
+            enhanced_messages = self._apply_model_specific_system_prompt(
+                enhanced_messages, system_prompt
             )
 
-        # Add system prompt based on model's style
+        return enhanced_messages
+
+    def _apply_model_specific_system_prompt(
+        self, messages: List[Dict[str, Any]], system_prompt: str
+    ) -> List[Dict[str, Any]]:
+        """Apply system prompt based on model's style preference."""
         system_style = self.model.get_system_prompt_style()
 
-        if self.is_subagent or is_first_message:
-            system_prompt = self._create_system_prompt(for_first_message=True)
-
-            if system_style == "message":
-                # Add as system message
-                enhanced_messages = [
-                    {"role": "system", "content": system_prompt}
-                ] + enhanced_messages
-            elif system_style == "parameter":
-                # Add as system message for provider to extract and use as system parameter
-                enhanced_messages = [
-                    {"role": "system", "content": system_prompt}
-                ] + enhanced_messages
-            elif system_style == "prepend":
-                # Prepend to first user message (for models that don't support system messages)
-                if enhanced_messages and enhanced_messages[0].get("role") == "user":
-                    user_content = enhanced_messages[0]["content"]
-                    enhanced_messages[0][
-                        "content"
-                    ] = f"{system_prompt}\n\n---\n\n{user_content}"
-            elif system_style == "none":
-                # Skip system prompt entirely (e.g., for o1 models that don't work well with instructions)
-                pass
-
-        return enhanced_messages
+        if system_style == "message":
+            # Add as system message
+            return [{"role": "system", "content": system_prompt}] + messages
+        elif system_style == "parameter":
+            # Add as system message for provider to extract and use as system parameter
+            return [{"role": "system", "content": system_prompt}] + messages
+        elif system_style == "prepend":
+            # Prepend to first user message (for models that don't support system messages)
+            if messages and messages[0].get("role") == "user":
+                user_content = messages[0]["content"]
+                enhanced_messages = messages.copy()
+                enhanced_messages[0]["content"] = f"{system_prompt}\n\n---\n\n{user_content}"
+                return enhanced_messages
+            return messages
+        elif system_style == "none":
+            # Skip system prompt entirely (e.g., for o1 models that don't work well with instructions)
+            return messages
+        else:
+            # Default: add as system message
+            return [{"role": "system", "content": system_prompt}] + messages
 
     # ============================================================================
     # UTILITY METHODS
