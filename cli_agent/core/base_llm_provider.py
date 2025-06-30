@@ -115,13 +115,9 @@ class BaseLLMProvider(BaseMCPAgent):
                                         logger.info(
                                             "Streaming response interrupted by user"
                                         )
-                                        # Check interrupt count to decide whether to raise KeyboardInterrupt or FirstInterruptException
+                                        # Always raise FirstInterruptException for graceful handling
                                         from cli_agent.core.interrupt_aware_streaming import FirstInterruptException
-                                        interrupt_count = interrupt_manager.get_interrupt_count()
-                                        if interrupt_count >= 2:
-                                            raise KeyboardInterrupt("Streaming response interrupted - multiple interrupts")
-                                        else:
-                                            raise FirstInterruptException("Streaming response interrupted - first interrupt")
+                                        raise FirstInterruptException("Streaming response interrupted - first interrupt")
 
                                     logger.info(
                                         f"Generator yielded: {type(content)} - {repr(content[:100] if isinstance(content, str) else content)}"

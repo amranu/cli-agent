@@ -315,12 +315,12 @@ class InterruptAwareMCPClient:
 async def run_with_interrupt_monitoring(
     async_operation,
     operation_name: str = "Async operation",
-    check_interval: float = 0.05,  # Check every 50ms for very responsive interrupts
+    check_interval: float = 0.01,  # Check every 10ms for very aggressive interrupt handling
 ):
     """
     Run an async operation with aggressive interrupt monitoring.
 
-    This creates a background task that polls for interrupts every 50ms
+    This creates a background task that polls for interrupts every 10ms
     and cancels the main operation if an interrupt is detected.
 
     Args:
@@ -378,31 +378,13 @@ async def run_with_interrupt_monitoring(
             return main_task.result()
         else:
             # Monitor task completed first (interrupt detected)
-            # Check interrupt count to decide whether to raise or return gracefully
-            from cli_agent.core.global_interrupt import get_global_interrupt_manager
-            interrupt_manager = get_global_interrupt_manager()
-            interrupt_count = interrupt_manager.get_interrupt_count()
-            
-            if interrupt_count >= 2:
-                # Second or more interrupts: raise to exit application
-                raise KeyboardInterrupt("Operation interrupted by user - multiple interrupts")
-            else:
-                # First interrupt: raise special exception that can be caught gracefully
-                raise FirstInterruptException("Operation interrupted by user - first interrupt")
+            # Always raise FirstInterruptException to allow graceful handling
+            raise FirstInterruptException("Operation interrupted by user")
 
     except asyncio.CancelledError:
         logger.info(f"{operation_name} was cancelled")
-        # Check interrupt count for cancelled operations too
-        from cli_agent.core.global_interrupt import get_global_interrupt_manager
-        interrupt_manager = get_global_interrupt_manager()
-        interrupt_count = interrupt_manager.get_interrupt_count()
-        
-        if interrupt_count >= 2:
-            # Second or more interrupts: raise to exit application
-            raise KeyboardInterrupt("Operation cancelled - multiple interrupts")
-        else:
-            # First interrupt: raise special exception that can be caught gracefully
-            raise FirstInterruptException("Operation cancelled - first interrupt")
+        # Always raise FirstInterruptException for cancelled operations to allow graceful handling
+        raise FirstInterruptException("Operation cancelled - first interrupt")
     except Exception as e:
         # Ensure all tasks are cancelled on any error
         for task in [main_task, monitor_task]:

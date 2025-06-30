@@ -231,15 +231,11 @@ class GlobalInterruptManager:
             message: Custom message for the exception
 
         Raises:
-            KeyboardInterrupt: If an interrupt has been received and it's the second interrupt
+            KeyboardInterrupt: If an interrupt has been received
         """
         if self.is_interrupted():
-            # Only raise on second interrupt to allow graceful return to prompt on first
-            if self._interrupt_count >= 2:
-                raise KeyboardInterrupt(message)
-            else:
-                # First interrupt - don't raise, just return gracefully
-                return
+            # Always raise KeyboardInterrupt to aggressively cancel operations
+            raise KeyboardInterrupt(message)
 
     def add_callback(self, callback: Callable[[], None]):
         """Add a callback to be called when an interrupt is received.
