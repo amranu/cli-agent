@@ -98,6 +98,12 @@ class TokenManager:
         if model_name and model_name in model_limits:
             return True
             
+        # Handle provider:model format by extracting just the model name
+        if model_name and ":" in model_name:
+            provider, just_model = model_name.split(":", 1)
+            if just_model in model_limits:
+                return True
+            
         # Check for exact pattern matches (not partial matches)
         if model_name:
             for pattern in model_limits.keys():
@@ -136,6 +142,8 @@ class TokenManager:
             "claude-3-opus-20240229": 190000,
             "claude-3-sonnet-20240229": 190000,
             "claude-3-haiku-20240307": 190000,
+            "claude-sonnet-4-20250514": 200000,
+            "claude-opus-4-20250514": 200000,
             
             # DeepSeek Models - updated limits
             "deepseek-chat": 60000,

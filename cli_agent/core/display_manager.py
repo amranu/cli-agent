@@ -234,6 +234,10 @@ class DisplayManager:
                             content_to_display = "\n" + content_to_display
 
                 self.terminal_manager.write_above_prompt(content_to_display)
+                
+                # Ensure newline after LLM response for proper prompt positioning
+                if not content_to_display.endswith('\n'):
+                    self.terminal_manager.write_above_prompt('\n')
 
             logger.debug("Displayed text content to console")
 

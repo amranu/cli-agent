@@ -248,8 +248,8 @@ class TerminalManager:
                 token_text = f"{color}Tokens: {current_tokens:,}/{token_limit:,} ({percentage:.1f}%)\033[0m"
         
         try:
-            # Print token info on a new line without overwriting existing content
-            print(f"\n{token_text}")
+            # Print token info on its own line
+            print(token_text)
             sys.stdout.flush()
             
         except Exception as e:

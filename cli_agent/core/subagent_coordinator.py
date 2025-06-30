@@ -281,6 +281,8 @@ class SubagentCoordinator:
                     # Get user choice using the input handler (no prompt since it's persistent)
                     user_choice = input_handler.get_input("")
 
+                    # Ensure newline before prompt reset
+                    terminal_manager.write_above_prompt('\n')
                     # Reset prompt back to normal
                     terminal_manager.update_prompt("> ")
 

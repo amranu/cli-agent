@@ -286,6 +286,10 @@ class TestTokenManager:
         assert tm.has_reliable_token_info("gpt-4-some-new-variant") == False
         assert tm.has_reliable_token_info("claude-4-future") == False
         
+        # Provider:model format should work by extracting just the model name
+        assert tm.has_reliable_token_info("deepseek:deepseek-chat") == True
+        assert tm.has_reliable_token_info("anthropic:claude-3-5-sonnet-20241022") == True
+        
         # With explicit context_length, should be reliable even for unknown models
         assert tm.has_reliable_token_info("unknown-model", context_length=100000) == True
         assert tm.has_reliable_token_info("custom-llm", context_length=50000) == True

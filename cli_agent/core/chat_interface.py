@@ -462,7 +462,7 @@ class ChatInterface:
 
                         reset_interrupt_count()
                         self.global_interrupt_manager.clear_interrupt()
-
+                        
                         # Reset prompt to ready state for next input
                         self.terminal_manager.update_prompt("> ")
 
@@ -473,6 +473,8 @@ class ChatInterface:
                         await self._emit_error(
                             f"Tool access denied: {e.reason}", "tool_denied"
                         )
+                        # Ensure newline before prompt reset
+                        self.terminal_manager.write_above_prompt('\n')
                         # Reset prompt to ready state
                         self.terminal_manager.update_prompt("> ")
                         continue  # Return to prompt without adding to conversation
@@ -513,11 +515,15 @@ class ChatInterface:
                                     "Unable to retry - no user message found",
                                     "retry_error",
                                 )
+                                # Ensure newline before prompt reset
+                                self.terminal_manager.write_above_prompt('\n')
                                 self.terminal_manager.update_prompt("> ")
                                 continue
                         else:
                             logger.error(f"Error in chat: {e}")
                             await self._emit_error(f"Error: {str(e)}", "general")
+                            # Ensure newline before prompt reset
+                            self.terminal_manager.write_above_prompt('\n')
                             # Reset prompt to ready state
                             self.terminal_manager.update_prompt("> ")
                             continue
@@ -534,6 +540,8 @@ class ChatInterface:
             except Exception as e:
                 error_msg = self.handle_conversation_error(e)
                 await self._emit_error(error_msg, "conversation_error")
+                # Ensure newline before prompt reset
+                self.terminal_manager.write_above_prompt('\n')
                 # Reset prompt to ready state
                 self.terminal_manager.update_prompt("> ")
                 continue
@@ -810,8 +818,7 @@ class ChatInterface:
                 # Check if we have reliable token information
                 has_reliable_info = self.agent.token_manager.has_reliable_token_info()
                 
-                # Only show token display if we have reliable info (sync version - no auto-compaction)
-                # Auto-compaction is only available in the async version
+                # Show token display if we have reliable info  
                 if has_reliable_info:
                     self.terminal_manager.update_token_display(
                         current_tokens=current_tokens,
@@ -819,6 +826,9 @@ class ChatInterface:
                         model_name=model_name,
                         show_display=show_display
                     )
+                elif show_display and not has_reliable_info:
+                    # Add spacing only when token display is hidden AND we need spacing
+                    print()  # Add newline for spacing between LLM output and prompt
                 
                 return None
                 
@@ -877,6 +887,9 @@ class ChatInterface:
                         model_name=model_name,
                         show_display=show_display
                     )
+                elif show_display and not has_reliable_info:
+                    # Add spacing only when token display is hidden AND we need spacing
+                    print()  # Add newline for spacing between LLM output and prompt
                 # If we don't have reliable info, don't show token display or auto-compact
                 
                 return None
@@ -1133,6 +1146,8 @@ class ChatInterface:
                 # Update token display after assistant response
                 self._update_token_display(messages)
 
+                # Ensure newline before prompt reset  
+                self.terminal_manager.write_above_prompt('\n')
                 # Reset prompt to ready state for next input
                 self.terminal_manager.update_prompt("> ")
 
@@ -1144,6 +1159,8 @@ class ChatInterface:
             # If retry also fails, just log and continue
             logger.error(f"Retry also failed: {e}")
             await self._emit_error(f"Retry failed: {str(e)}", "retry_error")
+            # Ensure newline before prompt reset
+            self.terminal_manager.write_above_prompt('\n')
             self.terminal_manager.update_prompt("> ")
 
     async def _collect_response_content(self, response) -> str:

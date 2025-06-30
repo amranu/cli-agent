@@ -58,9 +58,12 @@ class ToolExecutionEngine:
             tool_info = self.agent.available_tools[tool_key]
             tool_name = tool_info["name"]
             
-            # Show diff preview for replace_in_file and multiedit before permission check
+            # Show clean diff preview and get user confirmation for file edits
+            # This also serves as the permission check for edit tools
+            edit_confirmed_by_diff = False
             if tool_name == "replace_in_file" and not self.agent.is_subagent:
                 try:
+                    from cli_agent.core.diff_display import get_clean_diff_display
                     from cli_agent.utils.diff_display import ColoredDiffDisplay
 
                     file_path = arguments.get("file_path", "")
@@ -68,62 +71,99 @@ class ToolExecutionEngine:
                     new_text = arguments.get("new_text", "")
 
                     if file_path and old_text:
-                        # Show colored diff preview
-                        ColoredDiffDisplay.show_replace_diff(
-                            file_path=file_path, old_text=old_text, new_text=new_text
+                        # Try clean diff display first
+                        clean_display = get_clean_diff_display()
+                        user_confirmed = clean_display.show_single_edit_diff(
+                            file_path=file_path,
+                            old_text=old_text,
+                            new_text=new_text
                         )
+                        
+                        if user_confirmed is None:
+                            # Fallback to regular diff display if clean display not available
+                            print("\n📝 Diff Preview:")
+                            ColoredDiffDisplay.show_replace_diff(
+                                file_path=file_path, old_text=old_text, new_text=new_text
+                            )
+                            # Continue with normal permission flow for fallback
+                        elif user_confirmed is False:
+                            # User declined the changes, skip execution
+                            return "❌ Edit cancelled by user"
+                        elif user_confirmed is True:
+                            # User confirmed via diff display, skip permission check
+                            edit_confirmed_by_diff = True
+                        
                 except Exception as e:
                     # Don't fail tool execution if diff display fails
                     logger.warning(f"Failed to display diff preview: {e}")
 
-            # Show diff previews for multiedit before permission check
+            # Show clean diff preview and get user confirmation for multiedit
+            # This also serves as the permission check for edit tools
             elif tool_name == "multiedit" and not self.agent.is_subagent:
                 try:
+                    from cli_agent.core.diff_display import get_clean_diff_display
                     from cli_agent.utils.diff_display import ColoredDiffDisplay
 
                     file_path = arguments.get("file_path", "")
                     edits = arguments.get("edits", [])
 
                     if file_path and edits:
-                        # Read file content once for all diff previews
-                        try:
-                            with open(file_path, "r", encoding="utf-8") as f:
-                                current_content = f.read()
-                        except FileNotFoundError:
-                            print(
-                                f"Warning: File not found for diff preview: {file_path}"
-                            )
-                            current_content = ""
-                        except Exception as e:
-                            print(f"Warning: Could not read file for diff preview: {e}")
-                            current_content = ""
+                        # Try clean diff display first
+                        clean_display = get_clean_diff_display()
+                        user_confirmed = clean_display.show_multiedit_diff(
+                            file_path=file_path,
+                            edits=edits
+                        )
+                        
+                        if user_confirmed is None:
+                            # Fallback to regular diff display if clean display not available
+                            print("\n📝 Multi-Edit Preview:")
+                            
+                            # Read file content once for all diff previews
+                            try:
+                                with open(file_path, "r", encoding="utf-8") as f:
+                                    current_content = f.read()
+                            except FileNotFoundError:
+                                print(f"Warning: File not found for diff preview: {file_path}")
+                                current_content = ""
+                            except Exception as e:
+                                print(f"Warning: Could not read file for diff preview: {e}")
+                                current_content = ""
 
-                        if current_content:
-                            # Show preview for each edit
-                            for i, edit in enumerate(edits):
-                                old_string = edit.get("old_string", "")
-                                new_string = edit.get("new_string", "")
+                            if current_content:
+                                # Show preview for each edit
+                                for i, edit in enumerate(edits):
+                                    old_string = edit.get("old_string", "")
+                                    new_string = edit.get("new_string", "")
 
-                                if old_string:
-                                    print(f"\n--- Edit {i+1} Preview ---")
-                                    ColoredDiffDisplay.show_replace_diff(
-                                        file_path=file_path,
-                                        old_text=old_string,
-                                        new_text=new_string,
-                                        file_content=current_content,
-                                        context_lines=3,
-                                    )
-                                    # Update content for next edit preview
-                                    if old_string in current_content:
-                                        replace_all = edit.get("replace_all", False)
-                                        if replace_all:
-                                            current_content = current_content.replace(
-                                                old_string, new_string
-                                            )
-                                        else:
-                                            current_content = current_content.replace(
-                                                old_string, new_string, 1
-                                            )
+                                    if old_string:
+                                        print(f"\n--- Edit {i+1} Preview ---")
+                                        ColoredDiffDisplay.show_replace_diff(
+                                            file_path=file_path,
+                                            old_text=old_string,
+                                            new_text=new_string,
+                                            file_content=current_content,
+                                            context_lines=3,
+                                        )
+                                        # Update content for next edit preview
+                                        if old_string in current_content:
+                                            replace_all = edit.get("replace_all", False)
+                                            if replace_all:
+                                                current_content = current_content.replace(
+                                                    old_string, new_string
+                                                )
+                                            else:
+                                                current_content = current_content.replace(
+                                                    old_string, new_string, 1
+                                                )
+                            # Continue with normal permission flow for fallback
+                        elif user_confirmed is False:
+                            # User declined the changes, skip execution
+                            return "❌ Multi-edit cancelled by user"
+                        elif user_confirmed is True:
+                            # User confirmed via diff display, skip permission check
+                            edit_confirmed_by_diff = True
+                        
                 except Exception as e:
                     # Don't fail tool execution if diff display fails
                     logger.warning(f"Failed to display multiedit diff preview: {e}")
@@ -141,9 +181,11 @@ class ToolExecutionEngine:
                     f"Bypassing permission check for subagent tool: {tool_name} (SUBAGENT_PERMISSIONS_BYPASS=true)"
                 )
 
-            # Skip ALL permission checks if in stream-json mode
+            # Skip ALL permission checks if in stream-json mode or edit already confirmed by diff
             if os.environ.get("STREAM_JSON_MODE") == "true":
                 logger.info(f"Skipping all permission checks for tool {tool_name} (stream-json mode)")
+            elif edit_confirmed_by_diff:
+                logger.info(f"Skipping permission check for {tool_name} (already confirmed via diff display)")
             elif (
                 hasattr(self.agent, "permission_manager")
                 and self.agent.permission_manager
