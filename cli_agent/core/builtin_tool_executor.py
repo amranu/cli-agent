@@ -374,7 +374,7 @@ class BuiltinToolExecutor:
             return f"Error performing multi-edit: {str(e)}"
 
     def webfetch(self, args: Dict[str, Any]) -> str:
-        """Fetch content from a webpage."""
+        """Fetch content from a webpage and convert HTML to markdown."""
         url = args.get("url", "")
         limit = args.get("limit", 1000)
 
@@ -388,24 +388,120 @@ class BuiltinToolExecutor:
             response = requests.get(url, headers=headers, timeout=30)
             response.raise_for_status()
 
-            content = response.text
-            lines = content.split("\n")
-
+            # Convert HTML to markdown
+            markdown_content = self._html_to_markdown(response.text)
+            
+            # Split into lines and apply limit
+            lines = markdown_content.split("\n")
+            
             if limit and len(lines) > limit:
                 lines = lines[:limit]
                 content = "\n".join(lines) + f"\n\n[Content truncated at {limit} lines]"
             else:
                 content = "\n".join(lines)
 
-            return f"Content from {url}:\n{content}"
+            return f"Content from {url}:\n\n{content}"
 
         except requests.exceptions.RequestException as e:
             return f"Error fetching URL: {str(e)}"
         except Exception as e:
             return f"Error: {str(e)}"
 
+    def _html_to_markdown(self, html_content: str) -> str:
+        """Convert HTML content to clean markdown format."""
+        import re
+        from html import unescape
+        
+        # Remove script and style elements completely
+        html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+        html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Remove comments
+        html_content = re.sub(r'<!--.*?-->', '', html_content, flags=re.DOTALL)
+        
+        # Convert common HTML elements to markdown
+        conversions = [
+            # Headers
+            (r'<h1[^>]*>(.*?)</h1>', r'# \1'),
+            (r'<h2[^>]*>(.*?)</h2>', r'## \1'),
+            (r'<h3[^>]*>(.*?)</h3>', r'### \1'),
+            (r'<h4[^>]*>(.*?)</h4>', r'#### \1'),
+            (r'<h5[^>]*>(.*?)</h5>', r'##### \1'),
+            (r'<h6[^>]*>(.*?)</h6>', r'###### \1'),
+            
+            # Bold and italic
+            (r'<(?:b|strong)[^>]*>(.*?)</(?:b|strong)>', r'**\1**'),
+            (r'<(?:i|em)[^>]*>(.*?)</(?:i|em)>', r'*\1*'),
+            
+            # Links
+            (r'<a[^>]*href=["\']([^"\']*)["\'][^>]*>(.*?)</a>', r'[\2](\1)'),
+            
+            # Images
+            (r'<img[^>]*src=["\']([^"\']*)["\'][^>]*alt=["\']([^"\']*)["\'][^>]*/?>', r'![\2](\1)'),
+            (r'<img[^>]*alt=["\']([^"\']*)["\'][^>]*src=["\']([^"\']*)["\'][^>]*/?>', r'![\1](\2)'),
+            (r'<img[^>]*src=["\']([^"\']*)["\'][^>]*/?>', r'![](\1)'),
+            
+            # Lists
+            (r'<ul[^>]*>', '\n'),
+            (r'</ul>', '\n'),
+            (r'<ol[^>]*>', '\n'),
+            (r'</ol>', '\n'),
+            (r'<li[^>]*>(.*?)</li>', r'- \1'),
+            
+            # Paragraphs and line breaks
+            (r'<p[^>]*>(.*?)</p>', r'\1\n\n'),
+            (r'<br[^>]*/?>', '\n'),
+            (r'<hr[^>]*/?>', '\n---\n'),
+            
+            # Divs and spans (preserve content, remove tags)
+            (r'<div[^>]*>(.*?)</div>', r'\1\n'),
+            (r'<span[^>]*>(.*?)</span>', r'\1'),
+            
+            # Tables (simplified)
+            (r'<table[^>]*>', '\n'),
+            (r'</table>', '\n'),
+            (r'<tr[^>]*>', ''),
+            (r'</tr>', '\n'),
+            (r'<(?:td|th)[^>]*>(.*?)</(?:td|th)>', r'\1 | '),
+            
+            # Code
+            (r'<code[^>]*>(.*?)</code>', r'`\1`'),
+            (r'<pre[^>]*>(.*?)</pre>', r'```\n\1\n```'),
+            
+            # Blockquotes
+            (r'<blockquote[^>]*>(.*?)</blockquote>', r'> \1'),
+        ]
+        
+        # Apply conversions
+        for pattern, replacement in conversions:
+            html_content = re.sub(pattern, replacement, html_content, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Remove any remaining HTML tags
+        html_content = re.sub(r'<[^>]+>', '', html_content)
+        
+        # Decode HTML entities
+        html_content = unescape(html_content)
+        
+        # Clean up whitespace
+        # Replace multiple consecutive newlines with double newlines
+        html_content = re.sub(r'\n\s*\n\s*\n+', '\n\n', html_content)
+        
+        # Replace multiple spaces with single space
+        html_content = re.sub(r' +', ' ', html_content)
+        
+        # Trim leading/trailing whitespace from each line
+        lines = [line.strip() for line in html_content.split('\n')]
+        
+        # Remove empty lines at the beginning and end
+        while lines and not lines[0]:
+            lines.pop(0)
+        while lines and not lines[-1]:
+            lines.pop()
+        
+        return '\n'.join(lines)
+
     def websearch(self, args: Dict[str, Any]) -> str:
-        """Search the web using DuckDuckGo."""
+        """Search the web using DuckDuckGo direct search."""
         query = args.get("query", "")
         allowed_domains = args.get("allowed_domains", [])
         blocked_domains = args.get("blocked_domains", [])
@@ -414,75 +510,106 @@ class BuiltinToolExecutor:
             return "Error: No search query provided"
 
         try:
-            # Use DuckDuckGo search via their instant answer API
-            search_url = "https://api.duckduckgo.com/"
-            params = {
-                "q": query,
-                "format": "json",
-                "no_html": "1",
-                "skip_disambig": "1"
-            }
+            import re
+            from urllib.parse import quote_plus
+            
+            # Prepare the search query
+            encoded_query = quote_plus(query)
+            
+            # Apply domain filtering if specified
+            if allowed_domains:
+                site_restriction = " OR ".join([f"site:{domain}" for domain in allowed_domains])
+                encoded_query = quote_plus(f"{query} ({site_restriction})")
+            
+            # Use DuckDuckGo HTML search (no API key required)
+            search_url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
             
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
             }
             
-            response = requests.get(search_url, params=params, headers=headers, timeout=30)
+            response = requests.get(search_url, headers=headers, timeout=30)
             response.raise_for_status()
-            data = response.json()
             
+            # Parse the HTML response
+            html_content = response.text
             results = []
             
-            # Add instant answer if available
-            if data.get("Abstract"):
-                results.append(f"**Summary**: {data['Abstract']}")
-                if data.get("AbstractURL"):
-                    results.append(f"**Source**: {data['AbstractURL']}")
+            # Extract search results using regex patterns
+            # DuckDuckGo HTML structure: results are in divs with class "result"
+            result_pattern = r'<div class="result".*?</div>(?=\s*(?:<div class="result"|<div id="links_wrapper"|$))'
+            title_pattern = r'<a class="result__title"[^>]*href="([^"]*)"[^>]*>(.*?)</a>'
+            snippet_pattern = r'<a class="result__snippet"[^>]*>(.*?)</a>'
             
-            # Add definition if available
-            if data.get("Definition"):
-                results.append(f"**Definition**: {data['Definition']}")
-                if data.get("DefinitionURL"):
-                    results.append(f"**Source**: {data['DefinitionURL']}")
+            result_matches = re.findall(result_pattern, html_content, re.DOTALL | re.IGNORECASE)
             
-            # Add related topics
-            if data.get("RelatedTopics"):
-                results.append("\n**Related Topics**:")
-                for i, topic in enumerate(data["RelatedTopics"][:5]):  # Limit to 5
-                    if isinstance(topic, dict) and topic.get("Text"):
-                        text = topic["Text"]
-                        url = topic.get("FirstURL", "")
+            if result_matches:
+                results.append(f"Found {len(result_matches)} search results for '{query}'")
+                results.append("")
+                
+                for i, result_html in enumerate(result_matches[:10], 1):  # Limit to 10 results
+                    # Extract title and URL
+                    title_match = re.search(title_pattern, result_html, re.DOTALL | re.IGNORECASE)
+                    snippet_match = re.search(snippet_pattern, result_html, re.DOTALL | re.IGNORECASE)
+                    
+                    if title_match:
+                        url = title_match.group(1)
+                        title = re.sub(r'<[^>]+>', '', title_match.group(2)).strip()
                         
-                        # Apply domain filtering
-                        if allowed_domains:
-                            if not any(domain in url for domain in allowed_domains):
-                                continue
+                        # Apply blocked domain filtering
                         if blocked_domains:
                             if any(domain in url for domain in blocked_domains):
                                 continue
                         
-                        results.append(f"{i+1}. {text}")
-                        if url:
-                            results.append(f"   URL: {url}")
+                        # Clean up snippet
+                        snippet = "No description available"
+                        if snippet_match:
+                            snippet = re.sub(r'<[^>]+>', '', snippet_match.group(1)).strip()
+                            # Decode HTML entities
+                            snippet = snippet.replace("&quot;", '"').replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                        
+                        # Clean up title and URL
+                        title = title.replace("&quot;", '"').replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                        
+                        results.append(f"**{i}. {title}**")
+                        results.append(f"URL: {url}")
+                        results.append(f"Description: {snippet}")
+                        results.append("")
+            else:
+                # Fallback: try simpler pattern extraction
+                # Look for any links that might be search results
+                link_pattern = r'<a[^>]*href="(https?://[^"]+)"[^>]*>([^<]+)</a>'
+                links = re.findall(link_pattern, html_content)
+                
+                if links:
+                    results.append(f"Found search results for '{query}' (simplified extraction):")
+                    results.append("")
+                    
+                    # Filter out DuckDuckGo internal links
+                    filtered_links = [(url, title) for url, title in links 
+                                    if not any(domain in url for domain in ['duckduckgo.com', 'duck.co']) 
+                                    and url.startswith(('http://', 'https://'))]
+                    
+                    for i, (url, title) in enumerate(filtered_links[:10], 1):
+                        # Apply blocked domain filtering
+                        if blocked_domains:
+                            if any(domain in url for domain in blocked_domains):
+                                continue
+                                
+                        results.append(f"**{i}. {title.strip()}**")
+                        results.append(f"URL: {url}")
+                        results.append("")
+                else:
+                    results.append("No search results found for this query.")
+                    results.append("DuckDuckGo may have changed their HTML structure or the query returned no results.")
+                    results.append("Try rephrasing your search terms or using the webfetch tool with specific URLs.")
             
-            # Add answer if available
-            if data.get("Answer"):
-                results.append(f"\n**Answer**: {data['Answer']}")
-                if data.get("AnswerType"):
-                    results.append(f"**Type**: {data['AnswerType']}")
-            
-            if not results:
-                # Fallback: try to get some basic info
-                results.append(f"Search completed for: '{query}'")
-                results.append("No specific instant answers found. This may be a topic that requires browsing current web results.")
-                results.append("Consider using the webfetch tool with specific URLs for more detailed information.")
-            
-            return f"Web search results for '{query}':\n\n" + "\n".join(results)
+            return f"Web search results:\n\n" + "\n".join(results)
             
         except requests.exceptions.RequestException as e:
             return f"Error performing web search: {str(e)}"
         except Exception as e:
-            return f"Error: {str(e)}"
+            return f"Error parsing search results: {str(e)}"
 
     async def task(self, args: Dict[str, Any]) -> str:
         """Spawn a subagent task."""

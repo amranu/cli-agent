@@ -251,6 +251,8 @@ class BaseMCPAgent(ABC):
             return self.builtin_executor.multiedit(args)
         elif tool_name == "builtin:webfetch":
             return self.builtin_executor.webfetch(args)
+        elif tool_name == "builtin:websearch":
+            return self.builtin_executor.websearch(args)
         elif tool_name == "builtin:glob":
             return self.builtin_executor.glob(args)
         elif tool_name == "builtin:grep":

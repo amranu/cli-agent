@@ -212,7 +212,7 @@ def create_model_server() -> FastMCP:
     available_models_str = ', '.join(all_models)
     
     @app.tool(description=f"Start or continue a chat with any available AI model. Available models: {available_models_str}")
-    async def start_chat(
+    async def chat(
         model: str,
         message: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
