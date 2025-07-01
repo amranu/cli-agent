@@ -1,6 +1,0 @@
-{
-  "matcher": "write_file|replace_in_file|multiedit",
-  "command": "black '{{tool_args.file_path}}' 2>/dev/null || true",
-  "timeout": 15,
-  "working_directory": null
-}

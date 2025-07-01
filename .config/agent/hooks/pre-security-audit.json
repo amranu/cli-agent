@@ -1,5 +1,0 @@
-{
-  "matcher": "bash_execute",
-  "command": "echo '[SECURITY] About to execute bash command: {{tool_args}}' >> ~/.cli-agent-audit.log",
-  "timeout": 5
-}
