@@ -5,6 +5,7 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 ## 🚀 Features
 
 - **Multiple AI Backends**: Support for Anthropic Claude, OpenAI GPT, DeepSeek, Google Gemini, OpenRouter, and ollama with easy extensibility
+- **Hooks System**: Powerful workflow automation with security controls - audit commands, block dangerous operations, auto-format code, and integrate with external tools
 - **MCP Model Server**: Expose all AI models as standardized MCP tools with persistent conversations
 - **Modular Architecture**: Provider-model separation with centralized base agent for maximum flexibility
 - **MCP Server Integration**: Connect to multiple MCP servers for extended functionality
@@ -77,12 +78,13 @@ python mcp_server.py --tcp --port 3000 --host localhost
 agent mcp serve --tcp --port 3000 --host localhost
 ```
 
-The model server exposes AI models from 5 providers:
+The model server exposes AI models from 6 providers:
 - **Anthropic**: Claude models
 - **OpenAI**: GPT models
 - **DeepSeek**: Chat and reasoning models
 - **Gemini**: Google's Gemini models
 - **OpenRouter**: Multi-provider access
+- **Ollama**: Local models via Ollama server
 
 
 ### MCP Server Management
