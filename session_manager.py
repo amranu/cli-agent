@@ -20,11 +20,15 @@ class SessionManager:
 
     def __init__(
         self,
-        sessions_dir: str = ".agent_sessions",
+        sessions_dir: Optional[str] = None,
         config: Optional["HostConfig"] = None,
     ):
-        self.sessions_dir = Path(sessions_dir)
-        self.sessions_dir.mkdir(exist_ok=True)
+        if sessions_dir is None:
+            from config import get_config_dir
+            self.sessions_dir = get_config_dir() / "sessions"
+        else:
+            self.sessions_dir = Path(sessions_dir)
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self.current_session_id: Optional[str] = None
         self.current_messages: List[Dict[str, Any]] = []
         self.config = config

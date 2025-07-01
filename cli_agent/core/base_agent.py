@@ -98,11 +98,13 @@ class BaseMCPAgent(ABC):
             )
 
             # Create default permission config (prompts for all tools by default)
-            # Set empty session file to ensure no persistent approvals across sessions
+            # Set session file in config directory for persistent approvals
             permission_config = ToolPermissionConfig()
-            permission_config.session_permissions_file = (
-                None  # Disable persistent storage
-            )
+            from config import get_config_dir
+            config_dir = get_config_dir()
+            sessions_dir = config_dir / "sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+            permission_config.session_permissions_file = str(sessions_dir / ".tool_permissions.json")
             self.permission_manager = ToolPermissionManager(permission_config)
             logger.info(
                 f"Initialized tool permission manager with session file: '{permission_config.session_permissions_file}'"
@@ -164,6 +166,29 @@ class BaseMCPAgent(ABC):
         self.tool_execution_engine = ToolExecutionEngine(self)
         self.chat_interface = ChatInterface(self)
         logger.debug("Initialized modular components")
+        
+        # Initialize hooks system (only for main agents, not subagents)
+        self.hook_manager = None
+        if not is_subagent:
+            try:
+                hook_config = config.load_hook_config()
+                if hook_config:
+                    from cli_agent.core.hooks.hook_manager import HookManager
+                    self.hook_manager = HookManager(hook_config, self.event_bus)
+                    # Connect hook manager to event bus for notification hooks
+                    self.event_bus.set_hook_manager(self.hook_manager)
+                    
+                    # Show user-visible confirmation of hooks loaded
+                    hook_summary = self.hook_manager.get_hook_summary()
+                    total_hooks = hook_summary["total_hooks"]
+                    hook_types = list(hook_summary["hook_types"].keys())
+                    print(f"🪝 Hooks enabled: {total_hooks} hooks loaded ({', '.join(hook_types)})")
+                    logger.info("Initialized hooks system with event bus integration")
+                else:
+                    logger.debug("No hook configuration found, hooks disabled")
+            except Exception as e:
+                logger.warning(f"Failed to initialize hooks system: {e}")
+                self.hook_manager = None
         self.system_prompt_builder = SystemPromptBuilder(self)
         self.formatting_utils = FormattingUtils(self)
         logger.debug("Initialized utility classes")

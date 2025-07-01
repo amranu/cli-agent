@@ -220,6 +220,7 @@ class EventBus:
         self.is_running = False
         self._event_history: List[Event] = []
         self.max_history = 1000  # Keep last 1000 events
+        self.hook_manager = None  # Will be set by agent
 
     def subscribe(self, event_type: EventType, callback: Callable[[Event], None]):
         """Subscribe to specific event types."""
@@ -276,6 +277,27 @@ class EventBus:
                     )
                     # Queue the error event instead of immediate processing
                     await self.event_queue.put(error_event)
+            
+            # EXECUTE NOTIFICATION HOOKS for relevant events
+            notification_event_types = {EventType.STATUS, EventType.SYSTEM_MESSAGE, EventType.ERROR}
+            if (event.event_type in notification_event_types and 
+                hasattr(self, 'hook_manager') and self.hook_manager):
+                try:
+                    from cli_agent.core.hooks.hook_config import HookType
+                    
+                    context = {
+                        "message": self._extract_message_from_event(event),
+                        "event_type": event.event_type.value,
+                        "timestamp": event.timestamp.isoformat(),
+                        "session_id": event.session_id or self.session_id
+                    }
+                    
+                    # Execute notification hooks in background to avoid blocking display
+                    asyncio.create_task(
+                        self.hook_manager.execute_hooks(HookType.NOTIFICATION, context)
+                    )
+                except Exception as e:
+                    logger.warning(f"Error executing notification hooks: {e}")
         else:
             # Queue for processing (non-critical events or when not running)
             await self.event_queue.put(event)
@@ -372,6 +394,24 @@ class EventBus:
         """Clear event history."""
         self._event_history.clear()
         logger.info("Event history cleared")
+    
+    def set_hook_manager(self, hook_manager):
+        """Set the hook manager for this event bus."""
+        self.hook_manager = hook_manager
+        logger.debug("Hook manager set on event bus")
+    
+    def _extract_message_from_event(self, event: Event) -> str:
+        """Extract a displayable message from an event for hooks."""
+        if hasattr(event, 'message'):
+            return str(event.message)
+        elif hasattr(event, 'status'):
+            return str(event.status)
+        elif hasattr(event, 'error_message'):
+            return str(event.error_message)
+        elif hasattr(event, 'content'):
+            return str(event.content)
+        else:
+            return f"{event.event_type.value} event"
 
 
 class EventEmitter:

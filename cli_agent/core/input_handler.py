@@ -71,7 +71,7 @@ class InterruptibleInput:
         
         Creates a persistent history file in the user's config directory.
         """
-        # Create config directory for cli-agent
+        # Create config directory for agent
         self.config_dir = get_config_dir()
         self.config_dir.mkdir(parents=True, exist_ok=True)
         

@@ -38,7 +38,7 @@ class ToolPermissionConfig:
     auto_approve_session: bool = (
         False  # Global setting to auto-approve all tools for session
     )
-    session_permissions_file: str = ".agent_sessions/.tool_permissions.json"
+    session_permissions_file: str = "sessions/.tool_permissions.json"
 
 
 @dataclass

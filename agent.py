@@ -428,9 +428,10 @@ async def chat(
         import json
         import os
 
-        todo_dir = str(get_config_dir())
-        os.makedirs(todo_dir, exist_ok=True)
-        todo_file = os.path.join(todo_dir, f"todos_{session_id}.json")
+        config_dir = get_config_dir()
+        todos_dir = config_dir / "todos"
+        todos_dir.mkdir(parents=True, exist_ok=True)
+        todo_file = todos_dir / f"{session_id}.json"
         with open(todo_file, "w") as f:
             json.dump([], f)
 

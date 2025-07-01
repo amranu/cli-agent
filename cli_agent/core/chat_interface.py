@@ -497,6 +497,23 @@ class ChatInterface:
                         # Update and show token display after assistant response
                         # Check for auto-compaction and update messages if needed
                         compaction_result = await self._update_token_display_async(messages, show_display=True)
+                        
+                        # EXECUTE STOP HOOKS - triggered when agent finishes responding
+                        if hasattr(self.agent, 'hook_manager') and self.agent.hook_manager:
+                            try:
+                                from cli_agent.core.hooks.hook_config import HookType
+                                from datetime import datetime
+                                
+                                stop_context = {
+                                    "timestamp": datetime.now().isoformat(),
+                                    "session_id": getattr(self.agent, 'session_id', 'unknown'),
+                                    "conversation_length": len(messages),
+                                    "response_length": len(response_content) if isinstance(response_content, str) else 0
+                                }
+                                
+                                await self.agent.hook_manager.execute_hooks(HookType.STOP, stop_context)
+                            except Exception as e:
+                                logger.warning(f"Error executing stop hooks: {e}")
                         if compaction_result and compaction_result.get("auto_compacted"):
                             # Replace messages with compacted version
                             messages[:] = compaction_result["compacted_messages"]

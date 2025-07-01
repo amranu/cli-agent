@@ -1,0 +1,5 @@
+{
+  "matcher": "*",
+  "command": "echo '[SESSION] {{timestamp}} - Response complete. Conversation: {{conversation_length}} messages' >> ~/.cli-agent-session.log",
+  "timeout": 5
+}

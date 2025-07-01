@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 from cli_agent.utils.tool_name_utils import ToolNameUtils
@@ -57,6 +59,38 @@ class ToolExecutionEngine:
 
             tool_info = self.agent.available_tools[tool_key]
             tool_name = tool_info["name"]
+            
+            # EXECUTE PRE-TOOL HOOKS
+            hook_manager = getattr(self.agent, 'hook_manager', None)
+            if hook_manager and not self.agent.is_subagent:
+                try:
+                    from cli_agent.core.hooks.hook_config import HookType
+                    
+                    # Build context for pre-tool hooks
+                    pre_context = {
+                        "tool_name": tool_name,
+                        "tool_args": arguments,
+                        "timestamp": datetime.now().isoformat(),
+                        "session_id": getattr(self.agent, 'session_id', 'unknown')
+                    }
+                    
+                    # Execute pre-tool hooks
+                    pre_results = await hook_manager.execute_hooks(HookType.PRE_TOOL_USE, pre_context)
+                    
+                    # Check if any hooks want to block the operation
+                    should_block, reason = hook_manager.should_block_operation(pre_results)
+                    if should_block:
+                        return f"Tool execution blocked by hook: {reason}"
+                    
+                    # Check for modified arguments from hooks
+                    modified_args = hook_manager.extract_modified_arguments(pre_results)
+                    if modified_args:
+                        arguments.update(modified_args)
+                        logger.info(f"Hook modified tool arguments: {modified_args}")
+                        
+                except Exception as e:
+                    logger.warning(f"Error executing pre-tool hooks: {e}")
+                    # Continue with tool execution despite hook errors
             
             # Show clean diff preview and get user confirmation for file edits
             # This also serves as the permission check for edit tools
@@ -233,22 +267,75 @@ class ToolExecutionEngine:
                 )
                 sys.stderr.flush()
 
-            # Check if it's a built-in tool
+            # EXECUTE TOOL WITH POST-HOOK INTEGRATION
+            start_time = time.time()
+            tool_result = None
+            tool_error = None
+            
+            try:
+                # Check if it's a built-in tool
+                if tool_info["server"] == "builtin":
+                    logger.info(
+                        f"Executing built-in tool: {tool_name} with arguments: {arguments}"
+                    )
+                    tool_result = await self.agent._execute_builtin_tool(tool_name, arguments)
+                else:
+                    # Handle external MCP tools with FastMCP
+                    client = tool_info["client"]
+                    if client is None:
+                        return f"Error: No client session for tool {tool_key}"
+
+                    logger.info(f"Executing MCP tool: {tool_name} with arguments: {arguments}")
+                    result = await client.call_tool(tool_name, arguments)
+                    tool_result = result
+                    
+            except Exception as e:
+                tool_error = e
+                execution_time = time.time() - start_time
+                
+                # EXECUTE POST-TOOL HOOKS (ERROR CASE)
+                if hook_manager and not self.agent.is_subagent:
+                    try:
+                        post_context = {
+                            "tool_name": tool_name,
+                            "tool_args": arguments,
+                            "error": str(e),
+                            "execution_time": execution_time,
+                            "timestamp": datetime.now().isoformat(),
+                            "session_id": getattr(self.agent, 'session_id', 'unknown')
+                        }
+                        
+                        await hook_manager.execute_hooks(HookType.POST_TOOL_USE, post_context)
+                    except Exception as hook_error:
+                        logger.warning(f"Error executing post-tool hooks (error case): {hook_error}")
+                
+                # Re-raise the original tool error
+                raise e
+            
+            execution_time = time.time() - start_time
+            
+            # EXECUTE POST-TOOL HOOKS (SUCCESS CASE)
+            if hook_manager and not self.agent.is_subagent:
+                try:
+                    post_context = {
+                        "tool_name": tool_name,
+                        "tool_args": arguments,
+                        "result": str(tool_result),
+                        "execution_time": execution_time,
+                        "timestamp": datetime.now().isoformat(),
+                        "session_id": getattr(self.agent, 'session_id', 'unknown')
+                    }
+                    
+                    await hook_manager.execute_hooks(HookType.POST_TOOL_USE, post_context)
+                except Exception as e:
+                    logger.warning(f"Error executing post-tool hooks (success case): {e}")
+            
+            # Return built-in tool result directly
             if tool_info["server"] == "builtin":
-                logger.info(
-                    f"Executing built-in tool: {tool_name} with arguments: {arguments}"
-                )
-                return await self.agent._execute_builtin_tool(tool_name, arguments)
-
-            # Handle external MCP tools with FastMCP
-            client = tool_info["client"]
-            if client is None:
-                return f"Error: No client session for tool {tool_key}"
-
-            logger.info(f"Executing MCP tool: {tool_name} with arguments: {arguments}")
-            result = await client.call_tool(tool_name, arguments)
-
-            # Format the result for FastMCP
+                return tool_result
+            
+            # Handle MCP tool result formatting
+            result = tool_result
             if hasattr(result, "content") and result.content:
                 content_parts = []
                 for content in result.content:

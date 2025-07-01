@@ -14,27 +14,36 @@ logger = logging.getLogger(__name__)
 
 
 def migrate_mcp_agent_config():
-    """Migrate configuration from old mcp-agent directory to new cli-agent directory."""
+    """Migrate configuration from old directories to new agent directory."""
     old_config_dir = Path.home() / ".config" / "mcp-agent"
-    new_config_dir = Path.home() / ".config" / "cli-agent"
+    cli_agent_dir = Path.home() / ".config" / "cli-agent"
+    new_config_dir = Path.home() / ".config" / "agent"
     
-    # Skip if old directory doesn't exist or new directory already exists
-    if not old_config_dir.exists() or new_config_dir.exists():
+    # Skip if new directory already exists
+    if new_config_dir.exists():
         return
     
-    try:
-        logger.info(f"Migrating configuration from {old_config_dir} to {new_config_dir}")
-        shutil.move(str(old_config_dir), str(new_config_dir))
-        logger.info("Configuration migration completed successfully")
-    except Exception as e:
-        logger.warning(f"Failed to migrate configuration: {e}")
-        # If migration fails, just continue - the old config will still work
+    # Migrate from cli-agent directory first (most recent), then mcp-agent (oldest)
+    source_dir = None
+    if cli_agent_dir.exists():
+        source_dir = cli_agent_dir
+    elif old_config_dir.exists():
+        source_dir = old_config_dir
+    
+    if source_dir:
+        try:
+            logger.info(f"Migrating configuration from {source_dir} to {new_config_dir}")
+            shutil.move(str(source_dir), str(new_config_dir))
+            logger.info("Configuration migration completed successfully")
+        except Exception as e:
+            logger.warning(f"Failed to migrate configuration: {e}")
+            # If migration fails, just continue - the old config will still work
 
 
 def get_config_dir() -> Path:
     """Get the configuration directory, with migration from old location if needed."""
     migrate_mcp_agent_config()
-    return Path.home() / ".config" / "cli-agent"
+    return Path.home() / ".config" / "agent"
 
 
 class MCPServerConfig(BaseModel):
@@ -245,6 +254,10 @@ class HostConfig(BaseSettings):
     subagent_permissions_bypass: bool = Field(
         default=False, alias="SUBAGENT_PERMISSIONS_BYPASS"
     )
+
+    # Hooks system configuration
+    hooks_enabled: bool = Field(default=True, alias="HOOKS_ENABLED")
+    hooks_timeout: int = Field(default=30, alias="HOOKS_TIMEOUT")
 
     # MCP Server settings
     mcp_server_enabled: bool = Field(default=False, alias="MCP_SERVER_ENABLED")
@@ -1193,7 +1206,7 @@ Then restart the agent.
         import json
         from pathlib import Path
 
-        # Store MCP config in ~/.config/cli-agent/ to persist across working directories
+        # Store MCP config in ~/.config/agent/ to persist across working directories
         config_dir = get_config_dir()
         config_dir.mkdir(parents=True, exist_ok=True)
         mcp_config_file = config_dir / "mcp_servers.json"
@@ -1215,7 +1228,7 @@ Then restart the agent.
         import json
         from pathlib import Path
 
-        # Load MCP config from ~/.config/cli-agent/ to persist across working directories
+        # Load MCP config from ~/.config/agent/ to persist across working directories
         config_dir = get_config_dir()
         mcp_config_file = config_dir / "mcp_servers.json"
 
@@ -1389,12 +1402,12 @@ Then restart the agent.
             raise
 
     def save_persistent_config(self, silent: bool = False):
-        """Save persistent configuration to ~/.config/cli-agent/config.json."""
+        """Save persistent configuration to ~/.config/agent/config.json."""
         import json
         import os
         from pathlib import Path
 
-        # Store persistent config in ~/.config/cli-agent/
+        # Store persistent config in ~/.config/agent/
         config_dir = get_config_dir()
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / "config.json"
@@ -1424,7 +1437,7 @@ Then restart the agent.
             print(f"Warning: Could not save persistent configuration: {e}")
 
     def load_persistent_config(self):
-        """Load persistent configuration from ~/.config/cli-agent/config.json."""
+        """Load persistent configuration from ~/.config/agent/config.json."""
         import json
         from pathlib import Path
 
@@ -1512,6 +1525,35 @@ Then restart the agent.
         self.last_session_id = None
         self.save_persistent_config(silent=silent)
         logger.debug("Cleared last session ID")
+
+    def load_hook_config(self):
+        """Load hook configuration from standard sources if hooks are enabled."""
+        if not self.hooks_enabled:
+            logger.debug("Hooks disabled, skipping hook configuration loading")
+            return None
+            
+        try:
+            from cli_agent.core.hooks.hook_config import HookConfig
+            
+            hook_config = HookConfig.load_from_multiple_sources()
+            
+            if hook_config.has_hooks():
+                logger.info("Loaded hooks configuration successfully")
+                # Validate configuration
+                validation_errors = hook_config.validate()
+                if validation_errors:
+                    logger.warning(f"Hook configuration validation warnings: {validation_errors}")
+                return hook_config
+            else:
+                logger.debug("No hooks found in configuration")
+                return None
+                
+        except ImportError as e:
+            logger.warning(f"Hook system not available: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error loading hook configuration: {e}")
+            return None
 
 
 def load_config() -> HostConfig:

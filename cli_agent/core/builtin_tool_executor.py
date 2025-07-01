@@ -150,9 +150,10 @@ class BuiltinToolExecutor:
 
     def _get_todo_file_path(self) -> str:
         """Get the session-specific todo file path."""
-        # Create .config/cli-agent directory if it doesn't exist
+        # Create .config/agent/todos directory if it doesn't exist
         config_dir = get_config_dir()
-        config_dir.mkdir(parents=True, exist_ok=True)
+        todos_dir = config_dir / "todos"
+        todos_dir.mkdir(parents=True, exist_ok=True)
 
         # Get session ID from agent if available, otherwise use 'default'
         session_id = getattr(self.agent, "_session_id", "default")
@@ -164,10 +165,10 @@ class BuiltinToolExecutor:
 
         logger = logging.getLogger(__name__)
         logger.info(
-            f"Todo file path: session_id='{session_id}', file=todos_{session_id}.json"
+            f"Todo file path: session_id='{session_id}', file=todos/{session_id}.json"
         )
 
-        return str(config_dir / f"todos_{session_id}.json")
+        return str(todos_dir / f"{session_id}.json")
 
     def todo_read(self, args: Dict[str, Any]) -> str:
         """Read the current session's todo list."""

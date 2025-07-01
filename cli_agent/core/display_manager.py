@@ -377,6 +377,19 @@ class DisplayManager:
     async def _display_system_event(self, event: SystemEvent):
         """Display system-level events."""
         if self.interactive:
+            # Handle hook execution events with meaningful information
+            if event.system_type == "hook_execution_start":
+                hook_type = getattr(event, 'hook_type', 'Unknown')
+                hook_name = event.data.get('hook_name', 'unnamed') if hasattr(event, 'data') and event.data else 'unnamed'
+                
+                # Show informative hook execution message with name
+                display_text = f"🪝 {hook_type} hook: {hook_name}\n"
+                self.terminal_manager.write_above_prompt(display_text)
+                return
+            elif event.system_type == "hook_execution_complete":
+                # Don't show completion messages - just clutter
+                return
+                
             system_icons = {"init": "🚀", "shutdown": "🛑", "config_change": "⚙️"}
             icon = system_icons.get(event.system_type, "🔧")
 

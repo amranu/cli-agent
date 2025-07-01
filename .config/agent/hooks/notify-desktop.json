@@ -1,0 +1,5 @@
+{
+  "matcher": "*",
+  "command": "osascript -e 'display notification \"{{message}}\" with title \"CLI-Agent\"' 2>/dev/null || notify-send 'CLI-Agent' '{{message}}' 2>/dev/null || true",
+  "timeout": 5
+}

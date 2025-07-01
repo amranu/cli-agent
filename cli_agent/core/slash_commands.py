@@ -23,7 +23,7 @@ class SlashCommandManager:
         self.load_custom_commands()
 
     def load_custom_commands(self):
-        """Load custom commands from .claude/commands/ and ~/.config/cli-agent/commands/"""
+        """Load custom commands from .claude/commands/ and ~/.config/agent/commands/"""
         # Project-specific commands
         project_commands_dir = Path(".claude/commands")
         if project_commands_dir.exists():
@@ -84,6 +84,8 @@ class SlashCommandManager:
             return self._handle_quit()
         elif command == "tools":
             return self._handle_tools()
+        elif command == "hooks":
+            return self._handle_hooks(args)
         elif command == "permissions":
             return self._handle_permissions(args)
         elif command == "truncate":
@@ -128,6 +130,7 @@ Built-in Commands:
   /provider [name]- Show current provider or switch provider (e.g. /provider openrouter)
   /review [file]  - Request code review
   /tools          - List all available tools
+  /hooks [status|disable|enable] - Show hooks status or control hooks
   /permissions    - Manage tool execution permissions
   /truncate [on|off|length] - Toggle or configure tool result truncation
   /refresh-models - Clear model cache and fetch fresh model lists
@@ -177,6 +180,50 @@ Custom Commands:"""
             tools_text += f"  {tool_name}: {tool_info['description']}\n"
 
         return tools_text.rstrip()
+
+    def _handle_hooks(self, args: str) -> str:
+        """Handle /hooks command."""
+        if not hasattr(self.agent, 'hook_manager') or not self.agent.hook_manager:
+            return "🚫 Hooks system is not enabled. Create .config/agent/settings.json to configure hooks."
+        
+        hook_manager = self.agent.hook_manager
+        
+        # Parse arguments
+        args = args.strip().lower()
+        
+        if args == "disable":
+            hook_manager.disable_hooks()
+            return "🪝 Hooks temporarily disabled for this session."
+        elif args == "enable":
+            hook_manager.enable_hooks()
+            return "🪝 Hooks re-enabled for this session."
+        elif args == "status" or args == "":
+            # Show hooks status
+            summary = hook_manager.get_hook_summary()
+            
+            status_text = "🪝 Hooks System Status:\n"
+            status_text += f"  Enabled: {'✅ Yes' if summary['enabled'] else '❌ No'}\n"
+            status_text += f"  Total hooks: {summary['total_hooks']}\n\n"
+            
+            if summary['hook_types']:
+                status_text += "Hook Types:\n"
+                for hook_type, info in summary['hook_types'].items():
+                    status_text += f"  {hook_type}: {info['hooks']} hooks ({info['matchers']} matchers)\n"
+                    
+                status_text += "\nConfiguration sources checked:\n"
+                status_text += "  Files:\n"
+                status_text += "    • ~/.config/agent/settings.json\n"
+                status_text += "    • ~/.config/agent/settings.local.json\n"
+                status_text += "  Directories:\n"
+                status_text += "    • ~/.config/agent/hooks/*.json\n"
+                
+                status_text += "\nUse '/hooks disable' or '/hooks enable' to control execution."
+            else:
+                status_text += "No hook types configured."
+                
+            return status_text
+        else:
+            return "Usage: /hooks [status|disable|enable]"
 
     async def _handle_compact(self, messages: List[Dict[str, Any]] = None) -> str:
         """Handle /compact command."""
