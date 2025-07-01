@@ -18,6 +18,14 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 
 ## 📦 Installation
 
+### Option 1: Install from PyPI (Recommended)
+
+```bash
+pip install mcp-cli-agent
+```
+
+### Option 2: Install from Source
+
 1.  **Clone the repository**:
     ```bash
     git clone https://github.com/amranu/cli-agent.git
@@ -29,8 +37,11 @@ A powerful, modular command-line interface for interacting with AI models enhanc
     pip install -e .
     ```
 
-3.  **Configure API keys** (environment variables):
-    ```bash
+## ⚙️ Configuration
+
+**Configure API keys** (environment variables):
+
+```bash
     # Set environment variables for the providers you want to use
     export OPENAI_API_KEY=your_openai_api_key_here
     export DEEPSEEK_API_KEY=your_deepseek_api_key_here
@@ -43,13 +54,13 @@ A powerful, modular command-line interface for interacting with AI models enhanc
     
     # Or specify a particular provider-model combination
     agent chat --model openai:gpt-4-turbo-preview
-    ```
+```
 
-    **Smart Provider Selection**: The agent automatically selects a configured provider based on available API keys.
+**Smart Provider Selection**: The agent automatically selects a configured provider based on available API keys.
 
-    Configuration is automatically saved to `~/.config/cli-agent/config.json` and persists across sessions.
+Configuration is automatically saved to `~/.config/cli-agent/config.json` and persists across sessions.
 
-    **Migration from MCP Agent**: If you previously used MCP Agent, your configuration will be automatically migrated from `~/.config/mcp-agent/` to `~/.config/cli-agent/` on first run.
+**Migration from MCP Agent**: If you previously used MCP Agent, your configuration will be automatically migrated from `~/.config/mcp-agent/` to `~/.config/cli-agent/` on first run.
 
 ## 🛠️ Usage
 
