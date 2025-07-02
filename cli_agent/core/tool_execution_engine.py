@@ -204,7 +204,17 @@ class ToolExecutionEngine:
                     # Don't fail tool execution if diff display fails
                     logger.warning(f"Failed to display multiedit diff preview: {e}")
 
-            # Check tool permissions (both main agent and subagents)
+            # Forward to parent if this is a subagent (except for subagent management tools)
+            # This must happen BEFORE permission checks so parent can handle permissions
+            if self.agent.is_subagent and self.agent.comm_socket:
+                excluded_tools = ["task", "task_status", "task_results"]
+                if tool_name not in excluded_tools:
+                    # Tool forwarding happens silently - parent will handle permissions
+                    return await self.agent._forward_tool_to_parent(
+                        tool_key, tool_name, arguments
+                    )
+
+            # Check tool permissions (main agent only, since subagents forward to parent)
             # Skip permission checks for subagents if bypass is enabled
             bypass_subagent_permissions = (
                 self.agent.is_subagent
@@ -234,10 +244,6 @@ class ToolExecutionEngine:
 
                 input_handler = getattr(self.agent, "_input_handler", None)
                 
-                # For subagents, set current tool information on input handler BEFORE permission check
-                if self.agent.is_subagent and input_handler and hasattr(input_handler, 'set_current_tool_info'):
-                    input_handler.set_current_tool_info(tool_name, arguments)
-                
                 permission_result = (
                     await self.agent.permission_manager.check_tool_permission(
                         tool_name, arguments, input_handler
@@ -245,21 +251,8 @@ class ToolExecutionEngine:
                 )
 
                 if not permission_result.allowed:
-                    if not self.agent.is_subagent:
-                        # Main agent: always raise exception for conversation history consistency
-                        raise ToolDeniedReturnToPrompt(permission_result.reason)
-                    else:
-                        # Subagents: return error message (no conversation history concerns)
-                        return f"Tool execution denied: {permission_result.reason}"
-
-            # Forward to parent if this is a subagent (except for subagent management tools)
-            if self.agent.is_subagent and self.agent.comm_socket:
-                excluded_tools = ["task", "task_status", "task_results"]
-                if tool_name not in excluded_tools:
-                    # Tool forwarding happens silently
-                    return await self.agent._forward_tool_to_parent(
-                        tool_key, tool_name, arguments
-                    )
+                    # Only main agents reach here (subagents forward to parent)
+                    raise ToolDeniedReturnToPrompt(permission_result.reason)
             elif self.agent.is_subagent:
                 sys.stderr.write(
                     f"🤖 [SUBAGENT] WARNING: is_subagent=True but no comm_socket for tool {tool_name}\n"
