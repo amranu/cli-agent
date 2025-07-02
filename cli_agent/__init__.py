@@ -10,7 +10,7 @@ from .core.input_handler import InterruptibleInput
 from .core.slash_commands import SlashCommandManager
 from .tools.builtin_tools import get_all_builtin_tools
 
-__version__ = "1.0.0"
+__version__ = "1.1.2"
 
 __all__ = [
     "BaseMCPAgent",
