@@ -143,8 +143,9 @@ class PermissionSocketServer:
         logger.info("Stopping permission socket server")
         self._running = False
         
-        # Close all active connections
-        for conn_id, writer in self.active_connections.items():
+        # Close all active connections - make a copy to avoid "dictionary changed size during iteration"
+        active_connections_copy = dict(self.active_connections)
+        for conn_id, writer in active_connections_copy.items():
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -153,8 +154,9 @@ class PermissionSocketServer:
         
         self.active_connections.clear()
         
-        # Cancel pending requests
-        for request_id, future in self.pending_requests.items():
+        # Cancel pending requests - make a copy to avoid "dictionary changed size during iteration"
+        pending_requests_copy = dict(self.pending_requests)
+        for request_id, future in pending_requests_copy.items():
             if not future.done():
                 future.cancel()
         self.pending_requests.clear()
