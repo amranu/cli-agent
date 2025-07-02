@@ -34,20 +34,22 @@ The system checks for override files in the following priority order:
 #### Model-Specific File Naming Examples:
 ```
 # Claude via Anthropic provider
-claude-3-5-sonnet-20241022_claude-3-5-sonnet-20241022.txt
+anthropic_claude-3.5-sonnet.txt
 
-# GPT-4 via OpenAI provider
-gpt-4.1_gpt-4.1.txt
+# GPT-4 via OpenAI provider  
+openai_gpt-4-turbo.txt
+openai_gpt-4o.txt
 
 # Claude via OpenRouter provider
-anthropic/claude-3.5-sonnet_anthropic/claude-3.5-sonnet.txt
+openrouter_claude-3.5-sonnet.txt
 
-# DeepSeek models
-deepseek-chat_deepseek-chat.txt
-deepseek-reasoner_deepseek-reasoner.txt
+# DeepSeek models via DeepSeek provider
+deepseek_deepseek-chat.txt
+deepseek_deepseek-reasoner.txt
 
-# Gemini models
-gemini-2.5-flash_gemini-2.5-flash.txt
+# Gemini models via Google provider
+google_gemini-2.5-flash.txt
+google_gemini-2.5-pro.txt
 ```
 
 ## Dynamic Placeholders
@@ -113,7 +115,7 @@ EOF
 ### 3. Create Model-Specific Overrides (Optional)
 ```bash
 # For Claude models - more conversational style
-cat > ~/.config/agent/prompts/claude-3-5-sonnet-20241022_claude-3-5-sonnet-20241022.txt << 'EOF'
+cat > ~/.config/agent/prompts/anthropic_claude-3.5-sonnet.txt << 'EOF'
 You are Claude, a thoughtful AI assistant specializing in software development.
 
 I have access to these tools:
@@ -129,7 +131,7 @@ I focus on:
 EOF
 
 # For GPT models - more direct style
-cat > ~/.config/agent/prompts/gpt-4.1_gpt-4.1.txt << 'EOF'
+cat > ~/.config/agent/prompts/openai_gpt-4o.txt << 'EOF'
 You are GPT-4, an efficient coding assistant.
 
 Available tools:
@@ -194,7 +196,7 @@ EOF
 ### Example 3: Model-Specific Customization
 ```bash
 # For reasoning models like DeepSeek
-cat > ~/.config/agent/prompts/deepseek-reasoner_deepseek-reasoner.txt << 'EOF'
+cat > ~/.config/agent/prompts/deepseek_deepseek-reasoner.txt << 'EOF'
 You are DeepSeek, an AI assistant with advanced reasoning capabilities.
 
 Use your reasoning abilities to thoroughly analyze problems before providing solutions.
