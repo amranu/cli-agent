@@ -537,14 +537,21 @@ class ChatInterface:
                             f"Tool access denied: {e.reason}", "tool_denied"
                         )
                         
+                        # Add context message to conversation history so LLM knows what happened
+                        messages.append({
+                            "role": "user",
+                            "content": f"Tool execution was denied by the user. Reason: {e.reason}"
+                        })
+                        
                         # Defensive validation: check for any remaining conversation history corruption
                         # This should be rare now that response_handler clears _updated_messages
                         if (messages and 
-                            messages[-1].get("role") == "assistant" and 
-                            "tool_calls" in messages[-1]):
+                            len(messages) >= 2 and
+                            messages[-2].get("role") == "assistant" and 
+                            "tool_calls" in messages[-2]):
                             
                             # Remove the assistant message with tool_calls that can't be completed
-                            removed_msg = messages.pop()
+                            removed_msg = messages.pop(-2)  # Remove the assistant message, keep our user message
                             logger.warning(f"Defensive cleanup: removed orphaned assistant message with tool_calls: {[tc.get('function', {}).get('name', 'unknown') for tc in removed_msg.get('tool_calls', [])]}")
                         
                         # Clear any updated messages that might still be cached (additional safety)
