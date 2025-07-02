@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import subprocess
 import tempfile
@@ -11,6 +12,8 @@ from typing import Any, Dict
 
 import requests
 from config import get_config_dir
+
+logger = logging.getLogger(__name__)
 
 
 class BuiltinToolExecutor:

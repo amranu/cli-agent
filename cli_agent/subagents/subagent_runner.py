@@ -141,10 +141,20 @@ async def run_subagent_task(task_file_path: str):
             host = config.create_host_from_provider_model(is_subagent=True)
             emit_output_with_id(f"Created {config.default_provider_model} subagent")
 
-        # Disable permission manager entirely for subagents in stream-json mode
-        if os.environ.get("STREAM_JSON_MODE") == "true":
-            host.permission_manager = None
-            emit_output_with_id("Disabled permission manager for stream-json mode")
+        # Set up tool permission manager for subagent (inherits main agent settings)
+        from cli_agent.core.tool_permissions import (
+            ToolPermissionConfig,
+            ToolPermissionManager,
+        )
+
+        permission_config = ToolPermissionConfig(
+            allowed_tools=list(config.allowed_tools),
+            disallowed_tools=list(config.disallowed_tools),
+            auto_approve_session=config.auto_approve_tools,
+        )
+        permission_manager = ToolPermissionManager(permission_config)
+        host.permission_manager = permission_manager
+        emit_output_with_id("Set up subagent permission manager with IPC communication")
 
         # Set up JSON handler if in stream-json mode (detected via environment)
         if os.environ.get("STREAM_JSON_MODE") == "true":
@@ -194,10 +204,6 @@ async def run_subagent_task(task_file_path: str):
                 multiline_mode: bool = False,
                 allow_escape_interrupt: bool = False,
             ):
-                # Auto-approve all tools when in stream-json mode (detected via environment)
-                if os.environ.get("STREAM_JSON_MODE") == "true":
-                    return "y"
-                
                 # For subagents, emit a permission request and wait for response via a temp file
                 try:
                     import os
@@ -215,24 +221,11 @@ async def run_subagent_task(task_file_path: str):
                     )
 
                     # Emit permission request to main process
-                    # Use current tool info if available, otherwise fall back to basic values
-                    tool_name = self.current_tool_name or 'unknown'
-                    tool_arguments = self.current_tool_arguments or {}
-                    
-                    # Create simple description from tool name and arguments  
-                    if tool_name != 'unknown':
-                        if tool_name == 'bash_execute' and 'command' in tool_arguments:
-                            tool_description = f"Execute bash command: {tool_arguments['command']}"
-                        elif tool_name == 'read_file' and 'file_path' in tool_arguments:
-                            tool_description = f"Read file: {tool_arguments['file_path']}"
-                        elif tool_name == 'write_file' and 'file_path' in tool_arguments:
-                            tool_description = f"Write to file: {tool_arguments['file_path']}"
-                        else:
-                            tool_description = f"Execute tool: {tool_name}"
-                    else:
-                        tool_description = 'Unknown tool'
-                    
-                    full_prompt = f"Allow {tool_name}? {tool_description}"
+                    # Get permission details if available - try current tool info first, then fallback to attributes
+                    tool_name = self.current_tool_name or getattr(self, '_permission_tool_name', 'unknown')
+                    tool_arguments = self.current_tool_arguments or getattr(self, '_permission_arguments', {})
+                    tool_description = getattr(self, '_permission_description', 'Unknown tool')
+                    full_prompt = getattr(self, '_permission_full_prompt', prompt_text)
                     
                     emit_message(
                         "permission_request",

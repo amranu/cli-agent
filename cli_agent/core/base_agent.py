@@ -439,6 +439,10 @@ class BaseMCPAgent(ABC):
         # Shutdown subagent manager if present
         if hasattr(self, "subagent_manager") and self.subagent_manager:
             await self.subagent_manager.terminate_all()
+        
+        # Cleanup subagent coordinator if present (includes socket server shutdown)
+        if hasattr(self, "subagent_coordinator") and self.subagent_coordinator:
+            await self.subagent_coordinator.cleanup()
 
     # Centralized Subagent Management Methods
 

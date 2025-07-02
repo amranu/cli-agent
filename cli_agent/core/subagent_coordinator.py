@@ -90,15 +90,9 @@ class SubagentCoordinator:
                     response_file = message.data.get("response_file")
                     if response_file:
                         try:
-                            # Check if in stream-json mode and auto-approve
-                            if os.environ.get("STREAM_JSON_MODE") == "true":
-                                response = "y"  # Auto-approve for stream-json mode
-                                logger.info(f"Auto-approved subagent {task_id} in fallback (stream-json mode)")
-                            else:
-                                response = "n"  # Default to deny
                             with open(response_file, "w") as f:
-                                f.write(response)
-                            logger.info(f"Created fallback response '{response}' for {task_id}")
+                                f.write("n")  # Default to deny
+                            logger.info(f"Created fallback denial response for {task_id}")
                         except Exception as write_error:
                             logger.error(f"Failed to create fallback response: {write_error}")
                     return
@@ -114,38 +108,15 @@ class SubagentCoordinator:
             response_file = message.data.get("response_file")
             if response_file:
                 try:
-                    # Check if in stream-json mode and auto-approve
-                    if os.environ.get("STREAM_JSON_MODE") == "true":
-                        response = "y"  # Auto-approve for stream-json mode
-                        logger.info(f"Auto-approved subagent {task_id} in queue error fallback (stream-json mode)")
-                    else:
-                        response = "n"  # Default to deny
                     with open(response_file, "w") as f:
-                        f.write(response)
-                    logger.info(f"Created fallback response '{response}' for {task_id} due to queue error")
+                        f.write("n")  # Default to deny
+                    logger.info(f"Created fallback denial response for {task_id} due to queue error")
                 except Exception as write_error:
                     logger.error(f"Failed to create fallback response: {write_error}")
     
     async def _handle_subagent_permission_request_impl(self, message, task_id):
         """Internal implementation of permission request handling."""
         try:
-            # FIRST: Check if in stream-json mode and auto-approve IMMEDIATELY before ANY processing
-            if os.environ.get("STREAM_JSON_MODE") == "true":
-                response_file = message.data.get("response_file")
-                tool_name = message.data.get("tool_name", "unknown")
-                if response_file:
-                    try:
-                        with open(response_file, "w") as f:
-                            f.write("y")
-                        logger.info(f"Auto-approved subagent {task_id} tool {tool_name} for stream-json mode (immediate bypass)")
-                        return  # Exit immediately without ANY permission processing
-                    except Exception as e:
-                        logger.error(f"Error writing auto-approval response: {e}")
-                        return
-                else:
-                    logger.error("No response file in permission request")
-                    return
-
             # Extract permission request details
             request_id = message.data.get("request_id")
             response_file = message.data.get("response_file")
@@ -161,130 +132,43 @@ class SubagentCoordinator:
                 f"Handling permission request from subagent {task_id}: {tool_name}"
             )
 
-            # Try to use clean permission display first
-            use_clean_display = False
-            
+            # Use clean permission display
             try:
                 # Calculate queue status
                 queue_size = self._permission_queue.qsize() if self._permission_queue else 0
                 total_requests = queue_size + 1  # Include current request
                 current_position = 1  # We're processing this one now
                 
-                # Attempt to show clean permission display
-                if self.clean_permission_display.can_use_clean_display():
-                    use_clean_display = self.clean_permission_display.show_permission_request(
-                        tool_name=tool_name,
-                        tool_description=tool_description,
-                        arguments=arguments,
-                        task_id=task_id,
-                        queue_position=current_position,
-                        total_requests=total_requests,
-                    )
-                    
-                    if use_clean_display:
-                        logger.debug(f"Using clean display for permission request from {task_id}")
-                    else:
-                        logger.debug(f"Clean display failed, falling back to traditional for {task_id}")
+                # Show clean permission display
+                use_clean_display = self.clean_permission_display.show_permission_request(
+                    tool_name=tool_name,
+                    tool_description=tool_description,
+                    arguments=arguments,
+                    task_id=task_id,
+                    queue_position=current_position,
+                    total_requests=total_requests,
+                )
+                
+                if use_clean_display:
+                    logger.debug(f"Using clean display for permission request from {task_id}")
+                else:
+                    logger.warning(f"Clean display not available for {task_id}")
                         
             except Exception as e:
-                logger.warning(f"Clean permission display failed: {e}, falling back to traditional")
+                logger.error(f"Clean permission display failed: {e}")
                 use_clean_display = False
 
-            # Fallback to traditional display if clean display not available or failed
-            if not use_clean_display and self.event_emitter:
-                # Check queue status
-                queue_size = self._permission_queue.qsize() if self._permission_queue else 0
-                total_requests = queue_size + 1  # Include current request
-                current_position = 1  # We're processing this one now
-                
-                # Show queue status if multiple requests
-                if total_requests > 1:
-                    await self.event_emitter.emit_system_message(
-                        f"📋 Permission Request {current_position} of {total_requests}",
-                        "queue_status",
-                        "📊",
-                    )
-                
-                # Force a clear line and add proper spacing
-                await self.event_emitter.emit_text(
-                    "\n\n" + "=" * 60 + "\n", is_markdown=False, is_streaming=False
-                )
-                # Format request source appropriately
-                if task_id == "main-process":
-                    source_description = "Main process is requesting tool permission:"
-                else:
-                    source_description = f"Subagent {task_id} is requesting tool permission:"
-                
-                await self.event_emitter.emit_system_message(
-                    source_description,
-                    "permission_request",
-                    "🔐",
-                )
-                
-                # Format the permission prompt content
-                prompt_lines = [
-                    f"Tool: {tool_name}",
-                    f"Action: {tool_description}",
-                ]
-                
-                # Show arguments if they're not sensitive
-                if tool_name != "bash_execute" or len(str(arguments)) < 100:
-                    prompt_lines.append(f"Arguments: {arguments}")
-                
-                prompt_lines.extend([
-                    "",
-                    "Allow this tool to execute?",
-                    "[y] Yes, execute once",
-                    f"[a] Yes, and allow '{tool_name}' for the rest of this session",
-                    "[A] Yes, and auto-approve ALL tools for this session",
-                    "[n] No, deny this execution",
-                    f"[d] No, and deny '{tool_name}' for the rest of this session",
-                ])
-                
-                prompt_text = "\n".join(prompt_lines)
-                
-                await self.event_emitter.emit_text(
-                    f"\n{prompt_text}\n", is_markdown=False, is_streaming=False
-                )
-                await self.event_emitter.emit_text(
-                    "=" * 60 + "\n", is_markdown=False, is_streaming=False
-                )
-
-                # Wait for events to be processed and display to settle
-                await asyncio.sleep(0.5)
-
-            # The subagent has displayed the permission prompt and is waiting for our response
-            # We need to get the user's input and write it to the response file
+            # Get user input
             try:
-                # Check if in stream-json mode and auto-approve if so
-                if os.environ.get("STREAM_JSON_MODE") == "true":
-                    # Auto-approve for stream-json mode
-                    user_choice = "y"
-                    logger.info(f"Auto-approved subagent {task_id} tool {tool_name} for stream-json mode")
+                # Use the main agent's input handler to get user input
+                if hasattr(self.agent, "_input_handler") and self.agent._input_handler:
+                    input_handler = self.agent._input_handler
                 else:
-                    # Use the main agent's input handler to get user input
-                    if hasattr(self.agent, "_input_handler") and self.agent._input_handler:
-                        input_handler = self.agent._input_handler
-                    else:
-                        from cli_agent.core.input_handler import InterruptibleInput
+                    from cli_agent.core.input_handler import InterruptibleInput
+                    input_handler = InterruptibleInput()
 
-                        input_handler = InterruptibleInput()
-
-                    # Temporarily update the persistent prompt for permission choice
-                    from cli_agent.core.terminal_manager import get_terminal_manager
-
-                    terminal_manager = get_terminal_manager()
-
-                    # Update the existing persistent prompt to show permission choice
-                    terminal_manager.update_prompt("Choice [y/a/A/n/d]: ")
-
-                    # Get user choice using the input handler (no prompt since it's persistent)
-                    user_choice = input_handler.get_input("")
-
-                    # Ensure newline before prompt reset
-                    terminal_manager.write_above_prompt('\n')
-                    # Reset prompt back to normal
-                    terminal_manager.update_prompt("> ")
+                # Get user choice (clean display has already shown the prompt)
+                user_choice = input_handler.get_input("")
 
                 # Handle None return (EOF/interrupt)
                 if user_choice is None:
@@ -321,28 +205,12 @@ class SubagentCoordinator:
             # Show remaining requests in queue
             if self._permission_queue:
                 remaining = self._permission_queue.qsize()
-                if remaining > 0:
-                    if use_clean_display:
-                        # Show clean queue update
-                        try:
-                            self.clean_permission_display.show_queue_update(remaining)
-                        except Exception as e:
-                            logger.warning(f"Failed to show clean queue update: {e}")
-                            # Fallback to event system
-                            if self.event_emitter:
-                                await self.event_emitter.emit_system_message(
-                                    f"✅ Permission handled. Processing next request ({remaining} remaining)...",
-                                    "queue_update",
-                                    "➡️",
-                                )
-                    else:
-                        # Traditional queue update
-                        if self.event_emitter:
-                            await self.event_emitter.emit_system_message(
-                                f"✅ Permission handled. Processing next request ({remaining} remaining)...",
-                                "queue_update",
-                                "➡️",
-                            )
+                if remaining > 0 and self.event_emitter:
+                    await self.event_emitter.emit_system_message(
+                        f"✅ Permission handled. Processing next request ({remaining} remaining)...",
+                        "queue_update",
+                        "➡️",
+                    )
 
         except Exception as e:
             logger.error(f"Error handling subagent permission request: {e}")
@@ -362,33 +230,6 @@ class SubagentCoordinator:
                 else "unknown"
             )
 
-            # In stream-json mode, filter out noise and only show essential messages
-            if os.environ.get("STREAM_JSON_MODE") == "true":
-                # Handle permission requests silently
-                if message.type == "permission_request":
-                    response_file = message.data.get("response_file")
-                    if response_file:
-                        try:
-                            with open(response_file, "w") as f:
-                                f.write("y")
-                            logger.info(f"Auto-approved subagent {task_id} permission for stream-json mode (no prompt)")
-                        except Exception as e:
-                            logger.error(f"Error writing auto-approval response: {e}")
-                    return  # Exit immediately without any permission processing
-                
-                # Skip ALL output messages except those that start with tool commands
-                elif message.type == "output":
-                    content = message.content.strip()
-                    # Only allow final result/response messages, skip debug/setup output
-                    if not any(content.startswith(prefix) for prefix in [
-                        "total", "drwx", "-rw-", "-rwx", "Summary:", "Error:", "Result:"
-                    ]):
-                        return  # Skip setup/debug output messages
-                
-                # Skip ALL status messages in stream-json mode
-                elif message.type == "status":
-                    return  # Skip all status messages
-
             if message.type == "output":
                 formatted = f"🤖 [SUBAGENT-{task_id}] {message.content}"
             elif message.type == "status":
@@ -400,46 +241,6 @@ class SubagentCoordinator:
                 formatted = f"🤖 [SUBAGENT-{task_id}] 🤖 Response: {message.content}"
             elif message.type == "error":
                 formatted = f"❌ [SUBAGENT-{task_id}] Error: {message.content}"
-            elif message.type == "tool_request":
-                # Handle tool requests from subagents  
-                tool_name = message.data.get("tool_name", "unknown_tool")
-                arguments = message.data.get("arguments", {})
-                request_id = message.data.get("request_id", f"subagent_{task_id}")
-                
-                # In stream-json mode, emit proper tool_use JSON event
-                if (os.environ.get("STREAM_JSON_MODE") == "true" 
-                    and hasattr(self.agent, 'display_manager') 
-                    and hasattr(self.agent.display_manager, 'json_handler') 
-                    and self.agent.display_manager.json_handler):
-                    
-                    self.agent.display_manager.json_handler.send_assistant_tool_use(
-                        tool_name=tool_name,
-                        tool_input=arguments,
-                        tool_use_id=request_id
-                    )
-                    return
-                    
-                formatted = f"🔧 [SUBAGENT-{task_id}] Tool: {tool_name}({arguments})"
-            elif message.type == "tool_result":
-                # Handle tool results from subagents
-                request_id = message.data.get("request_id", f"subagent_{task_id}")
-                is_error = message.data.get("is_error", False)
-                
-                # In stream-json mode, emit proper tool_result JSON event  
-                if (os.environ.get("STREAM_JSON_MODE") == "true" 
-                    and hasattr(self.agent, 'display_manager') 
-                    and hasattr(self.agent.display_manager, 'json_handler') 
-                    and self.agent.display_manager.json_handler):
-                    
-                    self.agent.display_manager.json_handler.send_tool_result(
-                        tool_use_id=request_id,
-                        content=message.content,
-                        is_error=is_error
-                    )
-                    return
-                    
-                status_icon = "❌" if is_error else "✅"
-                formatted = f"{status_icon} [SUBAGENT-{task_id}] Tool result: {message.content}"
             elif message.type == "permission_request":
                 # Queue permission request for sequential processing instead of concurrent execution
                 import asyncio
@@ -453,26 +254,15 @@ class SubagentCoordinator:
                 formatted = f"📨 [SUBAGENT-{task_id}] {message.type}: {message.content}"
 
             # Display the message immediately
-            self.display_subagent_message_immediately(formatted, message.type, message.content)
+            self.display_subagent_message_immediately(formatted, message.type)
 
             logger.debug(f"Displayed subagent message: {message.type}")
         except Exception as e:
             logger.error(f"Error displaying subagent message: {e}")
 
-    def display_subagent_message_immediately(self, formatted: str, message_type: str, clean_content: str = None):
+    def display_subagent_message_immediately(self, formatted: str, message_type: str):
         """Display subagent message immediately during streaming or collection periods."""
         try:
-            # Check if in stream-json mode and emit JSON directly
-            if (os.environ.get("STREAM_JSON_MODE") == "true" 
-                and hasattr(self.agent, 'display_manager') 
-                and hasattr(self.agent.display_manager, 'json_handler') 
-                and self.agent.display_manager.json_handler):
-                
-                # In stream-json mode, emit clean content without SUBAGENT prefixes
-                if clean_content and clean_content.strip():
-                    self.agent.display_manager.json_handler.send_assistant_text(clean_content)
-                return
-
             # Emit as event - event system is always available
             import asyncio
 
@@ -713,3 +503,17 @@ Please continue with your task.""",
                 "No explicit results collected from subagents - they must call emit_result"
             )
             return None
+
+    async def cleanup(self):
+        """Clean up subagent coordinator resources."""
+        try:
+            # Cancel permission processor task if running
+            if self._permission_processor_task and not self._permission_processor_task.done():
+                self._permission_processor_task.cancel()
+                try:
+                    await self._permission_processor_task
+                except asyncio.CancelledError:
+                    pass
+                logger.info("Permission processor task cancelled")
+        except Exception as e:
+            logger.warning(f"Error during subagent coordinator cleanup: {e}")

@@ -302,13 +302,12 @@ class ToolPermissionManager:
         # Need to prompt user
         if input_handler is None:
             # No input handler available, default to allow
-            logger.warning(
-                "No input handler available for tool permission prompt, defaulting to allow"
-            )
+            print(f"[DEBUG] No input handler for {tool_name}, defaulting to allow")
             return ToolPermissionResult(
                 allowed=True, reason="No input handler available"
             )
 
+        print(f"[DEBUG] About to prompt user for {tool_name} via {type(input_handler).__name__}")
         return await self._prompt_user_for_permission(
             tool_name, arguments, input_handler
         )
