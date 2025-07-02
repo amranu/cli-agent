@@ -533,28 +533,23 @@ class ChatInterface:
                         await self._process_input_queue(messages)
 
                     except ToolDeniedReturnToPrompt as e:
-                        logger.error(f"DEBUG: ToolDeniedReturnToPrompt caught! Reason: {e.reason}")
-                        logger.error(f"DEBUG: Messages length before fix: {len(messages)}")
-                        if messages:
-                            logger.error(f"DEBUG: Last message: {messages[-1]}")
-                        
                         await self._emit_error(
                             f"Tool access denied: {e.reason}", "tool_denied"
                         )
                         
-                        # Fix conversation history corruption: remove the assistant message with tool_calls
-                        # when tool execution is denied to prevent API format violations
+                        # Defensive validation: check for any remaining conversation history corruption
+                        # This should be rare now that response_handler clears _updated_messages
                         if (messages and 
                             messages[-1].get("role") == "assistant" and 
                             "tool_calls" in messages[-1]):
                             
                             # Remove the assistant message with tool_calls that can't be completed
                             removed_msg = messages.pop()
-                            logger.error(f"DEBUG: Removed assistant message with tool_calls: {removed_msg.get('tool_calls', [])}")
-                        else:
-                            logger.error("DEBUG: No assistant message with tool_calls found to remove")
+                            logger.warning(f"Defensive cleanup: removed orphaned assistant message with tool_calls: {[tc.get('function', {}).get('name', 'unknown') for tc in removed_msg.get('tool_calls', [])]}")
                         
-                        logger.error(f"DEBUG: Messages length after fix: {len(messages)}")
+                        # Clear any updated messages that might still be cached (additional safety)
+                        if hasattr(self.agent, "response_handler") and self.agent.response_handler:
+                            self.agent.response_handler._updated_messages = None
                         
                         # Ensure newline before prompt reset
                         self.terminal_manager.write_above_prompt('\n')

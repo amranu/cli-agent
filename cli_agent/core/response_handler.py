@@ -426,6 +426,9 @@ class ResponseHandler:
                         )
 
                         if isinstance(e, ToolDeniedReturnToPrompt):
+                            # Clear updated messages to prevent conversation history corruption
+                            self._updated_messages = None
+                            logger.debug("Cleared _updated_messages due to tool denial")
                             # Re-raise to let chat interface handle it
                             raise
 
