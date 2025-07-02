@@ -533,26 +533,28 @@ class ChatInterface:
                         await self._process_input_queue(messages)
 
                     except ToolDeniedReturnToPrompt as e:
+                        logger.error(f"DEBUG: ToolDeniedReturnToPrompt caught! Reason: {e.reason}")
+                        logger.error(f"DEBUG: Messages length before fix: {len(messages)}")
+                        if messages:
+                            logger.error(f"DEBUG: Last message: {messages[-1]}")
+                        
                         await self._emit_error(
                             f"Tool access denied: {e.reason}", "tool_denied"
                         )
                         
-                        # Fix conversation history corruption: if the last message has tool_calls but no tool responses,
-                        # add proper tool response messages indicating denial
+                        # Fix conversation history corruption: remove the assistant message with tool_calls
+                        # when tool execution is denied to prevent API format violations
                         if (messages and 
                             messages[-1].get("role") == "assistant" and 
                             "tool_calls" in messages[-1]):
                             
-                            assistant_msg = messages[-1]
-                            
-                            # Add tool response messages indicating denial for each tool call
-                            for tool_call in assistant_msg.get("tool_calls", []):
-                                tool_call_id = tool_call.get("id", "unknown")
-                                messages.append({
-                                    "role": "tool",
-                                    "tool_call_id": tool_call_id,
-                                    "content": f"Tool execution denied: {e.reason}"
-                                })
+                            # Remove the assistant message with tool_calls that can't be completed
+                            removed_msg = messages.pop()
+                            logger.error(f"DEBUG: Removed assistant message with tool_calls: {removed_msg.get('tool_calls', [])}")
+                        else:
+                            logger.error("DEBUG: No assistant message with tool_calls found to remove")
+                        
+                        logger.error(f"DEBUG: Messages length after fix: {len(messages)}")
                         
                         # Ensure newline before prompt reset
                         self.terminal_manager.write_above_prompt('\n')
