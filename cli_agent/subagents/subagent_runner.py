@@ -111,12 +111,8 @@ async def run_subagent_task(task_file_path: str):
         description = task_data["description"]
         prompt = task_data["prompt"]
 
-        emit_status_with_id("started", f"Task {task_id} started")
-        emit_output_with_id(f"Starting task: {description}")
-
         # Load config and create host
         config = load_config()
-        emit_output_with_id("Configuration loaded successfully")
 
         # Use new provider-model architecture for subagents
         # Check if task specifies a specific model to use
@@ -154,7 +150,6 @@ async def run_subagent_task(task_file_path: str):
         )
         permission_manager = ToolPermissionManager(permission_config)
         host.permission_manager = permission_manager
-        emit_output_with_id("Set up subagent permission manager with IPC communication")
 
         # Set up JSON handler if in stream-json mode (detected via environment)
         if os.environ.get("STREAM_JSON_MODE") == "true":
@@ -168,7 +163,6 @@ async def run_subagent_task(task_file_path: str):
                 # Set JSON handler on display manager to enable tool JSON emission
                 if hasattr(host, 'display_manager'):
                     host.display_manager.json_handler = json_handler
-                    emit_output_with_id("Subagent configured for stream-json mode")
                     
                     # Send system init message for subagent
                     json_handler.send_system_init(
@@ -177,10 +171,8 @@ async def run_subagent_task(task_file_path: str):
                         mcp_servers=[],
                         model=host._get_current_runtime_model() if hasattr(host, '_get_current_runtime_model') else "subagent"
                     )
-                else:
-                    emit_output_with_id("Warning: Host has no display_manager for JSON setup")
-            except ImportError as e:
-                emit_output_with_id(f"Warning: Could not set up JSON handler: {e}")
+            except ImportError:
+                pass  # Silently handle missing JSON handler
 
         # Create custom input handler for subagent that connects to main terminal
         from cli_agent.core.input_handler import InterruptibleInput
@@ -271,20 +263,12 @@ async def run_subagent_task(task_file_path: str):
         # Set up input handler for subagent with task context
         host._input_handler = SubagentInputHandler(task_id)
 
-        emit_output_with_id("Tool permission manager and input handler configured")
-
         # Connect to MCP servers (inherit from parent config)
         for server_name, server_config in config.mcp_servers.items():
-            emit_output_with_id(f"Connecting to MCP server: {server_name}")
             success = await host.start_mcp_server(server_name, server_config)
-            if success:
-                emit_output_with_id(f"✅ Connected to MCP server: {server_name}")
-            else:
+            # Only emit messages for failures
+            if not success:
                 emit_output_with_id(f"⚠️ Failed to connect to MCP server: {server_name}")
-
-        emit_output_with_id(
-            f"Executing task with {len(host.available_tools)} tools available..."
-        )
 
         # Execute the task with custom tool execution monitoring
         # Add explicit tool usage instructions for subagents
@@ -396,7 +380,6 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                 # Check if emit_result was called
                 if tool_key == "builtin:emit_result":
                     emit_result_called = True
-                    emit_output_with_id("✅ Task completed - emit_result called")
 
                 # Emit tool result event  
                 emit_tool_result(str(result), request_id, is_error=False)
@@ -409,10 +392,6 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                 # Conversation loop for multi-step tasks
                 while iteration < max_iterations and not emit_result_called:
                     iteration += 1
-                    emit_output_with_id(f"🔄 Conversation iteration {iteration}")
-
-                    # Generate response using the main agent's system
-                    emit_output_with_id("🚀 Calling host.generate_response...")
 
                     # Create normalized tools mapping for subagent use
                     # This ensures both normalized and original tool names are available
@@ -430,12 +409,9 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                         # Restore original tools
                         host.available_tools = original_available_tools
 
-                    emit_output_with_id("✅ host.generate_response completed")
-
                     # Add the response to conversation
                     if isinstance(response, str) and response.strip():
                         messages.append({"role": "assistant", "content": response})
-                        emit_output_with_id(f"📝 Added response: {response}")
 
                     # If emit_result was called during this iteration, the loop will exit
                     # Otherwise, continue to next iteration
