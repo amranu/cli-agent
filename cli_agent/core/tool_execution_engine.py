@@ -245,14 +245,11 @@ class ToolExecutionEngine:
                 )
 
                 if not permission_result.allowed:
-                    if (
-                        permission_result.return_to_prompt
-                        and not self.agent.is_subagent
-                    ):
-                        # Only return to prompt for main agent, not subagents
+                    if not self.agent.is_subagent:
+                        # Main agent: always raise exception for conversation history consistency
                         raise ToolDeniedReturnToPrompt(permission_result.reason)
                     else:
-                        # For subagents or config-based denials, return error message
+                        # Subagents: return error message (no conversation history concerns)
                         return f"Tool execution denied: {permission_result.reason}"
 
             # Forward to parent if this is a subagent (except for subagent management tools)
