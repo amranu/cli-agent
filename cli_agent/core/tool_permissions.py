@@ -307,7 +307,6 @@ class ToolPermissionManager:
                 allowed=True, reason="No input handler available"
             )
 
-        print(f"[DEBUG] About to prompt user for {tool_name} via {type(input_handler).__name__}")
         return await self._prompt_user_for_permission(
             tool_name, arguments, input_handler
         )
