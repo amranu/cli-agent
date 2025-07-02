@@ -16,6 +16,49 @@ class SystemPromptBuilder:
 
     def create_system_prompt(self, for_first_message: bool = False) -> str:
         """Create system prompt based on agent type and context."""
+        # Check for model-specific override prompt file first (highest priority)
+        import os
+        provider = getattr(self.agent.model, "provider_model_name", None)
+        model = getattr(self.agent.model, "name", None)
+        
+        override_content = None
+        override_path = None
+        
+        # 1. Check for model-specific override (highest priority)
+        if provider and model:
+            model_prompt_path = os.path.expanduser(f"~/.config/agent/prompts/{provider}_{model}.txt")
+            if os.path.exists(model_prompt_path):
+                override_path = model_prompt_path
+                
+        # 2. Check for general override (fallback)
+        if not override_path:
+            general_prompt_path = os.path.expanduser("~/.config/agent/prompts/system_prompt.txt")
+            if os.path.exists(general_prompt_path):
+                override_path = general_prompt_path
+        
+        # Process override file if found
+        if override_path:
+            logger.info(f"Using system prompt override: {override_path}")
+            with open(override_path, "r", encoding="utf-8") as f:
+                override_content = f.read().strip()
+                
+                # Support dynamic placeholders in override files
+                if "{{TOOLS}}" in override_content:
+                    # Build tool list
+                    available_tools = []
+                    for tool_key, tool_info in self.agent.available_tools.items():
+                        tool_name = tool_info.get("name", tool_key.split(":")[-1])
+                        description = tool_info.get("description", "No description available")
+                        available_tools.append(f"- **{tool_name}**: {description}")
+                    tools_section = "\n" + "\n".join(available_tools)
+                    override_content = override_content.replace("{{TOOLS}}", tools_section)
+                
+                if "{{LLM_INSTRUCTIONS}}" in override_content:
+                    llm_instructions = self.agent._get_llm_specific_instructions()
+                    override_content = override_content.replace("{{LLM_INSTRUCTIONS}}", llm_instructions or "")
+                
+                return override_content
+
         # Get LLM-specific instructions
         llm_instructions = self.agent._get_llm_specific_instructions()
 
