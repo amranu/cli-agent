@@ -121,8 +121,9 @@ class ToolExecutionEngine:
                             )
                             # Continue with normal permission flow for fallback
                         elif user_confirmed is False:
-                            # User declined the changes, skip execution
-                            return "❌ Edit cancelled by user"
+                            # User declined the changes, raise exception to return to prompt
+                            from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+                            raise ToolDeniedReturnToPrompt("Edit cancelled by user")
                         elif user_confirmed is True:
                             # User confirmed via diff display, skip permission check
                             edit_confirmed_by_diff = True
@@ -192,8 +193,9 @@ class ToolExecutionEngine:
                                                 )
                             # Continue with normal permission flow for fallback
                         elif user_confirmed is False:
-                            # User declined the changes, skip execution
-                            return "❌ Multi-edit cancelled by user"
+                            # User declined the changes, raise exception to return to prompt
+                            from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+                            raise ToolDeniedReturnToPrompt("Multi-edit cancelled by user")
                         elif user_confirmed is True:
                             # User confirmed via diff display, skip permission check
                             edit_confirmed_by_diff = True
