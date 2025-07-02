@@ -455,6 +455,7 @@ async def chat(
         # Handle text mode (default behavior)
         if input_format == "text" and output_format == "text":
             return await handle_text_chat(
+                model,
                 server,
                 session_manager,
                 messages,
@@ -1229,6 +1230,7 @@ async def stream_json_response(host, handler, messages, model_name):
 
 
 async def handle_text_chat(
+    model,
     server,
     session_manager,
     messages,
@@ -1244,13 +1246,13 @@ async def handle_text_chat(
 
     # Create host using helper function
     try:
-        host = create_host(config)
+        host = create_host(config, provider_model=model)
         # Set session ID on host for session-specific todo files
         host._session_id = session_id
-        provider_name, model_name = config.parse_provider_model_string(
-            config.default_provider_model
-        )
-        click.echo(f"Using provider-model: {config.default_provider_model}")
+        # Display the actual model being used (either from CLI or default)
+        actual_model = model or config.default_provider_model or config.get_intelligent_default_provider_model()
+        provider_name, model_name = config.parse_provider_model_string(actual_model)
+        click.echo(f"Using provider-model: {actual_model}")
         click.echo(f"Provider: {provider_name}, Model: {model_name}")
     except Exception as e:
         click.echo(f"Error creating host: {e}")

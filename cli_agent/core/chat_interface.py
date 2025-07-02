@@ -536,11 +536,37 @@ class ChatInterface:
                         await self._emit_error(
                             f"Tool access denied: {e.reason}", "tool_denied"
                         )
+                        
+                        # Fix conversation history corruption: if we added assistant message with tool calls,
+                        # we need to either remove it or add proper tool response messages
+                        if updated_messages:
+                            # Extract new messages (assistant message with tool calls + tool results)
+                            original_length = len(messages)
+                            new_messages = updated_messages[original_length:]
+                            
+                            # Check if the last message we would have added has tool_calls
+                            if (new_messages and 
+                                new_messages[0].get("role") == "assistant" and 
+                                "tool_calls" in new_messages[0]):
+                                
+                                # Add the assistant message with tool calls
+                                assistant_msg = new_messages[0]
+                                messages.append(assistant_msg)
+                                
+                                # Add tool response messages indicating denial for each tool call
+                                for tool_call in assistant_msg.get("tool_calls", []):
+                                    tool_call_id = tool_call.get("id", "unknown")
+                                    messages.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_call_id,
+                                        "content": f"Tool execution denied: {e.reason}"
+                                    })
+                        
                         # Ensure newline before prompt reset
                         self.terminal_manager.write_above_prompt('\n')
                         # Reset prompt to ready state
                         self.terminal_manager.update_prompt("> ")
-                        continue  # Return to prompt without adding to conversation
+                        continue  # Return to prompt
                     except Exception as e:
                         # Check if this is a 429 rate limit error
                         error_str = str(e).lower()
