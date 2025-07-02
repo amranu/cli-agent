@@ -366,8 +366,13 @@ class BaseMCPAgent(ABC):
 
             # Send initialized notification (required by MCP protocol)
             try:
-                await client.send_notification("notifications/initialized")
-                logger.debug(f"Sent initialized notification to {server_name}")
+                # Check if the client has a send_notification method
+                if hasattr(client, 'send_notification'):
+                    await client.send_notification("notifications/initialized")
+                    logger.debug(f"Sent initialized notification to {server_name}")
+                else:
+                    # Skip notification if method doesn't exist
+                    logger.debug(f"Client for {server_name} does not support send_notification, skipping")
             except Exception as e:
                 logger.warning(
                     f"Failed to send initialized notification to {server_name}: {e}"

@@ -303,7 +303,7 @@ def emit_output(text: str):
     emit_message("output", text)
 
 
-def emit_tool_request(tool_name: str, arguments: dict, request_id: str = None):
+def emit_tool_request(tool_name: str, arguments: dict, request_id: str = None, task_id: str = None):
     """Emit a tool execution request."""
     if not request_id:
         request_id = str(uuid.uuid4())
@@ -313,17 +313,19 @@ def emit_tool_request(tool_name: str, arguments: dict, request_id: str = None):
         tool_name=tool_name,
         arguments=arguments,
         request_id=request_id,
+        task_id=task_id,
     )
     return request_id
 
 
-def emit_tool_result(result: str, request_id: str, is_error: bool = False):
+def emit_tool_result(result: str, request_id: str, is_error: bool = False, task_id: str = None):
     """Emit a tool execution result."""
     emit_message(
         "tool_result",
         result,
         request_id=request_id,
         is_error=is_error,
+        task_id=task_id,
     )
 
 

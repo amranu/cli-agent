@@ -25,12 +25,14 @@ current_task_id = None
 
 def emit_output_with_id(text: str):
     """Emit output with task_id."""
-    emit_message("output", text, task_id=current_task_id)
+    from cli_agent.subagents.subagent import emit_message as local_emit_message
+    local_emit_message("output", text, task_id=current_task_id)
 
 
 def emit_status_with_id(status: str, details: str = ""):
     """Emit status with task_id."""
-    emit_message(
+    from cli_agent.subagents.subagent import emit_message as local_emit_message
+    local_emit_message(
         "status",
         f"Status: {status}",
         status=status,
@@ -41,7 +43,10 @@ def emit_status_with_id(status: str, details: str = ""):
 
 def emit_result_with_id(result: str):
     """Emit result with task_id."""
-    emit_message("result", result, task_id=current_task_id)
+    # Use the local subagent module's emit_message directly to ensure correct import
+    from cli_agent.subagents.subagent import emit_message as local_emit_message
+    print(f"DEBUG emit_result_with_id: current_task_id={current_task_id}", flush=True)
+    local_emit_message("result", result, task_id=current_task_id)
 
 
 def _get_default_provider_for_model(model_name: str) -> str:
@@ -73,7 +78,8 @@ def _get_default_provider_for_model(model_name: str) -> str:
 
 def emit_error_with_id(error: str, details: str = ""):
     """Emit error with task_id."""
-    emit_message("error", error, details=details, task_id=current_task_id)
+    from cli_agent.subagents.subagent import emit_message as local_emit_message
+    local_emit_message("error", error, details=details, task_id=current_task_id)
 
 
 async def run_subagent_task(task_file_path: str):
@@ -262,6 +268,9 @@ async def run_subagent_task(task_file_path: str):
 
         # Set up input handler for subagent with task context
         host._input_handler = SubagentInputHandler(task_id)
+        
+        # Also store task_id directly on the agent for emit_result tool access
+        host._subagent_task_id = task_id
 
         # Connect to MCP servers (inherit from parent config)
         for server_name, server_config in config.mcp_servers.items():
@@ -354,13 +363,33 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                 # Generate request_id and emit tool request
                 tool_name = tool_key.split(":")[-1] if ":" in tool_key else tool_key
                 request_id = f"subagent_{current_task_id}_{tool_name}_{int(time.time())}"
-                emit_tool_request(tool_name, arguments, request_id)
+                emit_tool_request(tool_name, arguments, request_id, task_id=current_task_id)
                 
                 try:
-                    result = await original_execute_mcp_tool(tool_key, arguments)
+                    # Special handling for emit_result - bypass the builtin tool executor
+                    # and use our emit_result_with_id function directly
+                    if tool_key == "builtin:emit_result":
+                        result_text = arguments.get("result", "")
+                        summary = arguments.get("summary", "")
+                        
+                        if not result_text:
+                            result = "Error: result parameter is required"
+                        else:
+                            # Use our emit_result_with_id that includes the task_id
+                            emit_result_with_id(result_text)
+                            
+                            # If summary is provided, also emit it with task_id
+                            if summary:
+                                emit_message("result", f"Summary: {summary}", task_id=current_task_id)
+                            
+                            # Terminate the subagent process
+                            import sys
+                            sys.exit(0)
+                    else:
+                        result = await original_execute_mcp_tool(tool_key, arguments)
                 except Exception as e:
                     # Emit tool error result
-                    emit_tool_result(str(e), request_id, is_error=True)
+                    emit_tool_result(str(e), request_id, is_error=True, task_id=current_task_id)
                     raise
 
                 # Check if tool was denied by user
@@ -382,7 +411,7 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                     emit_result_called = True
 
                 # Emit tool result event  
-                emit_tool_result(str(result), request_id, is_error=False)
+                emit_tool_result(str(result), request_id, is_error=False, task_id=current_task_id)
 
                 return result
 
