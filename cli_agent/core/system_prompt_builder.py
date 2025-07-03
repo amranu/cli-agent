@@ -120,6 +120,11 @@ class SystemPromptBuilder:
 ✅ **DO delegate:** File searches, large code analysis, running commands, gathering information
 ❌ **DON'T delegate:** Simple edits, single file reads <50 lines, quick tool calls"""
 
+        # Add available roles information for main agents (not subagents)
+        roles_info = ""
+        if not self.agent.is_subagent:
+            roles_info = self.get_roles_description()
+
         # Base system prompt template
         base_prompt = f"""{agent_role}
 
@@ -175,6 +180,7 @@ Task Management Rules:
 - Use TodoRead and TodoWrite to keep track of tasks
 - While working on a task, avoid prompting the user unless you DESPERATELY need clarification
 {subagent_strategy}
+{roles_info}
 
 # Resource Self-Management
 - Your context window is precious - do not waste it on tasks that can be delegated.
@@ -482,3 +488,60 @@ The following information is provided for context and reference purposes only. P
 {original_content}"""
 
         return {"role": "user", "content": enhanced_content}
+    
+    def get_available_roles(self) -> List[str]:
+        """Get list of available role names for subagent assignment.
+        
+        Returns:
+            List of available role names
+        """
+        available_roles = []
+        
+        # Check default roles directory
+        default_roles_dir = Path(__file__).parent / "default_roles"
+        if default_roles_dir.exists():
+            for yaml_file in default_roles_dir.glob("*.yaml"):
+                role_name = yaml_file.stem
+                # Skip example roles
+                if not role_name.startswith("example"):
+                    available_roles.append(role_name)
+        
+        # Check user config directory for custom roles
+        config_dir = Path.home() / ".config" / "agent" / "roles"
+        if config_dir.exists():
+            for yaml_file in config_dir.glob("*.yaml"):
+                role_name = yaml_file.stem
+                if role_name not in available_roles:
+                    available_roles.append(role_name)
+        
+        return sorted(available_roles)
+    
+    def get_roles_description(self) -> str:
+        """Get formatted description of available roles for system prompt.
+        
+        Returns:
+            Formatted string describing available roles
+        """
+        available_roles = self.get_available_roles()
+        
+        if not available_roles:
+            return "No specialized roles available."
+        
+        roles_info = []
+        for role_name in available_roles:
+            role_config = self.load_role(role_name)
+            if role_config:
+                display_name = role_config.get("name", role_name)
+                description = role_config.get("description", "No description available")
+                roles_info.append(f"  - **{display_name}** (`{role_name}`): {description}")
+        
+        if roles_info:
+            return f"""
+**Available Subagent Roles:**
+{chr(10).join(roles_info)}
+
+Use these roles when spawning subagents with the `builtin_task` tool by setting the `role` parameter. For example:
+- `builtin_task(description="Analyze security vulnerabilities", prompt="...", role="security-expert")`
+- `builtin_task(description="Research information", prompt="...", role="researcher")`"""
+        else:
+            return "**Available Subagent Roles:** None configured"

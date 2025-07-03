@@ -6,3 +6,4 @@ pytest-mock>=3.10.0
 pytest-timeout>=2.1.0
 pytest-xdist>=3.0.0  # For parallel test execution
 coverage>=7.0.0
+PyYAML>=6.0.0  # Required for system_prompt_builder
