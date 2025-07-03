@@ -340,6 +340,10 @@ def switch(provider_model):
     is_flag=True,
     help="Use event-driven display system with JSON output",
 )
+@click.option(
+    "--role",
+    help="Use a specific role for the agent (e.g., 'security-expert')",
+)
 @click.pass_context
 async def chat(
     ctx,
@@ -353,6 +357,7 @@ async def chat(
     disallowed_tools,
     auto_approve_tools,
     event_driven,
+    role,
 ):
     """Start interactive chat session."""
     try:
@@ -464,6 +469,7 @@ async def chat(
                 parsed_disallowed_tools,
                 auto_approve_tools,
                 event_driven,
+                role,
             )
 
     except KeyboardInterrupt:
@@ -516,6 +522,10 @@ async def chat(
     is_flag=True,
     help="Auto-approve all tool executions for this session",
 )
+@click.option(
+    "--role",
+    help="Use a specific role for the agent (e.g., 'security-expert')",
+)
 @click.pass_context
 async def ask(
     ctx,
@@ -527,6 +537,7 @@ async def ask(
     allowed_tools,
     disallowed_tools,
     auto_approve_tools,
+    role,
 ):
     """Ask a single question."""
     try:
@@ -552,6 +563,9 @@ async def ask(
         # Create host using helper function
         try:
             host = create_host(config, provider_model=model)
+            # Set role on host if specified
+            if role:
+                host._role = role
         except Exception as e:
             click.echo(f"Error creating host: {e}")
             return
@@ -1239,6 +1253,7 @@ async def handle_text_chat(
     disallowed_tools=None,
     auto_approve_tools=False,
     event_driven=False,
+    role=None,
 ):
     """Handle standard text-based chat mode."""
     # Load configuration
@@ -1249,6 +1264,9 @@ async def handle_text_chat(
         host = create_host(config, provider_model=model)
         # Set session ID on host for session-specific todo files
         host._session_id = session_id
+        # Set role on host if specified
+        if role:
+            host._role = role
         # Display the actual model being used (either from CLI or default)
         actual_model = model or config.default_provider_model or config.get_intelligent_default_provider_model()
         provider_name, model_name = config.parse_provider_model_string(actual_model)

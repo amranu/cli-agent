@@ -10,10 +10,10 @@ import sys
 import tempfile
 import time
 
-# Add current directory to Python path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
+# Add project root to Python path (not current directory)
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from cli_agent.utils.tool_name_utils import ToolNameUtils
 from config import load_config
@@ -45,7 +45,6 @@ def emit_result_with_id(result: str):
     """Emit result with task_id."""
     # Use the local subagent module's emit_message directly to ensure correct import
     from cli_agent.subagents.subagent import emit_message as local_emit_message
-    print(f"DEBUG emit_result_with_id: current_task_id={current_task_id}", flush=True)
     local_emit_message("result", result, task_id=current_task_id)
 
 
@@ -123,6 +122,7 @@ async def run_subagent_task(task_file_path: str):
         # Use new provider-model architecture for subagents
         # Check if task specifies a specific model to use
         task_model = task_data.get("model", None)
+        task_role = task_data.get("role", None)
 
         if task_model:
             # Use task-specific provider-model format
@@ -134,14 +134,47 @@ async def run_subagent_task(task_file_path: str):
                 provider_model = _get_default_provider_for_model(task_model)
 
             # Create host using provider-model architecture
+            try:
+                with open("/tmp/subagent_host_creation.txt", "a") as f:
+                    f.write(f"=== Attempting to create subagent host ===\n")
+                    f.write(f"provider_model: {provider_model}\n")
+                    f.write(f"task_id: {task_id}\n")
+                    f.write("==========================================\n")
+            except:
+                pass
+            
             host = config.create_host_from_provider_model(
                 provider_model, is_subagent=True
             )
+            
+            try:
+                with open("/tmp/subagent_host_creation.txt", "a") as f:
+                    f.write(f"=== Subagent host created successfully ===\n")
+                    f.write(f"host type: {type(host)}\n")
+                    f.write(f"host.is_subagent: {getattr(host, 'is_subagent', 'MISSING')}\n")
+                    f.write(f"has tool_execution_engine: {hasattr(host, 'tool_execution_engine')}\n")
+                    f.write("========================================\n")
+            except:
+                pass
+            
             emit_output_with_id(f"Created {provider_model} subagent")
+
+            
         else:
             # Use current default provider-model
             host = config.create_host_from_provider_model(is_subagent=True)
             emit_output_with_id(f"Created {config.default_provider_model} subagent")
+
+        
+
+        # Set role on host if specified, otherwise default to subagent role
+        if task_role:
+            host._role = task_role
+            emit_output_with_id(f"Using role: {task_role}")
+        else:
+            # Default to subagent role for subagents
+            host._role = "subagent"
+            emit_output_with_id("Using default subagent role")
 
         # Set up tool permission manager for subagent (inherits main agent settings)
         from cli_agent.core.tool_permissions import (
@@ -350,6 +383,21 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
 
             # Track if emit_result was called
             original_execute_mcp_tool = host.tool_execution_engine.execute_mcp_tool
+            
+            # Debug: Check what host this method is bound to
+            try:
+                with open("/tmp/original_execute_debug.txt", "a") as f:
+                    f.write(f"=== original_execute_mcp_tool binding ===\n")
+                    f.write(f"original_execute_mcp_tool: {original_execute_mcp_tool}\n")
+                    f.write(f"bound to engine: {original_execute_mcp_tool.__self__}\n")
+                    f.write(f"engine.agent: {original_execute_mcp_tool.__self__.agent}\n")
+                    f.write(f"engine.agent.is_subagent: {getattr(original_execute_mcp_tool.__self__.agent, 'is_subagent', 'MISSING')}\n")
+                    f.write(f"engine.agent == host: {original_execute_mcp_tool.__self__.agent == host}\n")
+                    f.write(f"host id: {id(host)}\n")
+                    f.write(f"engine.agent id: {id(original_execute_mcp_tool.__self__.agent)}\n")
+                    f.write("========================================\n")
+            except:
+                pass
 
             async def track_emit_result_tool(tool_key, arguments):
                 nonlocal emit_result_called
@@ -386,7 +434,20 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                             import sys
                             sys.exit(0)
                     else:
-                        result = await original_execute_mcp_tool(tool_key, arguments)
+                        # SIMPLIFIED APPROACH: Bypass the complex tool execution engine and call builtin tools directly
+                        
+                        # Check if it's a builtin tool and call it directly
+                        if tool_key.startswith("builtin:"):
+                            # Extract just the tool name without "builtin:" prefix
+                            tool_name = tool_key.split(":", 1)[1].strip() if ":" in tool_key else tool_key.strip()
+                            
+                            
+                            # Call the builtin tool directly via _execute_builtin_tool
+                            # Pass the full tool_key to ensure proper matching
+                            result = await host._execute_builtin_tool(tool_key, arguments)
+                        else:
+                            # For non-builtin tools, use the original method
+                            result = await original_execute_mcp_tool(tool_key, arguments)
                 except Exception as e:
                     # Emit tool error result
                     emit_tool_result(str(e), request_id, is_error=True, task_id=current_task_id)
@@ -431,6 +492,7 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                         original_available_tools
                     )
                     host.available_tools = normalized_tools
+                    
 
                     try:
                         response = await host.generate_response(messages, stream=False)

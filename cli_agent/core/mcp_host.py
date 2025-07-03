@@ -49,6 +49,7 @@ class MCPHost(BaseLLMProvider):
 
         logger.info(f"Initializing MCPHost: {provider.name} + {model}")
 
+
         # Call parent initialization (which will call our abstract methods)
         super().__init__(config, is_subagent)
 

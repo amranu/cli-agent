@@ -1,0 +1,28 @@
+# Example Dynamic Role - Tool Pattern Examples
+# Demonstrates different ways to match tools
+
+# Exact tool name matches
+builtin:read_file
+builtin:write_file
+
+# Wildcard patterns
+builtin:*file*
+*search*
+
+# Partial name matches (will match any tool containing these strings)
+grep
+bash
+web
+
+# MCP tool patterns
+mcp__*
+
+# Multiple variations
+todo
+task
+
+# Note: Patterns are checked in order:
+# 1. fnmatch against tool_key (e.g., "builtin:read_file")
+# 2. fnmatch against tool_name (e.g., "read_file") 
+# 3. substring match in tool_key
+# 4. substring match in tool_name

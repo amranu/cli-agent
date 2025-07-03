@@ -1,0 +1,32 @@
+# Analyst Role - Read-focused tools for investigation
+# Analysis and investigation tools only
+
+# File reading and navigation
+builtin:read_file
+builtin:list_directory
+builtin:get_current_directory
+
+# Search and pattern matching
+builtin:grep
+builtin:glob
+
+# Research and investigation
+builtin:webfetch
+builtin:websearch
+
+# Command execution for analysis
+builtin:bash_execute
+
+# Task management for complex analysis
+builtin:todo_read
+builtin:todo_write
+
+# Subagent capabilities for delegation
+builtin:task
+builtin:task_status
+builtin:task_results
+
+# Result reporting
+builtin:emit_result
+
+# Note: No file writing/editing tools - read-only analysis focus

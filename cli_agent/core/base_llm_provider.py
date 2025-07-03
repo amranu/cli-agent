@@ -462,8 +462,11 @@ class BaseLLMProvider(BaseMCPAgent):
 
     def _create_system_prompt(self, for_first_message: bool = False) -> str:
         """Create a centralized system prompt with LLM-specific customization points."""
+        # Check if a role is set on this agent
+        role = getattr(self, '_role', None)
+        
         # Build the system prompt using centralized template system
-        base_prompt = self.system_prompt_builder.build_base_system_prompt()
+        base_prompt = self.system_prompt_builder.build_base_system_prompt(role=role)
 
         # Add LLM-specific customizations
         llm_customizations = self._get_llm_specific_instructions()

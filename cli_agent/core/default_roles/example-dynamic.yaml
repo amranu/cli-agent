@@ -1,0 +1,33 @@
+name: "Dynamic Example Role"
+description: "Demonstrates all available dynamic placeholders in role templates"
+agent_role: "You are a {{AGENT_TYPE}} agent running on {{MODEL_NAME}}. You demonstrate how dynamic content can be inserted into role templates."
+instructions: |
+  **Dynamic Placeholder Examples:**
+  
+  **1. Agent Type Placeholder:**
+  - You are currently operating as a {{AGENT_TYPE}} agent
+  - This will show "main" for main agents or "subagent" for subagents
+  
+  **2. Model Information:**
+  - Running on model: {{MODEL_NAME}}
+  - This shows the actual model being used at runtime
+  
+  **3. Available Tools:**
+  - The following tools are available to you:
+  {{TOOLS}}
+  
+  **4. LLM-Specific Instructions:**
+  - Model-specific guidance will be inserted below:
+  {{LLM_INSTRUCTIONS}}
+  
+  **Usage Guidelines:**
+  - Use {{TOOLS}} to get a formatted list of all available tools
+  - Use {{LLM_INSTRUCTIONS}} to include model-specific instructions
+  - Use {{AGENT_TYPE}} to differentiate between main and subagent behavior
+  - Use {{MODEL_NAME}} to reference the current model in instructions
+  
+  **Template Features:**
+  - Placeholders work in any string field (name, description, agent_role, instructions)
+  - Content is dynamically generated based on agent state and available tools
+  - Roles are cached after placeholder processing for performance
+  - Same role can have different content for main vs subagent instances

@@ -1,0 +1,34 @@
+# Researcher Role - Web research and analysis tools
+# Focused on information gathering and comprehensive reporting
+
+# Web research capabilities
+builtin:webfetch
+builtin:websearch
+
+# File operations for saving and organizing research
+builtin:read_file
+builtin:write_file
+builtin:list_directory
+builtin:get_current_directory
+
+# Search and analysis of local files
+builtin:grep
+builtin:glob
+
+# Task management for complex research projects
+builtin:todo_read
+builtin:todo_write
+
+# Subagent delegation for parallel research streams
+builtin:task
+builtin:task_status
+builtin:task_results
+
+# Command execution for data processing or file management
+builtin:bash_execute
+
+# Result reporting and documentation
+builtin:emit_result
+
+# Note: Includes both web tools for research and file tools for organizing findings
+# No multiedit or replace_in_file to keep focus on research rather than code editing

@@ -1,0 +1,32 @@
+# Security Expert Role - Available Tools
+# One tool name/pattern per line
+# Supports wildcards (*) and partial matches
+# Comments start with #
+
+# File operations for security analysis
+builtin:read_file
+builtin:list_directory
+builtin:grep
+builtin:glob
+
+# Code analysis and searching
+grep
+find
+*search*
+
+# Web research for vulnerability databases
+builtin:webfetch
+websearch
+
+# Investigation and analysis
+builtin:task
+
+# Basic shell commands for security checks
+builtin:bash_execute
+
+# Todo management for tracking security issues
+builtin:todo_read
+builtin:todo_write
+
+# Subagent result emission
+builtin:emit_result

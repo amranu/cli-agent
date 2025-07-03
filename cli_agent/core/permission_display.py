@@ -260,15 +260,17 @@ def format_tool_description(tool_name: str, arguments: Dict[str, Any]) -> str:
         "replace_in_file": lambda args: f"Edit file: {args.get('file_path', 'N/A')}",
         "list_directory": lambda args: f"List directory: {args.get('path', 'current directory')}",
         "webfetch": lambda args: f"Fetch URL: {args.get('url', 'N/A')}",
+        "websearch": lambda args: f"Search web for: {args.get('query', 'N/A')}",
         "todo_read": lambda args: "Read todo list",
         "todo_write": lambda args: f"Update todo list with {len(args.get('todos', []))} items",
         "task": lambda args: f"Spawn subagent task: {args.get('description', 'N/A')}",
         "task_status": lambda args: f"Check task status: {args.get('task_id', 'N/A')}",
         "task_results": lambda args: f"Get task results: {args.get('task_id', 'N/A')}",
         "get_current_directory": lambda args: "Get current directory",
+        "emit_result": lambda args: f"Emit subagent result: {args.get('result', 'N/A')[:50]}...",
+        "multiedit": lambda args: f"Make multiple edits to file: {args.get('file_path', 'N/A')}",
         "glob": lambda args: f"Find files matching pattern: {args.get('pattern', 'N/A')}",
         "grep": lambda args: f"Search for text pattern: {args.get('pattern', 'N/A')}",
-        "multiedit": lambda args: f"Make multiple edits to file: {args.get('file_path', 'N/A')}",
     }
 
     formatter = descriptions.get(tool_name)

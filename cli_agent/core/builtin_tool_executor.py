@@ -621,6 +621,7 @@ class BuiltinToolExecutor:
         prompt = args.get("prompt", "")
         context = args.get("context", "")
         model = args.get("model", None)
+        role = args.get("role", None)
 
         if not description:
             return "Error: No task description provided"
@@ -643,7 +644,7 @@ class BuiltinToolExecutor:
             # Track active count before and after spawning
             initial_count = self.agent.subagent_manager.get_active_count()
             task_id = await self.agent.subagent_manager.spawn_subagent(
-                description, full_prompt, model=model
+                description, full_prompt, model=model, role=role
             )
             final_count = self.agent.subagent_manager.get_active_count()
 

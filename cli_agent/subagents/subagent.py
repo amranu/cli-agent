@@ -52,11 +52,12 @@ class SubagentMessage:
 class SubagentProcess:
     """Manages a single subagent subprocess."""
 
-    def __init__(self, task_id: str, description: str, prompt: str, model: str = None):
+    def __init__(self, task_id: str, description: str, prompt: str, model: str = None, role: str = None):
         self.task_id = task_id
         self.description = description
         self.prompt = prompt
         self.model = model  # Store model preference for this subagent
+        self.role = role  # Store role preference for this subagent
         self.process: Optional[subprocess.Popen] = None
         self.start_time = time.time()
         self.completed = False
@@ -75,6 +76,7 @@ class SubagentProcess:
                     "prompt": self.prompt,
                     "timestamp": self.start_time,
                     "model": self.model,  # Include model preference in task data
+                    "role": self.role,  # Include role preference in task data
                 }
                 json.dump(task_data, f)
                 task_file = f.name
@@ -84,7 +86,9 @@ class SubagentProcess:
 
             current_dir = os.path.dirname(os.path.abspath(__file__))
             runner_path = os.path.join(current_dir, "subagent_runner.py")
-            cmd = ["python", runner_path, task_file]
+            # Use sys.executable to ensure same Python interpreter
+            import sys
+            cmd = [sys.executable, runner_path, task_file]
             
             # Stream-json mode is inherited via environment variables
             # Pass current environment including STREAM_JSON_MODE to subprocess
@@ -176,7 +180,7 @@ class SubagentManager:
         self._running = True
 
     async def spawn_subagent(
-        self, description: str, prompt: str, model: str = None
+        self, description: str, prompt: str, model: str = None, role: str = None
     ) -> str:
         """Spawn a new subagent and return its task_id."""
         # Generate unique task_id using timestamp + microseconds + counter to avoid collisions
@@ -195,7 +199,7 @@ class SubagentManager:
             f"NEW SUBAGENT SYSTEM: description={description}, prompt={prompt[:50]}..., model={model}"
         )
 
-        subagent = SubagentProcess(task_id, description, prompt, model=model)
+        subagent = SubagentProcess(task_id, description, prompt, model=model, role=role)
         success = await subagent.start(self.config, agent=self.agent)
 
         if success:
@@ -320,6 +324,19 @@ def emit_tool_request(tool_name: str, arguments: dict, request_id: str = None, t
 
 def emit_tool_result(result: str, request_id: str, is_error: bool = False, task_id: str = None):
     """Emit a tool execution result."""
+    # Debug: Log all tool results to see what's happening
+    try:
+        with open("/tmp/subagent_tool_results.txt", "a") as f:
+            f.write(f"=== emit_tool_result called ===\n")
+            f.write(f"result: '{result}'\n")
+            f.write(f"request_id: '{request_id}'\n")
+            f.write(f"is_error: {is_error}\n")
+            f.write(f"task_id: {task_id}\n")
+            if "websearch" in result:
+                f.write("*** WEBSEARCH RELATED RESULT ***\n")
+            f.write("==============================\n")
+    except:
+        pass
     emit_message(
         "tool_result",
         result,

@@ -280,6 +280,10 @@ def get_task_tool() -> Dict[str, Any]:
                         "gemini-2.5-pro",
                     ],
                 },
+                "role": {
+                    "type": "string",
+                    "description": "Role to use for subagent (e.g., 'security-expert'). If not specified, defaults to subagent role.",
+                },
             },
             "required": ["description", "prompt"],
         },

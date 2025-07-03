@@ -18,6 +18,15 @@ class ToolExecutionEngine:
     def __init__(self, agent):
         """Initialize with reference to the parent agent."""
         self.agent = agent
+        # Debug: Log when tool execution engine is created
+        try:
+            with open("/tmp/tool_engine_init.txt", "a") as f:
+                f.write(f"=== ToolExecutionEngine created ===\n")
+                f.write(f"agent type: {type(agent)}\n")
+                f.write(f"is_subagent: {getattr(agent, 'is_subagent', 'N/A')}\n")
+                f.write("==================================\n")
+        except:
+            pass
 
     async def execute_mcp_tool(self, tool_key: str, arguments: Dict[str, Any]) -> str:
         """Execute an MCP tool (built-in or external) and return the result."""
@@ -29,7 +38,7 @@ class ToolExecutionEngine:
             # Debug logging for tool calls
             logger.debug(f"Tool call: {tool_key} with args: {arguments}")
             
-            # Debug: Show what we're working with for subagents
+            # Log tool execution for subagents
             if self.agent.is_subagent:
                 logger.debug(f"Subagent tool execution: tool_key='{tool_key}', available_tools_count={len(self.agent.available_tools)}")
                 logger.debug(f"Available tool keys: {list(self.agent.available_tools.keys())[:5]}...")
@@ -51,10 +60,8 @@ class ToolExecutionEngine:
 
                 # Final check if tool still not found
                 if tool_key not in self.agent.available_tools:
-                    # Debug: show available tools when tool not found
-                    available_list = list(self.agent.available_tools.keys())[
-                        :10
-                    ]  # First 10 tools
+                    # Show first 10 available tools when tool not found
+                    available_list = list(self.agent.available_tools.keys())[:10]
                     return f"Error: Tool {tool_key} not found. Available tools: {available_list}"
 
             tool_info = self.agent.available_tools[tool_key]
@@ -207,7 +214,7 @@ class ToolExecutionEngine:
             # Forward to parent if this is a subagent (except for subagent management tools)
             # This must happen BEFORE permission checks so parent can handle permissions
             if self.agent.is_subagent and self.agent.comm_socket:
-                excluded_tools = ["task", "task_status", "task_results"]
+                excluded_tools = ["task", "task_status", "task_results", "websearch", "webfetch"]
                 if tool_name not in excluded_tools:
                     # Tool forwarding happens silently - parent will handle permissions
                     return await self.agent._forward_tool_to_parent(

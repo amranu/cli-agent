@@ -1,0 +1,34 @@
+# Subagent Role - Available Tools
+# Focused tool set for delegated task execution
+# One tool name/pattern per line
+
+# Essential file operations
+builtin:read_file
+builtin:list_directory
+builtin:get_current_directory
+
+# File editing capabilities
+builtin:write_file
+builtin:replace_in_file
+builtin:multiedit
+
+# Search and analysis
+builtin:grep
+builtin:glob
+
+# Command execution
+builtin:bash_execute
+
+# Web research capability
+builtin:webfetch
+builtin:websearch
+
+# Result reporting (required for subagents)
+builtin:emit_result
+
+# Status reporting
+builtin:task_status
+builtin:task_results
+
+# Note: Subagents typically don't spawn other subagents
+# builtin:task is intentionally excluded

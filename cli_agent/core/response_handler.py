@@ -350,17 +350,22 @@ class ResponseHandler:
                         # Execute the tool - map builtin tools correctly
                         builtin_tools = [
                             "todo_read",
-                            "todo_write",
+                            "todo_write", 
                             "bash_execute",
                             "read_file",
                             "write_file",
                             "list_directory",
                             "get_current_directory",
                             "replace_in_file",
+                            "multiedit",
                             "webfetch",
+                            "websearch",
+                            "glob",
+                            "grep",
                             "task",
                             "task_status",
                             "task_results",
+                            "emit_result",
                         ]
 
                         if tool_name in builtin_tools:

@@ -241,7 +241,7 @@ class BaseMCPAgent(ABC):
 
         self.available_tools.update(builtin_tools)
 
-        # Debug: Log available tools for subagents
+        # Log available tools for subagents
         if self.is_subagent:
             logger.info(
                 f"Subagent initialized with {len(self.available_tools)} tools: {list(self.available_tools.keys())}"
@@ -249,13 +249,17 @@ class BaseMCPAgent(ABC):
 
     def _normalize_tool_name(self, tool_name: str) -> str:
         """Ensure tool name is fully qualified with prefix (e.g., builtin:)."""
+        tool_name = tool_name.strip()  # Remove any leading/trailing whitespace
         if not tool_name.startswith("builtin:"):
             return f"builtin:{tool_name}"
         return tool_name
 
     async def _execute_builtin_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Execute a built-in tool."""
+        original_tool_name = tool_name
         tool_name = self._normalize_tool_name(tool_name)
+        
+        
         if tool_name == "builtin:bash_execute":
             return await self.builtin_executor.bash_execute(args)
         elif tool_name == "builtin:read_file":
