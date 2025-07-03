@@ -50,6 +50,16 @@ class ToolExecutionEngine:
                 logger.debug(f"Redirected emit:result to {tool_key}")
 
             if tool_key not in self.agent.available_tools:
+                # Check if this might be a role restriction
+                role_restricted = False
+                if hasattr(self.agent, '_role') and self.agent._role:
+                    # Check if tool would be available without role filtering
+                    from cli_agent.tools.builtin_tools import get_all_builtin_tools
+                    all_builtin_tools = get_all_builtin_tools()
+                    if tool_key in all_builtin_tools:
+                        role_restricted = True
+                        return f"Error: Tool '{tool_key}' is not available for role '{self.agent._role}'. This role only has access to specific tools."
+                
                 # Always try to resolve tool key using the centralized resolver
                 resolved_key = ToolNameUtils.resolve_tool_key(
                     tool_key, self.agent.available_tools
@@ -62,7 +72,10 @@ class ToolExecutionEngine:
                 if tool_key not in self.agent.available_tools:
                     # Show first 10 available tools when tool not found
                     available_list = list(self.agent.available_tools.keys())[:10]
-                    return f"Error: Tool {tool_key} not found. Available tools: {available_list}"
+                    if role_restricted:
+                        return f"Error: Tool {tool_key} not available for role '{self.agent._role}'. Available tools: {available_list}"
+                    else:
+                        return f"Error: Tool {tool_key} not found. Available tools: {available_list}"
 
             tool_info = self.agent.available_tools[tool_key]
             tool_name = tool_info["name"]

@@ -241,11 +241,40 @@ class BaseMCPAgent(ABC):
 
         self.available_tools.update(builtin_tools)
 
+        # Apply role-based tool filtering if a role is set
+        if hasattr(self, '_role') and self._role:
+            self._apply_role_based_tool_filtering()
+
         # Log available tools for subagents
         if self.is_subagent:
             logger.info(
                 f"Subagent initialized with {len(self.available_tools)} tools: {list(self.available_tools.keys())}"
             )
+
+    def _apply_role_based_tool_filtering(self):
+        """Filter available tools based on the current role."""
+        if not hasattr(self, 'system_prompt_builder'):
+            return  # Cannot filter without system prompt builder
+        
+        role_specific_tools = self.system_prompt_builder._filter_tools_for_role(self._role)
+        if role_specific_tools is not None:
+            # Calculate which tools will be removed before replacing
+            original_tools = set(self.available_tools.keys())
+            filtered_tools = set(role_specific_tools.keys())
+            removed_tools = original_tools - filtered_tools
+            
+            # Replace available_tools with filtered tools
+            original_count = len(self.available_tools)
+            self.available_tools = role_specific_tools
+            filtered_count = len(self.available_tools)
+            
+            logger.info(
+                f"Role '{self._role}' filtered tools: {original_count} → {filtered_count} tools available"
+            )
+            
+            # Log which tools were removed for debugging
+            if logger.isEnabledFor(logging.DEBUG) and removed_tools:
+                logger.debug(f"Tools removed by role filtering: {sorted(removed_tools)}")
 
     def _normalize_tool_name(self, tool_name: str) -> str:
         """Ensure tool name is fully qualified with prefix (e.g., builtin:)."""
@@ -253,6 +282,13 @@ class BaseMCPAgent(ABC):
         if not tool_name.startswith("builtin:"):
             return f"builtin:{tool_name}"
         return tool_name
+
+    def set_role(self, role: str):
+        """Set the agent's role and apply tool filtering."""
+        self._role = role
+        if hasattr(self, 'system_prompt_builder') and hasattr(self, 'available_tools'):
+            self._apply_role_based_tool_filtering()
+            logger.info(f"Agent role set to '{role}' with tool filtering applied")
 
     async def _execute_builtin_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Execute a built-in tool."""

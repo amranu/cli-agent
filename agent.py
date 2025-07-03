@@ -565,7 +565,7 @@ async def ask(
             host = create_host(config, provider_model=model)
             # Set role on host if specified
             if role:
-                host._role = role
+                host.set_role(role)
         except Exception as e:
             click.echo(f"Error creating host: {e}")
             return
@@ -1266,7 +1266,7 @@ async def handle_text_chat(
         host._session_id = session_id
         # Set role on host if specified
         if role:
-            host._role = role
+            host.set_role(role)
         # Display the actual model being used (either from CLI or default)
         actual_model = model or config.default_provider_model or config.get_intelligent_default_provider_model()
         provider_name, model_name = config.parse_provider_model_string(actual_model)

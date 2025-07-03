@@ -10,10 +10,20 @@ import sys
 import tempfile
 import time
 
-# Add project root to Python path (not current directory)
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# For subagent runner, we need to ensure we can import from both
+# the cli_agent package and the top-level modules (config, subagent)
+# Add parent directories to path if not already there
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+grandparent_dir = os.path.dirname(parent_dir)
+
+# Add grandparent (project root) for config import
+if grandparent_dir not in sys.path:
+    sys.path.insert(0, grandparent_dir)
+
+# Add current dir for subagent import 
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 
 from cli_agent.utils.tool_name_utils import ToolNameUtils
 from config import load_config
@@ -169,11 +179,11 @@ async def run_subagent_task(task_file_path: str):
 
         # Set role on host if specified, otherwise default to subagent role
         if task_role:
-            host._role = task_role
+            host.set_role(task_role)
             emit_output_with_id(f"Using role: {task_role}")
         else:
             # Default to subagent role for subagents
-            host._role = "subagent"
+            host.set_role("subagent")
             emit_output_with_id("Using default subagent role")
 
         # Set up tool permission manager for subagent (inherits main agent settings)
