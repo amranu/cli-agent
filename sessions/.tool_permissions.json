@@ -1,5 +1,7 @@
 {
   "approvals": [
+    "webfetch",
+    "websearch",
     "grep"
   ],
   "denials": [],

@@ -387,7 +387,12 @@ class BuiltinToolExecutor:
 
         try:
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
             }
             response = requests.get(url, headers=headers, timeout=30)
             response.raise_for_status()
@@ -505,7 +510,7 @@ class BuiltinToolExecutor:
         return '\n'.join(lines)
 
     def websearch(self, args: Dict[str, Any]) -> str:
-        """Search the web using DuckDuckGo direct search."""
+        """Search the web using DuckDuckGo with BeautifulSoup HTML parsing."""
         query = args.get("query", "")
         allowed_domains = args.get("allowed_domains", [])
         blocked_domains = args.get("blocked_domains", [])
@@ -514,8 +519,9 @@ class BuiltinToolExecutor:
             return "Error: No search query provided"
 
         try:
-            import re
             from urllib.parse import quote_plus
+            from bs4 import BeautifulSoup
+            import html
             
             # Prepare the search query
             encoded_query = quote_plus(query)
@@ -525,95 +531,201 @@ class BuiltinToolExecutor:
                 site_restriction = " OR ".join([f"site:{domain}" for domain in allowed_domains])
                 encoded_query = quote_plus(f"{query} ({site_restriction})")
             
-            # Use DuckDuckGo HTML search (no API key required)
-            search_url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
+            # Use Bing as primary, with DuckDuckGo as fallback
+            search_configs = [
+                {
+                    "url": f"https://www.bing.com/search?q={encoded_query}",
+                    "name": "Bing",
+                    "selectors": ['li.b_algo', '.b_algo', 'div.b_title', 'h2', 'a[href^="http"]']
+                },
+                {
+                    "url": f"https://lite.duckduckgo.com/lite/?q={encoded_query}",
+                    "name": "DuckDuckGo Lite",
+                    "selectors": ['div.result', 'div[class*="result"]', 'tr td table tr', 'a[href^="http"]']
+                },
+                {
+                    "url": f"https://html.duckduckgo.com/html/?q={encoded_query}",  
+                    "name": "DuckDuckGo HTML",
+                    "selectors": ['div.result', 'div[class*="result"]', 'article', 'a[href^="http"]']
+                }
+            ]
             
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
             }
             
-            response = requests.get(search_url, headers=headers, timeout=30)
-            response.raise_for_status()
+            # Try each search engine until one works
+            search_results = []
+            last_error = None
+            successful_engine = None
             
-            # Parse the HTML response
-            html_content = response.text
+            for config in search_configs:
+                try:
+                    response = requests.get(config["url"], headers=headers, timeout=30)
+                    
+                    # Handle different status codes
+                    if response.status_code == 202:
+                        # DuckDuckGo returns 202 when blocking automated requests
+                        last_error = f"{config['name']}: Automated requests blocked (HTTP 202)"
+                        continue
+                    elif response.status_code != 200:
+                        last_error = f"{config['name']}: HTTP {response.status_code}"
+                        continue
+                        
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # Try each selector for this search engine
+                    for selector in config["selectors"]:
+                        try:
+                            elements = soup.select(selector)
+                            if elements:
+                                # Process the found elements
+                                for element in elements[:15]:  # Limit to first 15 to process
+                                    result_data = self._extract_search_result_data(element, blocked_domains)
+                                    if result_data:
+                                        search_results.append(result_data)
+                                        if len(search_results) >= 10:  # Limit final results to 10
+                                            break
+                                if search_results:
+                                    successful_engine = config["name"]
+                                    break
+                        except Exception:
+                            continue
+                    
+                    if search_results:
+                        break
+                        
+                except Exception as e:
+                    last_error = f"{config['name']}: {str(e)}"
+                    continue
+            
             results = []
             
-            # Extract search results using regex patterns
-            # DuckDuckGo HTML structure: results are in divs with class "result"
-            result_pattern = r'<div class="result".*?</div>(?=\s*(?:<div class="result"|<div id="links_wrapper"|$))'
-            title_pattern = r'<a class="result__title"[^>]*href="([^"]*)"[^>]*>(.*?)</a>'
-            snippet_pattern = r'<a class="result__snippet"[^>]*>(.*?)</a>'
-            
-            result_matches = re.findall(result_pattern, html_content, re.DOTALL | re.IGNORECASE)
-            
-            if result_matches:
-                results.append(f"Found {len(result_matches)} search results for '{query}'")
+            if search_results:
+                results.append(f"Found {len(search_results)} search results for '{query}' (via {successful_engine})")
                 results.append("")
                 
-                for i, result_html in enumerate(result_matches[:10], 1):  # Limit to 10 results
-                    # Extract title and URL
-                    title_match = re.search(title_pattern, result_html, re.DOTALL | re.IGNORECASE)
-                    snippet_match = re.search(snippet_pattern, result_html, re.DOTALL | re.IGNORECASE)
-                    
-                    if title_match:
-                        url = title_match.group(1)
-                        title = re.sub(r'<[^>]+>', '', title_match.group(2)).strip()
-                        
-                        # Apply blocked domain filtering
-                        if blocked_domains:
-                            if any(domain in url for domain in blocked_domains):
-                                continue
-                        
-                        # Clean up snippet
-                        snippet = "No description available"
-                        if snippet_match:
-                            snippet = re.sub(r'<[^>]+>', '', snippet_match.group(1)).strip()
-                            # Decode HTML entities
-                            snippet = snippet.replace("&quot;", '"').replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-                        
-                        # Clean up title and URL
-                        title = title.replace("&quot;", '"').replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-                        
-                        results.append(f"**{i}. {title}**")
-                        results.append(f"URL: {url}")
-                        results.append(f"Description: {snippet}")
-                        results.append("")
-            else:
-                # Fallback: try simpler pattern extraction
-                # Look for any links that might be search results
-                link_pattern = r'<a[^>]*href="(https?://[^"]+)"[^>]*>([^<]+)</a>'
-                links = re.findall(link_pattern, html_content)
-                
-                if links:
-                    results.append(f"Found search results for '{query}' (simplified extraction):")
+                for i, result_data in enumerate(search_results, 1):
+                    results.append(f"**{i}. {result_data['title']}**")
+                    results.append(f"URL: {result_data['url']}")
+                    if result_data.get('description'):
+                        results.append(f"Description: {result_data['description']}")
                     results.append("")
-                    
-                    # Filter out DuckDuckGo internal links
-                    filtered_links = [(url, title) for url, title in links 
-                                    if not any(domain in url for domain in ['duckduckgo.com', 'duck.co']) 
-                                    and url.startswith(('http://', 'https://'))]
-                    
-                    for i, (url, title) in enumerate(filtered_links[:10], 1):
-                        # Apply blocked domain filtering
-                        if blocked_domains:
-                            if any(domain in url for domain in blocked_domains):
-                                continue
-                                
-                        results.append(f"**{i}. {title.strip()}**")
-                        results.append(f"URL: {url}")
-                        results.append("")
-                else:
-                    results.append("No search results found for this query.")
-                    results.append("DuckDuckGo may have changed their HTML structure or the query returned no results.")
-                    results.append("Try rephrasing your search terms or using the webfetch tool with specific URLs.")
+            else:
+                results.append("No search results found for this query.")
+                results.append("This could be due to:")
+                results.append("- All search engines blocking automated requests")
+                results.append("- Changes in search engine HTML structures")
+                results.append("- Network connectivity issues")
+                results.append("- The search query returning no results")
+                results.append("")
+                if last_error:
+                    results.append(f"Last error: {last_error}")
+                    results.append("")
+                results.append("Try rephrasing your search terms or using more specific keywords.")
             
             return f"Web search results:\n\n" + "\n".join(results)
             
+        except ImportError:
+            return "Error: BeautifulSoup library not available. Please install beautifulsoup4."
         except requests.exceptions.RequestException as e:
             return f"Error performing web search: {str(e)}"
         except Exception as e:
             return f"Error parsing search results: {str(e)}"
+    
+    def _extract_search_result_data(self, element, blocked_domains=None):
+        """Extract title, URL, and description from a search result element."""
+        try:
+            from bs4 import BeautifulSoup
+            import html
+            
+            # Find the main link
+            link = None
+            title = ""
+            url = ""
+            description = ""
+            
+            # Try various ways to find the main link
+            link_selectors = [
+                'a[href^="http"]',
+                'a.result__title', 
+                'a[class*="title"]',
+                'a[class*="result"]',
+                'h1 a, h2 a, h3 a, h4 a',
+                'a'
+            ]
+            
+            for selector in link_selectors:
+                link = element.select_one(selector)
+                if link and link.get('href', '').startswith(('http://', 'https://')):
+                    break
+            
+            if not link:
+                return None
+                
+            url = link.get('href', '')
+            if not url.startswith(('http://', 'https://')):
+                return None
+                
+            # Apply blocked domain filtering
+            if blocked_domains:
+                if any(domain in url for domain in blocked_domains):
+                    return None
+            
+            # Filter out DuckDuckGo internal links
+            if any(domain in url for domain in ['duckduckgo.com', 'duck.co']):
+                return None
+                
+            # Extract title
+            title = link.get_text(strip=True) or "No title"
+            title = html.unescape(title)
+            
+            # Try to find description/snippet
+            description_selectors = [
+                '.result__snippet',
+                '.snippet',
+                'a.result__snippet',
+                '[class*="snippet"]',
+                '[class*="description"]',
+                'span.st',  # Google-style
+                '.desc'
+            ]
+            
+            for selector in description_selectors:
+                desc_element = element.select_one(selector)
+                if desc_element:
+                    description = desc_element.get_text(strip=True)
+                    description = html.unescape(description)
+                    break
+            
+            # If no description found, try getting text from the parent element
+            if not description:
+                # Get text from element, excluding the title
+                full_text = element.get_text(strip=True)
+                if title in full_text:
+                    description = full_text.replace(title, '', 1).strip()
+                else:
+                    description = full_text
+                    
+                # Clean up and limit description length
+                if description:
+                    description = ' '.join(description.split())  # Normalize whitespace
+                    if len(description) > 200:
+                        description = description[:200] + "..."
+                        
+            return {
+                'title': title[:150] if title else "No title",  # Limit title length
+                'url': url,
+                'description': description[:300] if description else "No description available"  # Limit description
+            }
+            
+        except Exception:
+            return None
 
     async def task(self, args: Dict[str, Any]) -> str:
         """Spawn a subagent task."""
