@@ -602,9 +602,45 @@ class ChatInterface:
                             # Re-raise other exceptions for normal handling
                             raise
                     except Exception as e:
-                        # Check if this is a 429 rate limit error
                         error_str = str(e).lower()
-                        if "429" in error_str or "rate limit" in error_str:
+                        
+                        # Check for OpenAI tool_call_id errors
+                        if ("tool_call_id" in error_str and "not found" in error_str and "tool_calls" in error_str):
+                            logger.warning(f"OpenAI tool_call_id mismatch detected: {e}")
+                            
+                            # Clean up conversation history by removing the last assistant message with tool_calls
+                            if (messages and 
+                                len(messages) >= 1 and
+                                messages[-1].get("role") == "assistant" and 
+                                "tool_calls" in messages[-1]):
+                                
+                                removed_msg = messages.pop()  # Remove the assistant message with invalid tool_calls
+                                tool_names = [tc.get('function', {}).get('name', 'unknown') for tc in removed_msg.get('tool_calls', [])]
+                                logger.info(f"Removed assistant message with tool_calls due to tool_call_id error: {tool_names}")
+                                
+                                # Add explanatory message
+                                messages.append({
+                                    "role": "user", 
+                                    "content": f"The previous tool calls were invalid due to a tool_call_id reference error. Please retry your request without referring to previous tool calls."
+                                })
+                                
+                                await self._emit_error(
+                                    "Conversation history cleaned due to tool_call_id mismatch. Please retry your request.",
+                                    "tool_call_id_error"
+                                )
+                            else:
+                                await self._emit_error(
+                                    f"tool_call_id error but no assistant message to clean: {str(e)}",
+                                    "tool_call_id_error"
+                                )
+                            
+                            # Reset prompt and continue
+                            self.terminal_manager.write_above_prompt('\n')
+                            self.terminal_manager.update_prompt("> ")
+                            continue
+                        
+                        # Check if this is a 429 rate limit error
+                        elif "429" in error_str or "rate limit" in error_str:
                             logger.warning(f"Rate limit detected: {e}")
                             await self._emit_system_message(
                                 "Rate limit reached. Retrying in 10 seconds...",

@@ -113,6 +113,17 @@ class SubagentProcess:
         buffer = ""
         while True:
             try:
+                # Check for global interrupt first to break out of loops quickly
+                from cli_agent.core.global_interrupt import is_interrupted
+                if is_interrupted():
+                    logger.info(f"Subagent {self.task_id} read_messages interrupted by global interrupt")
+                    break
+                
+                # Check if manually marked as completed (e.g., by terminate_all)
+                if self.completed:
+                    logger.info(f"Subagent {self.task_id} read_messages stopping - marked as completed")
+                    break
+                
                 # Check if process is still running
                 if self.process.returncode is not None:
                     break
@@ -159,6 +170,9 @@ class SubagentProcess:
 
     async def terminate(self):
         """Terminate the subagent process."""
+        # Immediately mark as completed to break read_messages loop
+        self.completed = True
+        
         if self.process and self.process.returncode is None:
             try:
                 self.process.terminate()
@@ -178,6 +192,8 @@ class SubagentManager:
         self.message_queue: asyncio.Queue = asyncio.Queue()
         self.message_callbacks: List[Callable[[SubagentMessage], None]] = []
         self._running = True
+        # Track monitoring tasks so we can cancel them on termination
+        self._monitoring_tasks: Dict[str, asyncio.Task] = {}
 
     async def spawn_subagent(
         self, description: str, prompt: str, model: str = None, role: str = None
@@ -204,8 +220,9 @@ class SubagentManager:
 
         if success:
             self.subagents[task_id] = subagent
-            # Start monitoring messages
-            asyncio.create_task(self._monitor_subagent(subagent))
+            # Start monitoring messages and track the task
+            monitoring_task = asyncio.create_task(self._monitor_subagent(subagent))
+            self._monitoring_tasks[task_id] = monitoring_task
             logger.info(f"Started monitoring subagent {task_id}")
             return task_id
         else:
@@ -237,6 +254,10 @@ class SubagentManager:
                 logger.info(
                     f"Received message from {subagent.task_id}: {message.type} - {message.content[:50]}"
                 )
+        except asyncio.CancelledError:
+            logger.info(f"Monitoring task for subagent {subagent.task_id} was cancelled")
+            # Mark as completed when monitoring is cancelled
+            subagent.completed = True
         except Exception as e:
             logger.error(f"Error monitoring subagent {subagent.task_id}: {e}")
         logger.info(f"Finished monitoring subagent {subagent.task_id}")
@@ -270,10 +291,36 @@ class SubagentManager:
             return
 
         logger.info(f"Terminating {len(self.subagents)} subagents")
+        
+        # First, cancel all monitoring tasks to stop message processing
+        for task_id, monitoring_task in self._monitoring_tasks.items():
+            if not monitoring_task.done():
+                monitoring_task.cancel()
+                logger.info(f"Cancelled monitoring task for subagent {task_id}")
+        
+        # Wait briefly for tasks to cancel
+        if self._monitoring_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._monitoring_tasks.values(), return_exceptions=True),
+                    timeout=1.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Timeout waiting for monitoring tasks to cancel")
+        
+        # Second, immediately mark all subagents as completed to break waiting loops
+        for task_id, subagent in self.subagents.items():
+            subagent.completed = True
+            logger.info(f"Marked subagent {task_id} as completed")
+        
+        # Then terminate the actual processes
         for task_id, subagent in self.subagents.items():
             logger.info(f"Terminating subagent {task_id}")
             await subagent.terminate()
+        
+        # Clear all tracking dictionaries
         self.subagents.clear()
+        self._monitoring_tasks.clear()
         logger.info("All subagents terminated")
 
     async def terminate_subagent(self, task_id: str) -> bool:
@@ -282,6 +329,17 @@ class SubagentManager:
             return False
 
         logger.info(f"Terminating subagent {task_id}")
+        
+        # Cancel monitoring task first
+        if task_id in self._monitoring_tasks:
+            monitoring_task = self._monitoring_tasks[task_id]
+            if not monitoring_task.done():
+                monitoring_task.cancel()
+                logger.info(f"Cancelled monitoring task for subagent {task_id}")
+            del self._monitoring_tasks[task_id]
+        
+        # Immediately mark as completed to break waiting loops
+        self.subagents[task_id].completed = True
         await self.subagents[task_id].terminate()
         del self.subagents[task_id]
         return True

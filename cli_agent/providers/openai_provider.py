@@ -327,6 +327,15 @@ class OpenAIProvider(BaseProvider):
         """Check if OpenAI error is retryable."""
         error_str = str(error).lower()
 
+        # Non-retryable errors - these should be handled by conversation cleanup
+        non_retryable_patterns = [
+            "tool_call_id",  # tool_call_id reference errors require conversation cleanup
+            "invalid parameter",  # Parameter validation errors
+        ]
+        
+        if any(pattern in error_str for pattern in non_retryable_patterns):
+            return False
+
         # OpenAI-specific retryable errors
         retryable_patterns = [
             "rate limit",

@@ -250,6 +250,19 @@ class SubagentCoordinator:
                     self.handle_subagent_permission_request(message, task_id)
                 )
                 return  # Don't display permission requests
+            elif message.type == "tool_request":
+                # Display tool requests with their parameters
+                tool_name = message.data.get("tool_name", "unknown") if hasattr(message, "data") and message.data else "unknown"
+                arguments = message.data.get("arguments", {}) if hasattr(message, "data") and message.data else {}
+                
+                # Format arguments for display (limit size for readability)
+                if arguments:
+                    args_str = str(arguments)
+                    if len(args_str) > 200:
+                        args_str = args_str[:200] + "..."
+                    formatted = f"🔧 [SUBAGENT-{task_id}] {message.content} | Parameters: {args_str}"
+                else:
+                    formatted = f"🔧 [SUBAGENT-{task_id}] {message.content}"
             else:
                 formatted = f"📨 [SUBAGENT-{task_id}] {message.type}: {message.content}"
 
@@ -306,22 +319,28 @@ class SubagentCoordinator:
         while self.agent.subagent_manager.get_active_count() > 0:
             current_time = time.time()
 
-            # Check for cancellation messages
+            # Check for global interrupt first
+            if self.global_interrupt_manager.is_interrupted():
+                logger.info("Global interrupt detected, terminating all subagents")
+                await self.agent.subagent_manager.terminate_all()
+                return []  # Return empty results to indicate interruption
+
+            # Check for cancellation/interruption messages
             pending_messages = await self.agent.subagent_manager.get_pending_messages()
             for msg in pending_messages:
                 if (
                     msg.type == "status"
                     and hasattr(msg, "data")
-                    and msg.data.get("status") == "cancelled"
+                    and msg.data.get("status") in ["cancelled", "interrupted"]
                 ):
-                    logger.info(
-                        f"Subagent {msg.data.get('task_id', 'unknown')} was cancelled by user"
-                    )
+                    status = msg.data.get("status")
+                    task_id = msg.data.get('task_id', 'unknown')
+                    logger.info(f"Subagent {task_id} was {status} by user")
                     # Terminate all subagents and return to prompt
                     await self.agent.subagent_manager.terminate_all()
-                    return []  # Return empty results to indicate cancellation
-                elif msg.type == "error" and "Tool execution denied" in msg.content:
-                    logger.info(f"Subagent tool denied, terminating all subagents")
+                    return []  # Return empty results to indicate cancellation/interruption
+                elif msg.type == "error" and ("Tool execution denied" in msg.content or "interrupted" in msg.content.lower()):
+                    logger.info(f"Subagent error detected, terminating all subagents: {msg.content}")
                     await self.agent.subagent_manager.terminate_all()
                     return []  # Return empty results to indicate cancellation
 
@@ -464,16 +483,16 @@ Please continue with your task.""",
         # Wait for all subagents to complete and collect results
         subagent_results = await self.collect_subagent_results()
 
-        # Special handling for cancellation - empty list with no active subagents means cancelled
+        # Special handling for cancellation/interruption - empty list with no active subagents means cancelled
         if (
             subagent_results == []
             and self.agent.subagent_manager.get_active_count() == 0
         ):
-            # Subagents were cancelled, return special result to trigger return to prompt
+            # Subagents were cancelled/interrupted, return special result to trigger return to prompt
             return {
                 "cancelled": True,
                 "interrupt_msg": interrupt_msg,
-                "completion_msg": "\r\n🚫 Subagent cancelled due to tool denial. Returning to prompt.\r\n",
+                "completion_msg": "\r\n🚫 Subagents interrupted/cancelled by user. Returning to prompt.\r\n",
                 "restart_msg": "",
             }
 
