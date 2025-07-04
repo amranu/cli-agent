@@ -53,12 +53,38 @@ class SystemPromptBuilder:
                 
                 # Support dynamic placeholders in override files
                 if "{{TOOLS}}" in override_content:
-                    # Build tool list
+                    # Build tool list with parameter information
                     available_tools = []
                     for tool_key, tool_info in self.agent.available_tools.items():
                         tool_name = tool_info.get("name", tool_key.split(":")[-1])
                         description = tool_info.get("description", "No description available")
-                        available_tools.append(f"- **{tool_name}**: {description}")
+                        
+                        # Add parameter information if available
+                        schema = tool_info.get("schema", {})
+                        if schema and isinstance(schema, dict):
+                            properties = schema.get("properties", {})
+                            required = schema.get("required", [])
+                            
+                            if properties:
+                                params = []
+                                for param_name, param_info in properties.items():
+                                    param_type = param_info.get("type", "string")
+                                    param_desc = param_info.get("description", "")
+                                    is_required = param_name in required
+                                    req_marker = " (required)" if is_required else " (optional)"
+                                    
+                                    # Format parameter info
+                                    param_line = f"`{param_name}` ({param_type}){req_marker}"
+                                    if param_desc:
+                                        param_line += f": {param_desc}"
+                                    params.append(param_line)
+                                
+                                param_section = "\n  " + "\n  ".join(params)
+                                available_tools.append(f"- **{tool_name}**: {description}{param_section}")
+                            else:
+                                available_tools.append(f"- **{tool_name}**: {description}")
+                        else:
+                            available_tools.append(f"- **{tool_name}**: {description}")
                     tools_section = "\n" + "\n".join(available_tools)
                     override_content = override_content.replace("{{TOOLS}}", tools_section)
                 
@@ -325,7 +351,33 @@ Task Management Rules:
             for tool_key, tool_info in available_tools_dict.items():
                 tool_name = tool_info.get("name", tool_key.split(":")[-1])
                 description = tool_info.get("description", "No description available")
-                available_tools.append(f"- **{tool_name}**: {description}")
+                
+                # Add parameter information if available
+                schema = tool_info.get("schema", {})
+                if schema and isinstance(schema, dict):
+                    properties = schema.get("properties", {})
+                    required = schema.get("required", [])
+                    
+                    if properties:
+                        params = []
+                        for param_name, param_info in properties.items():
+                            param_type = param_info.get("type", "string")
+                            param_desc = param_info.get("description", "")
+                            is_required = param_name in required
+                            req_marker = " (required)" if is_required else " (optional)"
+                            
+                            # Format parameter info
+                            param_line = f"`{param_name}` ({param_type}){req_marker}"
+                            if param_desc:
+                                param_line += f": {param_desc}"
+                            params.append(param_line)
+                        
+                        param_section = "\n  " + "\n  ".join(params)
+                        available_tools.append(f"- **{tool_name}**: {description}{param_section}")
+                    else:
+                        available_tools.append(f"- **{tool_name}**: {description}")
+                else:
+                    available_tools.append(f"- **{tool_name}**: {description}")
             tools_section = "\n" + "\n".join(available_tools)
             result = result.replace("{{TOOLS}}", tools_section)
         
