@@ -21,6 +21,7 @@ class CleanDiffDisplay:
     def __init__(self):
         self.terminal_state = get_terminal_state()
         self.in_clean_mode = False
+        self.auto_accept_all = False
 
     def can_use_clean_display(self) -> bool:
         """Check if we can use clean terminal display."""
@@ -244,6 +245,7 @@ class CleanDiffDisplay:
         YELLOW = "\033[33m"
         GREEN = "\033[32m"
         RED = "\033[31m"
+        BLUE = "\033[34m"
         RESET = "\033[0m"
         
         lines = [
@@ -262,6 +264,7 @@ class CleanDiffDisplay:
             "",
             f"  {GREEN}y{RESET} / {GREEN}yes{RESET}  - Apply the changes",
             f"  {RED}n{RESET} / {RED}no{RESET}   - Cancel the operation",
+            f"  {BLUE}a{RESET} / {BLUE}all{RESET}  - Apply and auto-accept all future edits",
             "",
             "Your choice: ",
         ]
@@ -270,6 +273,11 @@ class CleanDiffDisplay:
 
     def _get_user_confirmation(self) -> bool:
         """Get user confirmation for the diff changes."""
+        # Check if auto-accept is enabled
+        if self.auto_accept_all:
+            print("y  (auto-accepting all edits)")
+            return True
+            
         try:
             while True:
                 # Move cursor to end of prompt and get input
@@ -279,13 +287,27 @@ class CleanDiffDisplay:
                     return True
                 elif response in ('n', 'no'):
                     return False
+                elif response in ('a', 'all'):
+                    self.auto_accept_all = True
+                    print(f"\n✅ Auto-accept enabled. All future edits will be automatically accepted.")
+                    return True
                 else:
                     # Invalid input, ask again
-                    print(f"\nPlease enter 'y' for yes or 'n' for no: ", end='', flush=True)
+                    print(f"\nPlease enter 'y' for yes, 'n' for no, or 'a' for auto-accept all: ", end='', flush=True)
                     
         except (KeyboardInterrupt, EOFError):
             # User pressed Ctrl+C or Ctrl+D, treat as "no"
             return False
+
+    def reset_auto_accept(self):
+        """Reset the auto-accept flag."""
+        if self.auto_accept_all:
+            logger.info("Auto-accept mode disabled")
+        self.auto_accept_all = False
+
+    def is_auto_accept_enabled(self) -> bool:
+        """Check if auto-accept mode is currently enabled."""
+        return self.auto_accept_all
 
 
 # Global instance for easy access

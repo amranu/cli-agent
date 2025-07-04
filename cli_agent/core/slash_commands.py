@@ -887,41 +887,66 @@ Please start by reading the key files to understand the architecture, then write
             with open(research_director_path, 'r', encoding='utf-8') as f:
                 role_config = yaml.safe_load(f)
             
-            # Apply the role to the agent
-            if hasattr(self.agent, 'apply_role'):
-                self.agent.apply_role(role_config)
-            else:
-                # Fallback: set role attributes directly
-                self.agent.current_role = "research_director"
-                if hasattr(self.agent, 'role_config'):
-                    self.agent.role_config = role_config
+            # Apply the role to the agent (this will automatically update tools and prompt)
+            self.agent.set_role("research_director")
+            
+            # Store role config for reference
+            self.agent.role_config = role_config
+            
+            status_message = f"✅ Switched to Research Director role for topic: {topic}"
             
             # Create initial prompt for the research director
             initial_prompt = f"""You are now acting as a Research Director. Your task is to conduct comprehensive deep research on the following topic:
 
 **Research Topic:** {topic}
 
+**CRITICAL FIRST STEP: Create comprehensive todo list using `todo_write` from your role instructions**
+
 **Instructions:**
-1. Break this topic into 3-5 focused sub-topics for parallel research
-2. Use the `task` tool to spawn ALL researcher role subagents simultaneously for each sub-topic
-3. Always specify "Role: researcher" in each task tool call
-4. Deploy all researcher role subagents at once to work in parallel on their assigned areas
-5. Use `list_directory /tmp` to find summary files and `read_file` to analyze them
-6. Autonomously complete ALL 5 editing rounds without stopping for user approval:
-   - v1: Review ALL researcher summaries, write COMPLETE initial draft
-   - v2: Re-review sources, rewrite COMPLETE improved draft (automatic)
-   - v3: Review sources for insights, rewrite COMPLETE enhanced draft (automatic)
-   - v4: Review sources for citations, rewrite COMPLETE polished draft (automatic)
-   - Final: Final source review, rewrite COMPLETE final report (automatic)
-7. MANDATORY: Review researcher source summaries before EACH editing round
-8. Target: 10-12 pages (5,000-6,000 words) executive-quality report
-9. CRITICAL: Complete entire editing process in single session without prompting
+1. **IMMEDIATELY use `todo_write` to create a comprehensive todo list** based on your research director role instructions
+2. Create todos for topic decomposition, subagent deployment, file collection, analysis, and all 5 editing rounds
+3. Use `todo_read` before starting each major phase to check progress
+4. Break this topic into 3-5 focused sub-topics for parallel research
+5. Use the `task` tool to spawn ALL researcher role subagents simultaneously for each sub-topic
+6. Always specify "Role: researcher" in each task tool call
+7. Deploy all researcher role subagents at once to work in parallel on their assigned areas
+8. Use `list_directory /tmp` to find summary files and `read_file` to analyze them
+9. After subagent research completion, create detailed outline and delegate sections:
+   - Review ALL researcher summaries using `read_file`
+   - Create comprehensive outline with 8-10 sections using `write_file`
+   - Spawn single summarizer role subagent (specify "Role: summarizer") for all sections
+   - Summarizer will find research sources in /tmp/summary_*.md using list_directory and read_file
+   - Single summarizer works through each section sequentially with 3 rounds each and uses emit_result with all file paths
+   - Collect section file paths from summarizer emit_result automatically
+   - Use cat command to concatenate all sections into final master report
+   - Display the final concatenated report to the user
+10. **Use `todo_read` and mark todos as in_progress/completed throughout each phase**
+11. CRITICAL SECTION-BASED APPROACH: Outline → Delegate → Collect → Concatenate
+12. MANDATORY: Review researcher source summaries before outline creation
+13. Target: 10-12 pages (5,000-6,000 words) executive-quality report
+14. CRITICAL: Complete entire section-based workflow in single session without prompting
+15. **End with `todo_read` to display final completed task list as research summary**
+
+**SECTION-BASED WORKFLOW:**
+- Phase 1-4: Researcher subagents conduct websearch research and create summary files
+- Phase 5a: Create detailed outline: `/tmp/research_outline_[topic]_[timestamp].md`
+- Phase 5b: Spawn single summarizer role subagent for all sections (Role: summarizer)
+- Phase 6a: Single summarizer completes 3-round iterative refinement per section and emit_result with all file paths
+- Phase 6b: Collect section file paths from summarizer results automatically
+- Phase 6c: Use cat command to concatenate sections: `/tmp/deep_research_master_report_[topic]_[timestamp].md`
+- Phase 6d: Display final concatenated report to user using read_file
+- Use `read_file` to review ALL researcher summaries before outline creation
+- Use cat command for simple concatenation - no summarizing or rewriting of sections
 
 **Your Role:**
-- You are a Research Director coordinating multiple researcher role subagents
-- Each subagent will focus on a specific aspect of the topic
-- You will collect and synthesize their findings into a master report
-- Ensure comprehensive coverage of all important aspects
+- You are a Research Director coordinating multiple types of subagents
+- First: Deploy researcher role subagents for websearch research on sub-topics
+- Then: Create detailed outline based on research findings
+- Finally: Deploy single summarizer role subagent to write and iteratively refine all sections sequentially
+- Summarizer will complete 3-round refinement process per section and emit_result with all section file paths
+- You will use cat command to concatenate section files and display the final report to user
+- Ensure comprehensive coverage through proper outline design and summarizer delegation
+- DO NOT summarize or rewrite sections - simply concatenate them as-is
 
 **AUTONOMOUS OPERATION REQUIREMENT:**
 You must operate completely autonomously from start to finish. Never ask "Should I proceed?", "Ready for the next step?", or "Would you like me to continue?". This is a fully automated process that should run from initial planning through final report delivery without any user intervention or approval requests.
@@ -936,18 +961,19 @@ Begin by analyzing the topic and planning your research strategy."""
 📋 **Mission:** Coordinate multiple researcher subagents for comprehensive analysis
 
 **What happens next:**
-1. I will break down your topic into focused sub-topics
-2. Spawn researcher role subagents in parallel (typically 3-5 simultaneously)
-3. All researcher role subagents work concurrently on their assigned areas
-4. Collect and synthesize all findings through autonomous iterative editing:
-   - Round 1: Review ALL researcher summaries, create COMPLETE initial draft 
-   - Round 2: Re-review sources, rewrite COMPLETE improved draft (automatic)
-   - Round 3: Review sources for insights, rewrite COMPLETE enhanced draft (automatic)
-   - Round 4: Review sources for citations, rewrite COMPLETE polished draft (automatic)
-   - Round 5: Final source review, rewrite COMPLETE final report (automatic)
-5. MANDATORY: Review researcher source summaries before EACH round
-6. Complete ALL editing rounds without stopping for user approval
-7. Deliver 10-12 page executive-quality report with comprehensive analysis
+1. **Create comprehensive todo list** for tracking all research phases and tasks
+2. I will break down your topic into focused sub-topics
+3. Spawn researcher role subagents in parallel (typically 3-5 simultaneously)
+4. All researcher role subagents work concurrently on their assigned areas
+5. **Use todo tracking throughout** to maintain visibility into research progress
+6. Create outline and delegate sections through autonomous section-based workflow:
+   - Outline Creation: Review ALL researcher summaries, create detailed 8-10 section outline
+   - Section Delegation: Spawn single summarizer role subagent to iteratively refine all sections (3 rounds each)
+   - Section Collection: Collect section file paths from summarizer emit_result automatically
+   - Final Assembly: Use cat command to concatenate sections and display final report (automatic)
+7. MANDATORY: Review researcher source summaries before outline creation
+8. Complete entire section-based workflow without stopping for user approval
+9. Deliver 10-12 page executive-quality report with comprehensive analysis
 
 *Starting deep research coordination...*"""
 
