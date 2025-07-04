@@ -15,6 +15,7 @@ import click
 
 from cli_agent.core.base_agent import BaseMCPAgent
 from cli_agent.core.input_handler import InterruptibleInput
+from cli_agent import __version__
 from config import HostConfig, load_config, get_config_dir
 
 # Import local modules with error handling for different environments
@@ -170,7 +171,7 @@ def create_host(
     is_flag=True,
     expose_value=False,
     is_eager=True,
-    callback=lambda ctx, param, value: ctx.exit(click.echo("mcp-cli-agent 1.0.0")) if value else None,
+    callback=lambda ctx, param, value: ctx.exit(click.echo(f"mcp-cli-agent {__version__}")) if value else None,
     help="Show version and exit",
 )
 @click.pass_context
