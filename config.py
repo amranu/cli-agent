@@ -186,9 +186,11 @@ class HostConfig(BaseSettings):
 
     # OpenAI configuration
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    openai_base_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_BASE_URL")
     openai_model: str = Field(default="gpt-4-turbo-preview", alias="OPENAI_MODEL")
     openai_temperature: float = Field(default=0.7, alias="OPENAI_TEMPERATURE")
     openai_max_tokens: int = Field(default=4096, alias="OPENAI_MAX_TOKENS")
+    openai_timeout: float = Field(default=120.0, alias="OPENAI_TIMEOUT")
 
     # OpenRouter configuration
     openrouter_api_key: str = Field(default="", alias="OPENROUTER_API_KEY")
@@ -307,9 +309,11 @@ class HostConfig(BaseSettings):
         """Get OpenAI configuration."""
         return OpenAIConfig(
             api_key=self.openai_api_key,
+            base_url=self.openai_base_url,
             model=self.openai_model,
             temperature=self.openai_temperature,
             max_tokens=self.openai_max_tokens,
+            timeout=self.openai_timeout,
         )
 
     def get_openrouter_config(self) -> OpenRouterConfig:

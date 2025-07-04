@@ -30,9 +30,11 @@ ANTHROPIC_MAX_TOKENS=8192              # Optional: Max response tokens
 ### OpenAI (GPT)
 ```bash
 OPENAI_API_KEY=""                      # Required: OpenAI API key
+OPENAI_BASE_URL="https://api.openai.com/v1"  # Optional: API endpoint URL
 OPENAI_MODEL="gpt-4-turbo-preview"     # Optional: Model name
 OPENAI_TEMPERATURE=0.7                 # Optional: Temperature (0.0-1.0)
 OPENAI_MAX_TOKENS=4096                 # Optional: Max response tokens
+OPENAI_TIMEOUT=120.0                   # Optional: Request timeout (seconds)
 ```
 
 ### DeepSeek (Chat & Reasoning)
@@ -193,6 +195,30 @@ SUBAGENT_PERMISSIONS_BYPASS=false
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.1
 DEFAULT_PROVIDER_MODEL=ollama:llama3.1
+```
+
+### OpenAI-Compatible Local Endpoints
+```bash
+# vLLM server
+OPENAI_BASE_URL=http://localhost:8000/v1
+OPENAI_API_KEY=dummy_key  # Often required but can be dummy for local
+OPENAI_MODEL=your-local-model-name
+DEFAULT_PROVIDER_MODEL=openai:your-local-model-name
+
+# text-generation-inference
+OPENAI_BASE_URL=http://localhost:3000/v1
+OPENAI_API_KEY=dummy_key
+OPENAI_MODEL=local-tgi-model
+
+# LocalAI
+OPENAI_BASE_URL=http://localhost:8080/v1
+OPENAI_API_KEY=dummy_key
+OPENAI_MODEL=gpt-3.5-turbo  # LocalAI often uses standard names
+
+# Together.ai (cloud alternative)
+OPENAI_BASE_URL=https://api.together.xyz/v1
+OPENAI_API_KEY=your_together_api_key
+OPENAI_MODEL=meta-llama/Llama-2-70b-chat-hf
 ```
 
 ### Multi-Provider Setup
