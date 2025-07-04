@@ -443,20 +443,8 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                             import sys
                             sys.exit(0)
                     else:
-                        # SIMPLIFIED APPROACH: Bypass the complex tool execution engine and call builtin tools directly
-                        
-                        # Check if it's a builtin tool and call it directly
-                        if tool_key.startswith("builtin:"):
-                            # Extract just the tool name without "builtin:" prefix
-                            tool_name = tool_key.split(":", 1)[1].strip() if ":" in tool_key else tool_key.strip()
-                            
-                            
-                            # Call the builtin tool directly via _execute_builtin_tool
-                            # Pass the full tool_key to ensure proper matching
-                            result = await host._execute_builtin_tool(tool_key, arguments)
-                        else:
-                            # For non-builtin tools, use the original method
-                            result = await original_execute_mcp_tool(tool_key, arguments)
+                        # Use the original tool execution method to ensure permission checks
+                        result = await original_execute_mcp_tool(tool_key, arguments)
                 except Exception as e:
                     # Emit tool error result
                     emit_tool_result(str(e), request_id, is_error=True, task_id=current_task_id)

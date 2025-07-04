@@ -274,7 +274,8 @@ class ToolExecutionEngine:
                     # Only main agents reach here (subagents forward to parent)
                     raise ToolDeniedReturnToPrompt(permission_result.reason)
             elif self.agent.is_subagent:
-                # For subagents without comm_socket, still use permission manager if available
+                # Subagents should always check permissions if they have a permission manager
+                # The SubagentInputHandler will communicate with the main process for permission prompts
                 if hasattr(self.agent, "permission_manager") and self.agent.permission_manager:
                     from cli_agent.core.tool_permissions import (
                         ToolDeniedReturnToPrompt,
@@ -283,8 +284,11 @@ class ToolExecutionEngine:
 
                     input_handler = getattr(self.agent, "_input_handler", None)
                     
-                    # DEBUG: Log that we're checking permissions for subagent
-                    sys.stderr.write(f"🤖 [SUBAGENT] Checking permissions for tool {tool_name} with input_handler {type(input_handler).__name__ if input_handler else 'None'}\n")
+                    # Debug: Show file path to confirm we're using local code
+                    import inspect
+                    current_file = inspect.getfile(inspect.currentframe())
+                    sys.stderr.write(f"🤖 [SUBAGENT] PERMISSION CHECK from {current_file}\n")
+                    sys.stderr.write(f"🤖 [SUBAGENT] Checking permissions for {tool_name} with handler {type(input_handler).__name__ if input_handler else 'None'}\n")
                     sys.stderr.flush()
                     
                     permission_result = (
@@ -293,16 +297,13 @@ class ToolExecutionEngine:
                         )
                     )
 
-                    # DEBUG: Log permission result
-                    sys.stderr.write(f"🤖 [SUBAGENT] Permission result for {tool_name}: allowed={permission_result.allowed}, reason={permission_result.reason}\n")
+                    sys.stderr.write(f"🤖 [SUBAGENT] Permission result: {permission_result.allowed} - {permission_result.reason}\n")
                     sys.stderr.flush()
 
                     if not permission_result.allowed:
                         raise ToolDeniedReturnToPrompt(permission_result.reason)
                 else:
-                    sys.stderr.write(
-                        f"🤖 [SUBAGENT] WARNING: is_subagent=True but no permission_manager for tool {tool_name}\n"
-                    )
+                    sys.stderr.write(f"🤖 [SUBAGENT] No permission manager, executing directly: {tool_name}\n")
                     sys.stderr.flush()
 
             # EXECUTE TOOL WITH POST-HOOK INTEGRATION
