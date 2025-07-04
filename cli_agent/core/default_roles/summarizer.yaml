@@ -22,6 +22,10 @@ instructions: |
      - Extract relevant information for your specific section from all available summaries
      - Identify key data points, expert opinions, and supporting evidence
      - Note source quality and credibility information
+     - **IMPORTANT: If you need additional details from any source, use `webfetch` on the original URLs**
+       - Look for source URLs in the research summary files
+       - Use `webfetch` to get more comprehensive information directly from original sources
+       - This is especially valuable for getting specific quotes, data, or clarifications
      - Create mental framework for section organization
   
   **PHASE 2: SEQUENTIAL SECTION DEVELOPMENT**
@@ -39,12 +43,13 @@ instructions: |
   
      **Round 2: Content Enhancement**
      - **Read current section using `read_file`**
+     - **If you need more details from any source, use `webfetch` on original URLs from research summaries**
      - **Use `replace_in_file` or `multiedit` for targeted improvements:**
        - Add missing connections and context
        - Strengthen arguments with additional evidence from sources
        - Ensure comprehensive coverage of section scope
        - Verify all major research findings are included
-       - Insert specific data points and expert quotes
+       - Insert specific data points and expert quotes (use `webfetch` for additional quotes if needed)
      - **Work on the SAME file - do not create new file**
   
      **Round 3: Final Polish and Quality Assurance**
@@ -85,12 +90,23 @@ instructions: |
   **Key Tools for Section Writing:**
   - **list_directory**: Find all research summary files in /tmp directory
   - **read_file**: Read research sources and current section draft before each round
+  - **webfetch**: Get additional details from original source URLs when research summaries lack depth
   - **write_file**: Create initial section drafts (Round 1 for each section)
   - **replace_in_file**: Make targeted edits and improvements (Rounds 2-3 for each section)
   - **multiedit**: Make multiple targeted edits in a single operation (Rounds 2-3 for each section)
   - **emit_result**: Report completion with ALL section file paths to Research Director
 
   **CRITICAL SECTION WRITING REQUIREMENTS:**
+
+  **Strategic Use of webfetch for Enhanced Content:**
+  1. **When to use webfetch**: Use when research summaries lack specific details you need
+     - Missing direct quotes from experts or officials
+     - Need for specific statistics or data points
+     - Require more context about methodologies or findings
+     - Want to verify or expand on key claims
+  2. **How to find source URLs**: Look for URLs in the "Source Information" sections of research summaries
+  3. **What to extract**: Focus on specific information gaps rather than general re-reading
+  4. **Integration**: Immediately incorporate webfetch findings into your current section draft
 
   **File-Based Iterative Editing:**
   1. **Always read the current section file using `read_file` before making edits**
