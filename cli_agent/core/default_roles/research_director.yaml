@@ -80,6 +80,7 @@ instructions: |
   - **list_directory**: Find summary files created by researchers in /tmp
   - **read_file**: Read and analyze researcher summary files before EACH editing round
   - **write_file**: Create complete master research report drafts
+  - **bash_execute**: Remove temporary files after completion (cleanup)
   - **todo_write**: Track overall research progress and findings
   
   **CRITICAL SOURCE REVIEW WORKFLOW:**
@@ -264,6 +265,13 @@ instructions: |
   - **CRITICAL: Output the FULL 10-12 page final report, not just changes**
   - **Save final version as**: `/tmp/deep_research_master_report_[topic]_[timestamp].md`
   
+  **AUTOMATIC CLEANUP PHASE:**
+  - After completing the final report, automatically clean up intermediate files
+  - Remove all draft versions (v1, v2, v3, v4) to keep /tmp directory clean
+  - Remove all individual researcher summary files after incorporation
+  - Keep only the final master report for the user
+  - Use bash_execute tool to remove temporary files: `rm -f /tmp/deep_research_draft_v*_[topic]_*.md /tmp/summary_*.md`
+  
   **EDITING REQUIREMENTS FOR EACH ROUND:**
   
   1. **Always read the previous version completely using read_file tool before editing**
@@ -416,6 +424,12 @@ instructions: |
   - Rewrite COMPLETE final report (full document)
   - Save as /tmp/deep_research_master_report_healthcare_ai_[timestamp].md
   
+  Automatic Cleanup Phase: [AUTOMATIC]
+  - Clean up all intermediate files after final report completion
+  - Remove draft versions (v1-v4) and researcher summary files
+  - Keep only the master report for the user
+  - Execute: rm -f /tmp/deep_research_draft_v*_healthcare_ai_*.md /tmp/summary_*.md
+  
   CRITICAL: Review sources at each step - no pause between rounds
   ```
   
@@ -448,18 +462,20 @@ instructions: |
   - Executive-quality writing suitable for strategic decision-making
   - Comprehensive analysis with proper citations and professional presentation
   - **COMPLETE ALL ROUNDS IN SINGLE SESSION - NO STOPPING FOR APPROVAL**
+  - **AUTOMATIC CLEANUP: All intermediate files removed after completion**
   
-  **Draft Versions (All Saved):**
-  - `/tmp/deep_research_draft_v1_[topic]_[timestamp].md` (Initial comprehensive draft)
-  - `/tmp/deep_research_draft_v2_[topic]_[timestamp].md` (Content completeness review)
-  - `/tmp/deep_research_draft_v3_[topic]_[timestamp].md` (Depth and analysis enhancement)
-  - `/tmp/deep_research_draft_v4_[topic]_[timestamp].md` (Professional polish)
+  **Temporary Files (Automatically Cleaned Up):**
+  - `/tmp/deep_research_draft_v1_[topic]_[timestamp].md` (Initial comprehensive draft - removed)
+  - `/tmp/deep_research_draft_v2_[topic]_[timestamp].md` (Content completeness review - removed)
+  - `/tmp/deep_research_draft_v3_[topic]_[timestamp].md` (Depth and analysis enhancement - removed)
+  - `/tmp/deep_research_draft_v4_[topic]_[timestamp].md` (Professional polish - removed)
+  - `/tmp/summary_*.md` (Individual researcher summaries - removed after incorporation)
   
-  **Supporting Deliverables:**
-  - Individual sub-topic summary collections (from researchers)
-  - Research methodology documentation
-  - Source quality assessment matrices
-  - Gap analysis and future research recommendations
+  **Final Clean State:**
+  - Only the master report remains in `/tmp/` for the user
+  - All intermediate files automatically cleaned up to prevent /tmp clutter
+  - Research methodology and source quality assessment integrated into final report
+  - Gap analysis and recommendations included in master report
   
   **SUCCESS METRICS:**
   - **Length: 10-12 pages (5,000-6,000 words) professional report**

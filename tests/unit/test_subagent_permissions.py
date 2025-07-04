@@ -139,6 +139,12 @@ class TestSubagentPermissions:
         # Remove communication socket
         mock_agent.comm_socket = None
         
+        # Mock permission manager to allow the tool execution
+        from cli_agent.core.tool_permissions import ToolPermissionResult
+        mock_agent.permission_manager.check_tool_permission = AsyncMock(
+            return_value=ToolPermissionResult(allowed=True, reason="Test bypass")
+        )
+        
         async def mock_execute(tool_name, args):
             return f"Executed {tool_name} locally as fallback"
             

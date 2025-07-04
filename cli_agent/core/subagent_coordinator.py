@@ -295,7 +295,7 @@ class SubagentCoordinator:
         import time
 
         results = []
-        max_wait_time = 300  # 5 minutes max wait
+        max_wait_time = 600  # 10 minutes max wait
         start_time = time.time()
 
         # Initialize last message time if not set
