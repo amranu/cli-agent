@@ -274,10 +274,36 @@ class ToolExecutionEngine:
                     # Only main agents reach here (subagents forward to parent)
                     raise ToolDeniedReturnToPrompt(permission_result.reason)
             elif self.agent.is_subagent:
-                sys.stderr.write(
-                    f"🤖 [SUBAGENT] WARNING: is_subagent=True but no comm_socket for tool {tool_name}\n"
-                )
-                sys.stderr.flush()
+                # For subagents without comm_socket, still use permission manager if available
+                if hasattr(self.agent, "permission_manager") and self.agent.permission_manager:
+                    from cli_agent.core.tool_permissions import (
+                        ToolDeniedReturnToPrompt,
+                        ToolPermissionResult,
+                    )
+
+                    input_handler = getattr(self.agent, "_input_handler", None)
+                    
+                    # DEBUG: Log that we're checking permissions for subagent
+                    sys.stderr.write(f"🤖 [SUBAGENT] Checking permissions for tool {tool_name} with input_handler {type(input_handler).__name__ if input_handler else 'None'}\n")
+                    sys.stderr.flush()
+                    
+                    permission_result = (
+                        await self.agent.permission_manager.check_tool_permission(
+                            tool_name, arguments, input_handler
+                        )
+                    )
+
+                    # DEBUG: Log permission result
+                    sys.stderr.write(f"🤖 [SUBAGENT] Permission result for {tool_name}: allowed={permission_result.allowed}, reason={permission_result.reason}\n")
+                    sys.stderr.flush()
+
+                    if not permission_result.allowed:
+                        raise ToolDeniedReturnToPrompt(permission_result.reason)
+                else:
+                    sys.stderr.write(
+                        f"🤖 [SUBAGENT] WARNING: is_subagent=True but no permission_manager for tool {tool_name}\n"
+                    )
+                    sys.stderr.flush()
 
             # EXECUTE TOOL WITH POST-HOOK INTEGRATION
             start_time = time.time()
@@ -378,10 +404,24 @@ class ToolExecutionEngine:
 
         except Exception as e:
             # Re-raise tool permission denials so they can be handled at the chat level
-            from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+            from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt, ToolExecutionErrorReturnToPrompt
 
             if isinstance(e, ToolDeniedReturnToPrompt):
                 raise  # Re-raise the exception to bubble up to interactive chat
+
+            # Check for common error types that should clear conversation and add error context
+            error_str = str(e)
+            if any(error_indicator in error_str.lower() for error_indicator in [
+                "expecting value", "json", "parse", "decode", "invalid", "syntax error",
+                "connection", "timeout", "network", "api", "authentication"
+            ]):
+                # These errors indicate API/parsing issues that corrupt conversation state
+                logger.error(f"Tool execution error that requires conversation cleanup: {tool_key}: {e}")
+                raise ToolExecutionErrorReturnToPrompt(
+                    tool_name=tool_key, 
+                    error_message=error_str, 
+                    original_error=e
+                )
 
             logger.error(f"Error executing tool {tool_key}: {e}")
             return f"Error executing tool {tool_key}: {str(e)}"

@@ -386,8 +386,7 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
         # host._execute_mcp_tool = emit_tool_execution
 
         try:
-            # Conversation loop - continue until emit_result is called or max iterations reached
-            max_iterations = 10  # Prevent infinite loops
+            # Conversation loop - continue until emit_result is called
             iteration = 0
             emit_result_called = False
 
@@ -490,7 +489,7 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
 
             try:
                 # Conversation loop for multi-step tasks
-                while iteration < max_iterations and not emit_result_called:
+                while not emit_result_called:
                     iteration += 1
 
                     # Create normalized tools mapping for subagent use
@@ -517,12 +516,7 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
                     # If emit_result was called during this iteration, the loop will exit
                     # Otherwise, continue to next iteration
 
-                if iteration >= max_iterations:
-                    emit_error_with_id(
-                        "Max conversation iterations reached",
-                        f"Subagent reached {max_iterations} iterations without calling emit_result",
-                    )
-                elif not emit_result_called:
+                if not emit_result_called:
                     emit_error_with_id(
                         "Task completed without explicit result",
                         "Subagent finished without calling emit_result tool",

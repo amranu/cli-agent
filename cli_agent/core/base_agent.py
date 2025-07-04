@@ -1807,7 +1807,7 @@ class BaseMCPAgent(ABC):
             - Continuation message for subagent coordination (if any)
             - Whether tool calls were found and processed
         """
-        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt, ToolExecutionErrorReturnToPrompt
 
         # Extract and normalize tool calls
         tool_calls = self._extract_and_normalize_tool_calls(
@@ -1908,6 +1908,16 @@ class BaseMCPAgent(ABC):
             except ToolDeniedReturnToPrompt:
                 # Re-raise permission denials to exit immediately
                 raise
+            except Exception as e:
+                # Check if this is a tool execution error that should be re-raised
+                from cli_agent.core.tool_permissions import ToolExecutionErrorReturnToPrompt
+                if isinstance(e, ToolExecutionErrorReturnToPrompt):
+                    # Re-raise tool execution errors to exit immediately
+                    raise
+                else:
+                    # For other exceptions, log and continue
+                    logger.error(f"Error executing function calls: {e}")
+                    raise
 
         # Handle subagent coordination using existing centralized logic
         subagent_result = await self.subagent_coordinator.handle_subagent_coordination(

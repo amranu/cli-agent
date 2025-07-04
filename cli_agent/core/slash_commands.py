@@ -104,6 +104,8 @@ class SlashCommandManager:
             return self._handle_switch_gemini_pro()
         elif command == "init":
             return await self._handle_init()
+        elif command == "deep-research":
+            return self._handle_deep_research(args)
         elif command.startswith("mcp__"):
             return await self._handle_mcp_command(command, args)
         elif ":" in command:
@@ -135,6 +137,7 @@ Built-in Commands:
   /truncate [on|off|length] - Toggle or configure tool result truncation
   /refresh-models - Clear model cache and fetch fresh model lists
   /init           - Analyze codebase and generate AGENT.md
+  /deep-research <topic> - Start deep research with multiple subagents
   /quit, /exit    - Exit the interactive chat
 
 Legacy Model Switching (deprecated):
@@ -858,3 +861,100 @@ Please start by reading the key files to understand the architecture, then write
 
         except Exception as e:
             return f"❌ Failed to refresh models: {str(e)}"
+
+    def _handle_deep_research(self, args: str):
+        """Handle /deep-research command to start coordinated research with multiple subagents."""
+        if not args.strip():
+            return "Usage: /deep-research <topic>\n\nExample: /deep-research Enterprise AI Adoption in Healthcare 2024"
+        
+        topic = args.strip()
+        
+        # Check if we have a research_director role available
+        import os
+        from pathlib import Path
+        
+        # Check if research_director.yaml exists
+        roles_dir = Path(__file__).parent / "default_roles"
+        research_director_path = roles_dir / "research_director.yaml"
+        
+        if not research_director_path.exists():
+            return "❌ Research Director role not found. Please ensure research_director.yaml exists in cli_agent/core/default_roles/"
+        
+        # Switch to research director role
+        try:
+            # Load and apply the research director role
+            import yaml
+            with open(research_director_path, 'r', encoding='utf-8') as f:
+                role_config = yaml.safe_load(f)
+            
+            # Apply the role to the agent
+            if hasattr(self.agent, 'apply_role'):
+                self.agent.apply_role(role_config)
+            else:
+                # Fallback: set role attributes directly
+                self.agent.current_role = "research_director"
+                if hasattr(self.agent, 'role_config'):
+                    self.agent.role_config = role_config
+            
+            # Create initial prompt for the research director
+            initial_prompt = f"""You are now acting as a Research Director. Your task is to conduct comprehensive deep research on the following topic:
+
+**Research Topic:** {topic}
+
+**Instructions:**
+1. Break this topic into 3-5 focused sub-topics for parallel research
+2. Use the `task` tool to spawn ALL researcher role subagents simultaneously for each sub-topic
+3. Always specify "Role: researcher" in each task tool call
+4. Deploy all researcher role subagents at once to work in parallel on their assigned areas
+5. Use `list_directory /tmp` to find summary files and `read_file` to analyze them
+6. Autonomously complete ALL 5 editing rounds without stopping for user approval:
+   - v1: Review ALL researcher summaries, write COMPLETE initial draft
+   - v2: Re-review sources, rewrite COMPLETE improved draft (automatic)
+   - v3: Review sources for insights, rewrite COMPLETE enhanced draft (automatic)
+   - v4: Review sources for citations, rewrite COMPLETE polished draft (automatic)
+   - Final: Final source review, rewrite COMPLETE final report (automatic)
+7. MANDATORY: Review researcher source summaries before EACH editing round
+8. Target: 10-12 pages (5,000-6,000 words) executive-quality report
+9. CRITICAL: Complete entire editing process in single session without prompting
+
+**Your Role:**
+- You are a Research Director coordinating multiple researcher role subagents
+- Each subagent will focus on a specific aspect of the topic
+- You will collect and synthesize their findings into a master report
+- Ensure comprehensive coverage of all important aspects
+
+**AUTONOMOUS OPERATION REQUIREMENT:**
+You must operate completely autonomously from start to finish. Never ask "Should I proceed?", "Ready for the next step?", or "Would you like me to continue?". This is a fully automated process that should run from initial planning through final report delivery without any user intervention or approval requests.
+
+Begin by analyzing the topic and planning your research strategy."""
+            
+            # Return the research prompt to be sent to LLM using the send_to_llm pattern
+            status_message = f"""✅ **Deep Research Mode Activated**
+
+🎯 **Topic:** {topic}
+🏢 **Role:** Research Director
+📋 **Mission:** Coordinate multiple researcher subagents for comprehensive analysis
+
+**What happens next:**
+1. I will break down your topic into focused sub-topics
+2. Spawn researcher role subagents in parallel (typically 3-5 simultaneously)
+3. All researcher role subagents work concurrently on their assigned areas
+4. Collect and synthesize all findings through autonomous iterative editing:
+   - Round 1: Review ALL researcher summaries, create COMPLETE initial draft 
+   - Round 2: Re-review sources, rewrite COMPLETE improved draft (automatic)
+   - Round 3: Review sources for insights, rewrite COMPLETE enhanced draft (automatic)
+   - Round 4: Review sources for citations, rewrite COMPLETE polished draft (automatic)
+   - Round 5: Final source review, rewrite COMPLETE final report (automatic)
+5. MANDATORY: Review researcher source summaries before EACH round
+6. Complete ALL editing rounds without stopping for user approval
+7. Deliver 10-12 page executive-quality report with comprehensive analysis
+
+*Starting deep research coordination...*"""
+
+            return {
+                "status": status_message,
+                "send_to_llm": initial_prompt
+            }
+            
+        except Exception as e:
+            return f"❌ Failed to activate Research Director mode: {str(e)}\n\nPlease ensure the research_director.yaml role file is properly configured."

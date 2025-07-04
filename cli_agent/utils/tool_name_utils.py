@@ -34,7 +34,27 @@ class ToolNameUtils:
         if "_" in tool_key:
             candidates.append(tool_key.replace("_", ":"))
             
-        # Strategy 4: Handle partial tool names for common built-ins
+        # Strategy 4: Replace colons with underscores (for builtin tools)
+        if ":" in tool_key:
+            candidates.append(tool_key.replace(":", "_"))
+            
+        # Strategy 5: Handle common colon-notation tool calls
+        common_mappings = {
+            "todo:write": "todo_write",
+            "todo:read": "todo_read", 
+            "write:file": "write_file",
+            "read:file": "read_file",
+            "bash:execute": "bash_execute",
+            "list:directory": "list_directory",
+            "replace:in:file": "replace_in_file",
+            "get:current:directory": "get_current_directory",
+            "web:fetch": "webfetch",
+        }
+        if tool_key in common_mappings:
+            mapped_name = common_mappings[tool_key]
+            candidates.extend([f"builtin:{mapped_name}", mapped_name])
+
+        # Strategy 6: Handle partial tool names for common built-ins
         # This prevents LLMs from calling partial tool names like "result" instead of "emit_result"
         if tool_key == "result":
             candidates.extend(["builtin:emit_result", "emit_result", "builtin_emit_result"])

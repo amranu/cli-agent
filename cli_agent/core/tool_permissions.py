@@ -29,6 +29,16 @@ class ToolDeniedReturnToPrompt(Exception):
         super().__init__(reason)
 
 
+class ToolExecutionErrorReturnToPrompt(Exception):
+    """Exception raised when a tool execution fails and should return to user prompt with error context."""
+
+    def __init__(self, tool_name: str, error_message: str, original_error: Exception = None):
+        self.tool_name = tool_name
+        self.error_message = error_message
+        self.original_error = original_error
+        super().__init__(f"Tool '{tool_name}' execution failed: {error_message}")
+
+
 @dataclass
 class ToolPermissionConfig:
     """Configuration for tool permissions."""

@@ -43,7 +43,7 @@ class ChatInterface:
         self, input_handler, existing_messages: Optional[List[Dict[str, Any]]] = None
     ):
         """Main interactive chat loop implementation."""
-        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt
+        from cli_agent.core.tool_permissions import ToolDeniedReturnToPrompt, ToolExecutionErrorReturnToPrompt
 
         # Store input handler on agent for permission system
         self.agent._input_handler = input_handler
@@ -563,6 +563,44 @@ class ChatInterface:
                         # Reset prompt to ready state
                         self.terminal_manager.update_prompt("> ")
                         continue  # Return to prompt
+                    except Exception as tool_error:
+                        # Check if this is a tool execution error that requires conversation cleanup
+                        from cli_agent.core.tool_permissions import ToolExecutionErrorReturnToPrompt
+                        
+                        if isinstance(tool_error, ToolExecutionErrorReturnToPrompt):
+                            await self._emit_error(
+                                f"Tool execution failed: {tool_error.error_message}", "tool_execution_error"
+                            )
+                            
+                            # Add context message to conversation history so LLM knows what happened
+                            messages.append({
+                                "role": "user",
+                                "content": f"Tool '{tool_error.tool_name}' execution failed with error: {tool_error.error_message}. Please try a different approach or tool."
+                            })
+                            
+                            # Defensive validation: check for any remaining conversation history corruption
+                            # Remove orphaned assistant messages with tool_calls that failed
+                            if (messages and 
+                                len(messages) >= 2 and
+                                messages[-2].get("role") == "assistant" and 
+                                "tool_calls" in messages[-2]):
+                                
+                                # Remove the assistant message with tool_calls that can't be completed
+                                removed_msg = messages.pop(-2)  # Remove the assistant message, keep our user message
+                                logger.warning(f"Tool execution error cleanup: removed orphaned assistant message with tool_calls: {[tc.get('function', {}).get('name', 'unknown') for tc in removed_msg.get('tool_calls', [])]}")
+                            
+                            # Clear any updated messages that might still be cached (additional safety)
+                            if hasattr(self.agent, "response_handler") and self.agent.response_handler:
+                                self.agent.response_handler._updated_messages = None
+                            
+                            # Ensure newline before prompt reset
+                            self.terminal_manager.write_above_prompt('\n')
+                            # Reset prompt to ready state
+                            self.terminal_manager.update_prompt("> ")
+                            continue  # Return to prompt
+                        else:
+                            # Re-raise other exceptions for normal handling
+                            raise
                     except Exception as e:
                         # Check if this is a 429 rate limit error
                         error_str = str(e).lower()
