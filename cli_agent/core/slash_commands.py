@@ -907,11 +907,12 @@ Please start by reading the key files to understand the architecture, then write
 2. Create todos for topic decomposition, subagent deployment, file collection, analysis, and all 5 editing rounds
 3. Use `todo_read` before starting each major phase to check progress
 4. Break this topic into 3-5 focused sub-topics for parallel research
-5. Use the `task` tool to spawn ALL researcher role subagents simultaneously for each sub-topic
-6. Always specify "Role: researcher" in each task tool call
-7. Deploy all researcher role subagents at once to work in parallel on their assigned areas
-8. Use `list_directory /tmp` to find summary files and `read_file` to analyze them
-9. After subagent research completion, create detailed outline and delegate sections:
+5. **USE RESEARCHER ROLE SUBAGENTS: SET THE ROLE PARAMETER TO "researcher"** - Use the `task` tool to spawn ALL researcher role subagents simultaneously for each sub-topic
+6. **CRITICAL: ALWAYS SPECIFY "Role: researcher" IN EACH TASK TOOL CALL**
+7. **MANDATORY: Include in each researcher task prompt: "You must create summary files for a MINIMUM of 3 sources before calling emit_result. Do not exit until you have at least 3 comprehensive source summaries in /tmp/summary_*.md files."**
+8. Deploy all researcher role subagents at once to work in parallel on their assigned areas
+9. Use `list_directory /tmp` to find summary files and `read_file` to analyze them
+10. After subagent research completion, create detailed outline and delegate sections:
    - Review ALL researcher summaries using `read_file`
    - Create comprehensive outline with 8-10 sections using `write_file`
    - Spawn single summarizer role subagent (specify "Role: summarizer") for all sections
@@ -920,17 +921,17 @@ Please start by reading the key files to understand the architecture, then write
    - Collect section file paths from summarizer emit_result automatically
    - Use cat command to concatenate all sections into final master report
    - Display the final concatenated report to the user
-10. **Use `todo_read` and mark todos as in_progress/completed throughout each phase**
-11. CRITICAL SECTION-BASED APPROACH: Outline → Delegate → Collect → Concatenate
-12. MANDATORY: Review researcher source summaries before outline creation
-13. Target: 10-12 pages (5,000-6,000 words) executive-quality report
-14. CRITICAL: Complete entire section-based workflow in single session without prompting
-15. **End with `todo_read` to display final completed task list as research summary**
+11. **Use `todo_read` and mark todos as in_progress/completed throughout each phase**
+12. CRITICAL SECTION-BASED APPROACH: Outline → Delegate → Collect → Concatenate
+13. MANDATORY: Review researcher source summaries before outline creation
+14. Target: 10-12 pages (5,000-6,000 words) executive-quality report
+15. CRITICAL: Complete entire section-based workflow in single session without prompting
+16. **End with `todo_read` to display final completed task list as research summary**
 
 **SECTION-BASED WORKFLOW:**
-- Phase 1-4: Researcher subagents conduct websearch research and create summary files
+- Phase 1-4: **RESEARCHER ROLE SUBAGENTS (Role: researcher)** conduct websearch research and create summary files (MINIMUM 3 sources each)
 - Phase 5a: Create detailed outline: `/tmp/research_outline_[topic]_[timestamp].md`
-- Phase 5b: Spawn single summarizer role subagent for all sections (Role: summarizer)
+- Phase 5b: **SPAWN SINGLE SUMMARIZER ROLE SUBAGENT (Role: summarizer)** for all sections
 - Phase 6a: Single summarizer completes 3-round iterative refinement per section and emit_result with all file paths
 - Phase 6b: Collect section file paths from summarizer results automatically
 - Phase 6c: Use cat command to concatenate sections: `/tmp/deep_research_master_report_[topic]_[timestamp].md`
@@ -940,9 +941,9 @@ Please start by reading the key files to understand the architecture, then write
 
 **Your Role:**
 - You are a Research Director coordinating multiple types of subagents
-- First: Deploy researcher role subagents for websearch research on sub-topics
+- First: **DEPLOY RESEARCHER ROLE SUBAGENTS (Role: researcher)** for websearch research on sub-topics
 - Then: Create detailed outline based on research findings
-- Finally: Deploy single summarizer role subagent to write and iteratively refine all sections sequentially
+- Finally: **DEPLOY SINGLE SUMMARIZER ROLE SUBAGENT (Role: summarizer)** to write and iteratively refine all sections sequentially
 - Summarizer will complete 3-round refinement process per section and emit_result with all section file paths
 - You will use cat command to concatenate section files and display the final report to user
 - Ensure comprehensive coverage through proper outline design and summarizer delegation
@@ -963,12 +964,12 @@ Begin by analyzing the topic and planning your research strategy."""
 **What happens next:**
 1. **Create comprehensive todo list** for tracking all research phases and tasks
 2. I will break down your topic into focused sub-topics
-3. Spawn researcher role subagents in parallel (typically 3-5 simultaneously)
-4. All researcher role subagents work concurrently on their assigned areas
+3. **SPAWN RESEARCHER ROLE SUBAGENTS (Role: researcher)** in parallel (typically 3-5 simultaneously)
+4. **ALL RESEARCHER ROLE SUBAGENTS (Role: researcher)** work concurrently on their assigned areas
 5. **Use todo tracking throughout** to maintain visibility into research progress
 6. Create outline and delegate sections through autonomous section-based workflow:
    - Outline Creation: Review ALL researcher summaries, create detailed 8-10 section outline
-   - Section Delegation: Spawn single summarizer role subagent to iteratively refine all sections (3 rounds each)
+   - Section Delegation: **SPAWN SINGLE SUMMARIZER ROLE SUBAGENT (Role: summarizer)** to iteratively refine all sections (3 rounds each)
    - Section Collection: Collect section file paths from summarizer emit_result automatically
    - Final Assembly: Use cat command to concatenate sections and display final report (automatic)
 7. MANDATORY: Review researcher source summaries before outline creation

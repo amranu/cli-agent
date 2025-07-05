@@ -1,8 +1,13 @@
 {
   "approvals": [
+    "multiedit",
+    "grep",
+    "glob",
     "webfetch",
     "websearch",
-    "grep"
+    "replace_in_file",
+    "bash_execute",
+    "write_file"
   ],
   "denials": [],
   "auto_approve": false

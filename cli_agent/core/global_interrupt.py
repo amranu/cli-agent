@@ -81,10 +81,8 @@ class GlobalInterruptManager:
                 # Always interrupt operations and continue - don't exit from signal handler
                 # The prompt_toolkit key binding will handle empty prompt exits
                 self.set_interrupted(True)
-                print(
-                    "\n🛑 Operation interrupted.",
-                    flush=True,
-                )
+                # Removed confusing interrupt message that appears at wrong times
+                # Chat interface will handle user feedback appropriately
 
             # Call all registered callbacks
             for callback in self._callbacks[

@@ -386,16 +386,54 @@ class BuiltinToolExecutor:
             return "Error: No URL provided"
 
         try:
+            # Enhanced headers to better mimic real browser behavior
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-                "Accept-Encoding": "gzip, deflate",
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
                 "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1"
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Cache-Control": "max-age=0",
+                "DNT": "1",
+                "Sec-CH-UA": '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+                "Sec-CH-UA-Mobile": "?0",
+                "Sec-CH-UA-Platform": '"macOS"'
             }
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
+            
+            # Use a session for better persistence
+            import requests
+            session = requests.Session()
+            session.headers.update(headers)
+            
+            # Add a small delay to avoid being flagged as too fast
+            import time, random
+            time.sleep(random.uniform(0.5, 1.5))
+            
+            try:
+                response = session.get(url, timeout=30, allow_redirects=True)
+                response.raise_for_status()
+            except requests.exceptions.HTTPError as e:
+                if "403" in str(e) or "Forbidden" in str(e):
+                    # Try with a different user agent as fallback
+                    fallback_headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.5",
+                        "Accept-Encoding": "gzip, deflate, br",
+                        "Connection": "keep-alive",
+                        "Upgrade-Insecure-Requests": "1"
+                    }
+                    session.headers.update(fallback_headers)
+                    time.sleep(random.uniform(1.0, 2.0))  # Longer delay for retry
+                    response = session.get(url, timeout=30, allow_redirects=True)
+                    response.raise_for_status()
+                else:
+                    raise
 
             # Convert HTML to markdown
             markdown_content = self._html_to_markdown(response.text)
@@ -411,6 +449,13 @@ class BuiltinToolExecutor:
 
             return f"Content from {url}:\n\n{content}"
 
+        except requests.exceptions.HTTPError as e:
+            if "403" in str(e) or "Forbidden" in str(e):
+                return f"Error: Access forbidden (403) for {url}. This site may be blocking automated requests. Consider finding an alternative source or trying a different URL from the same domain."
+            elif "404" in str(e):
+                return f"Error: Page not found (404) for {url}. The URL may be incorrect or the page may have been moved or deleted."
+            else:
+                return f"HTTP Error fetching URL: {str(e)}"
         except requests.exceptions.RequestException as e:
             return f"Error fetching URL: {str(e)}"
         except Exception as e:

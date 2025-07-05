@@ -392,10 +392,8 @@ class ChatInterface:
                                 except Exception:
                                     pass
                             
-                            # Try to emit as event if event bus is available
-                            await self._emit_interruption(
-                                "Request cancelled by user", "user"
-                            )
+                            # Removed confusing cancellation message that appears at wrong times
+                            # The interrupt is handled appropriately by the system
                             input_handler.interrupted = False
                             # Don't clear interrupt state immediately - let user press Ctrl+C again to exit
                             # self.global_interrupt_manager.clear_interrupt()
@@ -425,9 +423,7 @@ class ChatInterface:
                                     # First interrupt: handle gracefully and continue
                                     logger.info(f"First interrupt detected, handling gracefully: {e}")
                                     current_task = None
-                                    await self._emit_interruption(
-                                        "Operation interrupted by user", "user"
-                                    )
+                                    # Removed confusing interrupt message that appears at wrong times
                                     # Let the main loop handle clearing the interrupt state
                                     continue
                                 elif isinstance(e, KeyboardInterrupt):
