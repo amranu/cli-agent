@@ -5,6 +5,7 @@ A powerful, modular command-line interface for interacting with AI models enhanc
 ## 🚀 Features
 
 - **Multiple AI Backends**: Support for Anthropic Claude, OpenAI GPT, DeepSeek, Google Gemini, OpenRouter, and ollama with easy extensibility
+- **Deep Research System**: Coordinated multi-subagent research workflow with autonomous report generation
 - **Hooks System**: Powerful workflow automation with security controls - audit commands, block dangerous operations, auto-format code, and integrate with external tools
 - **MCP Model Server**: Expose all AI models as standardized MCP tools with persistent conversations
 - **Modular Architecture**: Provider-model separation with centralized base agent for maximum flexibility
@@ -241,6 +242,7 @@ Within the interactive chat, use these slash commands:
 -   `/tokens` - Show token usage
 -   `/compact` - Compact conversation history
 -   `/switch <provider>:<model>` - Switch to any provider-model combination
+-   `/deep-research <topic>` - Launch coordinated multi-subagent research workflow
 
 ## 📚 Examples
 
@@ -283,6 +285,81 @@ You: Can you analyze this large log file and find any error patterns?
 ```
 
 Subagents work independently and automatically return results to the main conversation.
+
+### Example: Deep Research Workflow
+
+For comprehensive research on complex topics, use the coordinated multi-subagent research system:
+
+```
+You: /deep-research Enterprise AI Adoption in Healthcare 2024
+
+[System switches to Research Director role and launches automated workflow]
+
+Research Director: 
+1. Creates comprehensive todo list for tracking research phases
+2. Breaks down topic into focused sub-topics (e.g., "Current AI Tools", "Implementation Challenges", "ROI Analysis", "Future Trends")
+3. Spawns multiple researcher role subagents in parallel
+4. Each researcher conducts web searches and creates 3+ source summaries
+5. Creates detailed outline based on all research findings
+6. Spawns single summarizer role subagent to write sections
+7. Assembles final 10-12 page executive report automatically
+8. Displays completed research report to user
+
+Final Output: `/tmp/deep_research_master_report_[topic]_[timestamp].md`
+```
+
+**Key Features:**
+- **Autonomous Operation**: Runs start-to-finish without user intervention
+- **Parallel Research**: Multiple subagents work simultaneously on different aspects
+- **Role-Based Coordination**: Research Director → Researchers → Summarizer workflow
+- **Comprehensive Coverage**: Targets 10-100 sources across academic, industry, news, and expert sources
+- **Executive Quality**: Professional 10-12 page reports with structured analysis
+
+## 🔬 Deep Research System
+
+The CLI Agent features a sophisticated deep research system that coordinates multiple specialized subagents to conduct comprehensive research on complex topics.
+
+### Research Workflow
+
+The `/deep-research` command launches a fully autonomous research process:
+
+1. **Topic Analysis**: Research Director analyzes the topic and creates comprehensive todo tracking
+2. **Parallel Research**: Spawns 3-5 researcher role subagents to work simultaneously on different sub-topics
+3. **Source Collection**: Each researcher conducts web searches and creates detailed source summaries (minimum 3 sources each)
+4. **Outline Creation**: Research Director reviews all findings and creates detailed 8-10 section outline
+5. **Report Writing**: Single summarizer role subagent writes all sections with 3-round iterative refinement
+6. **Final Assembly**: Automatically concatenates sections into executive-quality master report
+
+### Research Roles
+
+- **Research Director**: Coordinates the entire workflow, manages todo tracking, and assembles final reports
+- **Researcher**: Conducts web searches, reads sources, and creates comprehensive summaries
+- **Summarizer**: Writes structured report sections based on research findings with iterative refinement
+
+### Output Quality
+
+- **Target Length**: 10-12 pages (5,000-6,000 words)
+- **Source Coverage**: 10-100 sources across academic, industry, news, and expert categories
+- **Structure**: Executive summary, detailed analysis, key findings, recommendations
+- **Format**: Professional markdown reports with proper citations and structure
+
+### Usage Examples
+
+```bash
+# Technology research
+/deep-research Enterprise AI Adoption in Healthcare 2024
+
+# Market analysis
+/deep-research Competitive Analysis of Electric Vehicle Market 2024
+
+# Technical investigation
+/deep-research Cybersecurity Threats in Cloud Infrastructure
+
+# Industry trends
+/deep-research Future of Remote Work Technologies Post-2024
+```
+
+All research is conducted autonomously without user intervention, producing publication-ready reports.
 
 ## 🏗️ Architecture
 
