@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-cli-agent"
-version = "1.2.5"
+version = "1.2.6"
 description = "MCP-enabled AI assistant with tool integration"
 readme = "README.md"
 requires-python = ">=3.10"
