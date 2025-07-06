@@ -378,63 +378,208 @@ class BuiltinToolExecutor:
             return f"Error performing multi-edit: {str(e)}"
 
     def webfetch(self, args: Dict[str, Any]) -> str:
-        """Fetch content from a webpage and convert HTML to markdown."""
+        """Fetch content from a webpage and convert HTML to markdown using advanced anti-bot techniques."""
         url = args.get("url", "")
         limit = args.get("limit", 1000)
 
         if not url:
             return "Error: No URL provided"
 
+        import time
+        import random
+        import urllib.parse
+        from urllib.parse import urlparse
+        
+        # Get domain for referrer spoofing
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc
+        
+        # Try curl-cffi first (best TLS fingerprinting)
         try:
-            # Enhanced headers to better mimic real browser behavior
+            import curl_cffi.requests as cf_requests
+            
+            # Browser impersonation options for curl-cffi (verified supported versions)
+            browsers = ["chrome110", "chrome116", "chrome120", "safari15_5"]
+            selected_browser = random.choice(browsers)
+            
+            # Create session with browser impersonation
+            session = cf_requests.Session()
+            
+            # Custom headers with referrer spoofing
+            search_referrers = [
+                f"https://www.google.com/search?q={urllib.parse.quote(domain)}",
+                f"https://duckduckgo.com/?q={urllib.parse.quote(domain)}",
+                f"https://startpage.com/do/dsearch?query={urllib.parse.quote(domain)}",
+                f"https://{domain}/"
+            ]
+            
             headers = {
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Referer": random.choice(search_referrers),
                 "Accept-Language": "en-US,en;q=0.9",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1",
                 "Cache-Control": "max-age=0",
-                "DNT": "1",
-                "Sec-CH-UA": '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-                "Sec-CH-UA-Mobile": "?0",
-                "Sec-CH-UA-Platform": '"macOS"'
+                "DNT": "1"
             }
             
-            # Use a session for better persistence
-            import requests
-            session = requests.Session()
-            session.headers.update(headers)
+            # Human-like delay
+            delay = random.uniform(1.0, 3.0)
+            time.sleep(delay)
             
-            # Add a small delay to avoid being flagged as too fast
-            import time, random
-            time.sleep(random.uniform(0.5, 1.5))
+            # For some domains, visit homepage first to establish session
+            if random.random() < 0.3:
+                try:
+                    homepage_url = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+                    if homepage_url != url:
+                        session.get(homepage_url, headers=headers, timeout=15, impersonate=selected_browser)
+                        time.sleep(random.uniform(0.5, 1.5))
+                except:
+                    pass
             
+            # Make the main request with TLS fingerprinting
+            response = session.get(url, headers=headers, timeout=30, impersonate=selected_browser)
+            response.raise_for_status()
+            
+        except ImportError:
+            # curl-cffi not available, try tls-client
             try:
+                import tls_client
+                
+                # Browser profiles for TLS fingerprinting
+                profiles = [
+                    "chrome_108", "chrome_112", "chrome_116", "chrome_120",
+                    "firefox_108", "firefox_110", "firefox_117", 
+                    "safari_15_6_1", "safari_16_0"
+                ]
+                selected_profile = random.choice(profiles)
+                
+                # Create TLS client session
+                session = tls_client.Session(
+                    client_identifier=selected_profile,
+                    random_tls_extension_order=True
+                )
+                
+                # Custom headers
+                search_referrers = [
+                    f"https://www.google.com/search?q={urllib.parse.quote(domain)}",
+                    f"https://duckduckgo.com/?q={urllib.parse.quote(domain)}",
+                    f"https://startpage.com/do/dsearch?query={urllib.parse.quote(domain)}",
+                    f"https://{domain}/"
+                ]
+                
+                headers = {
+                    "Referer": random.choice(search_referrers),
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Cache-Control": "max-age=0",
+                    "DNT": "1",
+                    "Upgrade-Insecure-Requests": "1"
+                }
+                
+                # Human-like delay
+                delay = random.uniform(1.0, 3.0)
+                time.sleep(delay)
+                
+                # Visit homepage first sometimes
+                if random.random() < 0.3:
+                    try:
+                        homepage_url = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+                        if homepage_url != url:
+                            session.get(homepage_url, headers=headers, timeout=15)
+                            time.sleep(random.uniform(0.5, 1.5))
+                    except:
+                        pass
+                
+                # Make the main request
+                response = session.get(url, headers=headers, timeout=30)
+                response.raise_for_status()
+                
+            except ImportError:
+                # Both advanced libraries unavailable, fall back to enhanced requests
+                import requests
+                
+                # Enhanced browser fingerprints rotation
+                browser_configs = [
+                    {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                        "Sec-CH-UA": '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+                        "Sec-CH-UA-Platform": '"Windows"',
+                        "Accept-Language": "en-US,en;q=0.9"
+                    },
+                    {
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                        "Sec-CH-UA": '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+                        "Sec-CH-UA-Platform": '"macOS"',
+                        "Accept-Language": "en-US,en;q=0.9"
+                    },
+                    {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
+                        "Accept-Language": "en-US,en;q=0.5"
+                    },
+                    {
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15",
+                        "Accept-Language": "en-US,en;q=0.9"
+                    }
+                ]
+                
+                config = random.choice(browser_configs)
+                
+                # Build comprehensive headers
+                headers = {
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Connection": "keep-alive",
+                    "Upgrade-Insecure-Requests": "1",
+                    "Cache-Control": "max-age=0",
+                    "DNT": "1",
+                    **config
+                }
+                
+                # Add Chrome-specific headers if using Chrome
+                if "Chrome" in config["User-Agent"] and "Safari" in config["User-Agent"]:
+                    headers.update({
+                        "Sec-Fetch-Dest": "document",
+                        "Sec-Fetch-Mode": "navigate", 
+                        "Sec-Fetch-Site": "none",
+                        "Sec-Fetch-User": "?1",
+                        "Sec-CH-UA-Mobile": "?0"
+                    })
+                
+                # Add referrer spoofing
+                search_referrers = [
+                    f"https://www.google.com/search?q={urllib.parse.quote(domain)}",
+                    f"https://duckduckgo.com/?q={urllib.parse.quote(domain)}",
+                    f"https://startpage.com/do/dsearch?query={urllib.parse.quote(domain)}",
+                    f"https://{domain}/"
+                ]
+                headers["Referer"] = random.choice(search_referrers)
+                
+                # Create session with cookie persistence
+                session = requests.Session()
+                session.headers.update(headers)
+                session.cookies.update({
+                    'accept-language': 'en-US,en;q=0.9',
+                    'accept-encoding': 'gzip, deflate, br'
+                })
+                
+                # Human-like delay
+                delay = random.uniform(1.0, 3.0)
+                time.sleep(delay)
+                
+                # Visit homepage first sometimes
+                if random.random() < 0.3:
+                    try:
+                        homepage_url = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+                        if homepage_url != url:
+                            session.get(homepage_url, timeout=15, allow_redirects=True)
+                            time.sleep(random.uniform(0.5, 1.5))
+                    except:
+                        pass
+                
                 response = session.get(url, timeout=30, allow_redirects=True)
                 response.raise_for_status()
-            except requests.exceptions.HTTPError as e:
-                if "403" in str(e) or "Forbidden" in str(e):
-                    # Try with a different user agent as fallback
-                    fallback_headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                        "Accept-Language": "en-US,en;q=0.5",
-                        "Accept-Encoding": "gzip, deflate, br",
-                        "Connection": "keep-alive",
-                        "Upgrade-Insecure-Requests": "1"
-                    }
-                    session.headers.update(fallback_headers)
-                    time.sleep(random.uniform(1.0, 2.0))  # Longer delay for retry
-                    response = session.get(url, timeout=30, allow_redirects=True)
-                    response.raise_for_status()
-                else:
-                    raise
 
+        # Process response (common to all methods)
+        try:
             # Convert HTML to markdown
             markdown_content = self._html_to_markdown(response.text)
             
@@ -449,17 +594,19 @@ class BuiltinToolExecutor:
 
             return f"Content from {url}:\n\n{content}"
 
-        except requests.exceptions.HTTPError as e:
-            if "403" in str(e) or "Forbidden" in str(e):
-                return f"Error: Access forbidden (403) for {url}. This site may be blocking automated requests. Consider finding an alternative source or trying a different URL from the same domain."
-            elif "404" in str(e):
-                return f"Error: Page not found (404) for {url}. The URL may be incorrect or the page may have been moved or deleted."
-            else:
-                return f"HTTP Error fetching URL: {str(e)}"
-        except requests.exceptions.RequestException as e:
-            return f"Error fetching URL: {str(e)}"
         except Exception as e:
-            return f"Error: {str(e)}"
+            # Handle any HTTP or processing errors
+            error_str = str(e)
+            if "403" in error_str or "Forbidden" in error_str:
+                return f"Error: Access forbidden (403) for {url}. This site may be blocking automated requests. Consider finding an alternative source or trying a different URL from the same domain."
+            elif "404" in error_str:
+                return f"Error: Page not found (404) for {url}. The URL may be incorrect or the page may have been moved or deleted."
+            elif "timeout" in error_str.lower():
+                return f"Error: Request timeout for {url}. The site may be slow or unreachable."
+            elif "connection" in error_str.lower():
+                return f"Error: Connection failed for {url}. Check the URL and try again."
+            else:
+                return f"Error fetching URL: {error_str}"
 
     def _html_to_markdown(self, html_content: str) -> str:
         """Convert HTML content to clean markdown format."""
@@ -555,7 +702,7 @@ class BuiltinToolExecutor:
         return '\n'.join(lines)
 
     def websearch(self, args: Dict[str, Any]) -> str:
-        """Search the web using DuckDuckGo with BeautifulSoup HTML parsing."""
+        """Search the web using DuckDuckGo search library with fallback to HTML scraping."""
         query = args.get("query", "")
         allowed_domains = args.get("allowed_domains", [])
         blocked_domains = args.get("blocked_domains", [])
@@ -563,12 +710,126 @@ class BuiltinToolExecutor:
         if not query:
             return "Error: No search query provided"
 
+        # Try using duckduckgo-search library first (most reliable)
+        try:
+            from duckduckgo_search import DDGS
+            from duckduckgo_search.exceptions import RatelimitException, TimeoutException
+            
+            # Build search query with domain filtering
+            search_query = query
+            if allowed_domains:
+                domain_filters = " OR ".join([f"site:{domain}" for domain in allowed_domains])
+                search_query = f"{query} ({domain_filters})"
+            
+            # Create DDGS instance with browser impersonation
+            ddgs = DDGS(
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"},
+                timeout=20,
+                proxies=None  # Could add proxy support later
+            )
+            
+            try:
+                # Get search results using the official library
+                results = ddgs.text(
+                    search_query,
+                    max_results=15,  # Get more results than we need for filtering
+                    region="us-en",
+                    safesearch="moderate",
+                    timelimit=None
+                    # Let duckduckgo-search choose the best backend automatically
+                )
+                
+                # Convert generator to list and process results
+                search_results = []
+                for result in results:
+                    url = result.get("href", "")
+                    title = result.get("title", "No title")
+                    description = result.get("body", "No description available")
+                    
+                    # Apply blocked domain filtering
+                    if blocked_domains and any(domain in url for domain in blocked_domains):
+                        continue
+                    
+                    # Apply allowed domain filtering (if not already in query)
+                    if allowed_domains and not any(domain in url for domain in allowed_domains):
+                        continue
+                    
+                    search_results.append({
+                        'title': title[:150] if title else "No title",
+                        'url': url,
+                        'description': description[:300] if description else "No description available"
+                    })
+                
+                if search_results:
+                    results_text = [f"Found {len(search_results)} search results for '{query}' (via DuckDuckGo Search)"]
+                    results_text.append("")
+                    
+                    for i, result_data in enumerate(search_results, 1):
+                        results_text.append(f"**{i}. {result_data['title']}**")
+                        results_text.append(f"URL: {result_data['url']}")
+                        if result_data.get('description'):
+                            results_text.append(f"Description: {result_data['description']}")
+                        results_text.append("")
+                    
+                    return f"Web search results:\n\n" + "\n".join(results_text)
+                
+            except RatelimitException:
+                # Rate limited, try with different backend
+                try:
+                    results = ddgs.text(
+                        search_query,
+                        max_results=10,
+                        region="us-en", 
+                        safesearch="moderate"
+                        # Use default backend for rate limit fallback
+                    )
+                    
+                    search_results = []
+                    for result in list(results)[:10]:  # Limit results due to rate limiting
+                        url = result.get("href", "")
+                        if blocked_domains and any(domain in url for domain in blocked_domains):
+                            continue
+                        if allowed_domains and not any(domain in url for domain in allowed_domains):
+                            continue
+                        
+                        search_results.append({
+                            'title': result.get("title", "No title")[:150],
+                            'url': url,
+                            'description': result.get("body", "No description")[:300]
+                        })
+                    
+                    if search_results:
+                        results_text = [f"Found {len(search_results)} search results for '{query}' (via DuckDuckGo Search - rate limited)"]
+                        results_text.append("")
+                        
+                        for i, result_data in enumerate(search_results, 1):
+                            results_text.append(f"**{i}. {result_data['title']}**")
+                            results_text.append(f"URL: {result_data['url']}")
+                            results_text.append(f"Description: {result_data['description']}")
+                            results_text.append("")
+                        
+                        return f"Web search results:\n\n" + "\n".join(results_text)
+                        
+                except Exception:
+                    pass  # Fall through to HTML scraping fallback
+                    
+            except TimeoutException:
+                pass  # Fall through to HTML scraping fallback
+                
+        except ImportError:
+            # duckduckgo-search not available, fall through to HTML scraping
+            pass
+        except Exception as e:
+            # Unexpected error with duckduckgo-search, fall through to HTML scraping
+            logger.warning(f"DuckDuckGo search library failed: {e}")
+
+        # Fallback to HTML scraping (original implementation)
         try:
             from urllib.parse import quote_plus
             from bs4 import BeautifulSoup
             import html
             
-            # Prepare the search query
+            # Prepare the search query for HTML scraping
             encoded_query = quote_plus(query)
             
             # Apply domain filtering if specified
@@ -576,13 +837,8 @@ class BuiltinToolExecutor:
                 site_restriction = " OR ".join([f"site:{domain}" for domain in allowed_domains])
                 encoded_query = quote_plus(f"{query} ({site_restriction})")
             
-            # Use Bing as primary, with DuckDuckGo as fallback
+            # Use only DuckDuckGo variants - no Bing fallback
             search_configs = [
-                {
-                    "url": f"https://www.bing.com/search?q={encoded_query}",
-                    "name": "Bing",
-                    "selectors": ['li.b_algo', '.b_algo', 'div.b_title', 'h2', 'a[href^="http"]']
-                },
                 {
                     "url": f"https://lite.duckduckgo.com/lite/?q={encoded_query}",
                     "name": "DuckDuckGo Lite",

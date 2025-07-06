@@ -27,7 +27,7 @@ if current_dir not in sys.path:
 
 from cli_agent.utils.tool_name_utils import ToolNameUtils
 from config import load_config
-from subagent import emit_error, emit_message, emit_output, emit_result, emit_status, emit_tool_request, emit_tool_result
+from cli_agent.subagents.subagent import emit_error, emit_message, emit_output, emit_result, emit_status, emit_tool_request, emit_tool_result
 
 # Global task_id for use in emit functions
 current_task_id = None
@@ -157,6 +157,7 @@ async def run_subagent_task(task_file_path: str):
                 provider_model, is_subagent=True
             )
             
+            
             try:
                 with open("/tmp/subagent_host_creation.txt", "a") as f:
                     f.write(f"=== Subagent host created successfully ===\n")
@@ -173,6 +174,8 @@ async def run_subagent_task(task_file_path: str):
         else:
             # Use current default provider-model
             host = config.create_host_from_provider_model(is_subagent=True)
+            
+                
             emit_output_with_id(f"Created {config.default_provider_model} subagent")
 
         
@@ -393,23 +396,10 @@ CRITICAL INSTRUCTIONS FOR SUBAGENT:
             # Track if emit_result was called
             original_execute_mcp_tool = host.tool_execution_engine.execute_mcp_tool
             
-            # Debug: Check what host this method is bound to
-            try:
-                with open("/tmp/original_execute_debug.txt", "a") as f:
-                    f.write(f"=== original_execute_mcp_tool binding ===\n")
-                    f.write(f"original_execute_mcp_tool: {original_execute_mcp_tool}\n")
-                    f.write(f"bound to engine: {original_execute_mcp_tool.__self__}\n")
-                    f.write(f"engine.agent: {original_execute_mcp_tool.__self__.agent}\n")
-                    f.write(f"engine.agent.is_subagent: {getattr(original_execute_mcp_tool.__self__.agent, 'is_subagent', 'MISSING')}\n")
-                    f.write(f"engine.agent == host: {original_execute_mcp_tool.__self__.agent == host}\n")
-                    f.write(f"host id: {id(host)}\n")
-                    f.write(f"engine.agent id: {id(original_execute_mcp_tool.__self__.agent)}\n")
-                    f.write("========================================\n")
-            except:
-                pass
 
             async def track_emit_result_tool(tool_key, arguments):
                 nonlocal emit_result_called
+                
                 
                 # Set tool information on input handler before execution for permission display
                 if hasattr(host, '_input_handler') and host._input_handler and hasattr(host._input_handler, 'set_current_tool_info'):

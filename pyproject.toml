@@ -42,6 +42,9 @@ dependencies = [
     "anthropic>=0.25.0",
     "PyYAML>=6.0.0",
     "beautifulsoup4>=4.12.0",
+    "duckduckgo-search>=8.0.0",
+    "curl-cffi>=0.11.0",
+    "tls-client>=1.0.0",
 ]
 
 [project.optional-dependencies]
