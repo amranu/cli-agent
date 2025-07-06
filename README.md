@@ -241,7 +241,6 @@ Within the interactive chat, use these slash commands:
 -   `/tokens` - Show token usage
 -   `/compact` - Compact conversation history
 -   `/switch <provider>:<model>` - Switch to any provider-model combination
--   `/task` - Spawn a subagent for complex tasks
 
 ## 📚 Examples
 
@@ -275,7 +274,8 @@ You: What's the disk usage of this folder?
 For complex or context-heavy tasks, delegate to focused subagents:
 
 ```
-You: /task Analyze all Python files in the src/ directory and create a summary of the class structure and dependencies
+You: Can you analyze all Python files in the src/ directory and create a summary of the class structure and dependencies?
+     [Agent automatically spawns subagent using the task tool]
 
 You: Can you analyze this large log file and find any error patterns?
      [Agent automatically spawns subagent for file analysis]
