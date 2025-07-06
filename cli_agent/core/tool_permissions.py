@@ -66,47 +66,45 @@ class ToolPermissionResult:
 class ToolPermissionManager:
     """Manages tool permissions with user prompts and session tracking."""
 
-    def __init__(self, config: ToolPermissionConfig):
+    def __init__(self, config: ToolPermissionConfig, session_id: Optional[str] = None):
         self.config = config
         self.session_approvals: Set[str] = set()  # Tools approved for this session
         self.session_denials: Set[str] = set()  # Tools denied for this session
         self.session_auto_approve: bool = False  # Auto-approve all for this session
         
+        # Generate session-specific permissions file
+        import uuid
+        if session_id is None:
+            session_id = str(uuid.uuid4())[:8]
+        self.session_id = session_id
+        self.session_permissions_file = f"sessions/.tool_permissions_{session_id}.json"
+        
         # Get clean permission display manager
         self.clean_permission_display = get_clean_permission_display()
 
-        # Load persistent session permissions
+        # Load session-specific permissions (will be empty for new sessions)
         self._load_session_permissions()
 
     def _load_session_permissions(self):
-        """Load persistent session permissions from file."""
-        # Skip loading if session permissions file is disabled
-        if not self.config.session_permissions_file:
-            logger.info(
-                "Session permissions file disabled - starting with empty approvals"
-            )
-            return
-
+        """Load session-specific permissions from file."""
         try:
-            permissions_file = Path(self.config.session_permissions_file)
+            permissions_file = Path(self.session_permissions_file)
             if permissions_file.exists():
                 with open(permissions_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.session_approvals = set(data.get("approvals", []))
                     self.session_denials = set(data.get("denials", []))
                     self.session_auto_approve = data.get("auto_approve", False)
+                logger.debug(f"Loaded session permissions from {self.session_permissions_file}")
+            else:
+                logger.debug(f"No existing session permissions file - starting with empty approvals")
         except Exception as e:
             logger.warning(f"Could not load session permissions: {e}")
 
     def _save_session_permissions(self):
-        """Save persistent session permissions to file."""
-        # Skip saving if session permissions file is disabled
-        if not self.config.session_permissions_file:
-            logger.info("Session permissions file disabled - not saving approvals")
-            return
-
+        """Save session-specific permissions to file."""
         try:
-            permissions_file = Path(self.config.session_permissions_file)
+            permissions_file = Path(self.session_permissions_file)
             permissions_file.parent.mkdir(parents=True, exist_ok=True)
 
             data = {
@@ -117,6 +115,9 @@ class ToolPermissionManager:
 
             with open(permissions_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+            
+            logger.debug(f"Saved session permissions to {self.session_permissions_file}")
+
         except Exception as e:
             logger.warning(f"Could not save session permissions: {e}")
 

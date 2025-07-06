@@ -1056,8 +1056,10 @@ class BuiltinToolExecutor:
 
             # Track active count before and after spawning
             initial_count = self.agent.subagent_manager.get_active_count()
+            # Pass session_id for permission inheritance
+            session_id = getattr(self.agent, "_session_id", None)
             task_id = await self.agent.subagent_manager.spawn_subagent(
-                description, full_prompt, model=model, role=role
+                description, full_prompt, model=model, role=role, session_id=session_id
             )
             final_count = self.agent.subagent_manager.get_active_count()
 

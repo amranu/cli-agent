@@ -200,7 +200,9 @@ async def run_subagent_task(task_file_path: str):
             disallowed_tools=list(config.disallowed_tools),
             auto_approve_session=config.auto_approve_tools,
         )
-        permission_manager = ToolPermissionManager(permission_config)
+        # Inherit session_id from main agent for shared permissions
+        parent_session_id = task_data.get("session_id", None)
+        permission_manager = ToolPermissionManager(permission_config, session_id=parent_session_id)
         host.permission_manager = permission_manager
 
         # Set up JSON handler if in stream-json mode (detected via environment)

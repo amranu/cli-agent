@@ -52,12 +52,13 @@ class SubagentMessage:
 class SubagentProcess:
     """Manages a single subagent subprocess."""
 
-    def __init__(self, task_id: str, description: str, prompt: str, model: str = None, role: str = None):
+    def __init__(self, task_id: str, description: str, prompt: str, model: str = None, role: str = None, session_id: str = None):
         self.task_id = task_id
         self.description = description
         self.prompt = prompt
         self.model = model  # Store model preference for this subagent
         self.role = role  # Store role preference for this subagent
+        self.session_id = session_id  # Store session ID for permission inheritance
         self.process: Optional[subprocess.Popen] = None
         self.start_time = time.time()
         self.completed = False
@@ -77,6 +78,7 @@ class SubagentProcess:
                     "timestamp": self.start_time,
                     "model": self.model,  # Include model preference in task data
                     "role": self.role,  # Include role preference in task data
+                    "session_id": self.session_id,  # Include session ID for permission inheritance
                 }
                 json.dump(task_data, f)
                 task_file = f.name
@@ -196,7 +198,7 @@ class SubagentManager:
         self._monitoring_tasks: Dict[str, asyncio.Task] = {}
 
     async def spawn_subagent(
-        self, description: str, prompt: str, model: str = None, role: str = None
+        self, description: str, prompt: str, model: str = None, role: str = None, session_id: str = None
     ) -> str:
         """Spawn a new subagent and return its task_id."""
         # Generate unique task_id using timestamp + microseconds + counter to avoid collisions
@@ -215,7 +217,7 @@ class SubagentManager:
             f"NEW SUBAGENT SYSTEM: description={description}, prompt={prompt[:50]}..., model={model}"
         )
 
-        subagent = SubagentProcess(task_id, description, prompt, model=model, role=role)
+        subagent = SubagentProcess(task_id, description, prompt, model=model, role=role, session_id=session_id)
         success = await subagent.start(self.config, agent=self.agent)
 
         if success:

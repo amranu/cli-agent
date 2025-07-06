@@ -600,7 +600,10 @@ async def ask(
             disallowed_tools=final_disallowed_tools,
             auto_approve_session=final_auto_approve,
         )
-        permission_manager = ToolPermissionManager(permission_config)
+        # Use temporary session ID for one-off ask command
+        import uuid
+        temp_session_id = str(uuid.uuid4())[:8]
+        permission_manager = ToolPermissionManager(permission_config, session_id=temp_session_id)
 
         # Set the permission manager on the host (no input handler for ask command)
         host.permission_manager = permission_manager
@@ -730,7 +733,9 @@ async def execute_task_subprocess(task_file_path: str):
             disallowed_tools=list(config.disallowed_tools),
             auto_approve_session=config.auto_approve_tools,
         )
-        permission_manager = ToolPermissionManager(permission_config)
+        # Inherit session_id from main agent for shared permissions
+        parent_session_id = task_data.get("session_id", None)
+        permission_manager = ToolPermissionManager(permission_config, session_id=parent_session_id)
         subagent.permission_manager = permission_manager
 
         # Set up custom input handler for subagent that connects to main terminal
@@ -1293,7 +1298,7 @@ async def handle_text_chat(
         disallowed_tools=final_disallowed_tools,
         auto_approve_session=final_auto_approve,
     )
-    permission_manager = ToolPermissionManager(permission_config)
+    permission_manager = ToolPermissionManager(permission_config, session_id=session_id)
 
     # Set the permission manager on the host
     host.permission_manager = permission_manager
