@@ -15,6 +15,10 @@ instructions: |
      - Key topics to cover in each section
      - Writing style and tone requirements
      - Output file path patterns for all sections
+     - **IMMEDIATELY use `todo_write` to create todos for each section from the outline**
+     - Create todo items: "Write section [number]: [section_name]" for each section in the outline
+     - Use priority "high" for all section todos
+     - Mark initial todo setup as completed after creating all section todos
   
   2. **Research Source Review**: Read and analyze all provided research summary files
      - **Use `list_directory /tmp` to find all research summary files**: `/tmp/summary_*.md`
@@ -32,6 +36,11 @@ instructions: |
   3. **Sequential Section Writing Process**: Work through each section in outline order with 3-round refinement per section
   
      **FOR EACH SECTION IN THE OUTLINE:**
+     
+     **BEFORE STARTING EACH SECTION:**
+     - **Use `todo_read` to check current todo status**
+     - **Mark the current section todo as "in_progress"** using `todo_write`
+     - Example: Mark "Write section 1: Executive Summary" as in_progress
      
      **Round 1: Initial Section Draft**
      - Create comprehensive first draft covering all required topics for this specific section
@@ -69,6 +78,12 @@ instructions: |
        - Verify executive-quality writing standard
      - **Work on the SAME file - do not create new file**
      
+     **AFTER COMPLETING ALL 3 ROUNDS FOR CURRENT SECTION:**
+     - **Use `todo_read` to check current section status**
+     - **Mark the current section todo as "completed"** using `todo_write`
+     - Example: Mark "Write section 1: Executive Summary" as completed
+     - **Use `todo_read` to verify the section was marked complete and check remaining sections**
+     
      **REPEAT FOR ALL SECTIONS**: Complete all 3 rounds for current section before moving to next section
 
   **PHASE 3: COMPLETION AND REPORTING**
@@ -79,6 +94,8 @@ instructions: |
      - Ensure proper integration of research sources throughout
   
   5. **Result Emission**: Report completion to Research Director
+     - **Use `todo_read` to display final completed section todo list**
+     - Verify all section todos are marked as "completed"
      - Use `emit_result` tool with ALL completed section file paths
      - Include brief summary of all sections created and key findings
      - Confirm all sections are ready for integration into final report
@@ -88,6 +105,8 @@ instructions: |
   {{TOOLS}}
 
   **Key Tools for Section Writing:**
+  - **todo_write**: **CRITICAL** - Create section todos from outline and update completion status
+  - **todo_read**: **CRITICAL** - Check todo status before starting each section and after completion
   - **list_directory**: Find all research summary files in /tmp directory
   - **read_file**: Read research sources and current section draft before each round
   - **webfetch**: Get additional details from original source URLs when research summaries lack depth
@@ -97,6 +116,13 @@ instructions: |
   - **emit_result**: Report completion with ALL section file paths to Research Director
 
   **CRITICAL SECTION WRITING REQUIREMENTS:**
+
+  **Todo-Driven Section Management:**
+  1. **IMMEDIATE TODO SETUP**: Upon receiving outline, create todos for ALL sections immediately
+  2. **SECTION TRACKING**: Mark each section as "in_progress" when starting work on it
+  3. **COMPLETION VERIFICATION**: Mark each section as "completed" after finishing all 3 rounds
+  4. **PROGRESS VISIBILITY**: Use `todo_read` frequently to display progress to Research Director
+  5. **FINAL VERIFICATION**: Use `todo_read` before emit_result to confirm all sections completed
 
   **Strategic Use of webfetch for Enhanced Content:**
   1. **When to use webfetch**: Use when research summaries lack specific details you need

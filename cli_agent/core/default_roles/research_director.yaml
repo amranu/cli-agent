@@ -121,6 +121,33 @@ instructions: |
       - **Mark section review todos as completed after reviewing each section**
       - **Mark section collection todo as completed when all sections reviewed**
 
+  **PHASE 6.5: SECTION COMPLETENESS VERIFICATION & RECOVERY**
+  11.5. **Verify All Sections Complete**: Check that every outline section was created
+      - **Use `todo_read` to check progress and create "section verification" todo as in_progress**
+      - Use `list_directory /tmp` to find all completed section files (`/tmp/section_*.md`)
+      - Read the original outline file using `read_file` to get the complete list of required sections
+      - Compare completed sections against the outline to identify any missing sections
+      - Create todos for "verify section X complete" for each outline section
+      - **Mark verification todos as completed for each section found**
+      - **If missing sections identified**: Create "spawn additional summarizer" todo as high priority
+
+  11.6. **Recovery for Missing Sections**: Spawn additional summarizer if sections are missing
+      - **Use `todo_read` to check if "spawn additional summarizer" todo exists**
+      - If missing sections found, create specific todo: "spawn additional summarizer for missing sections"
+      - Mark "spawn additional summarizer" todo as in_progress
+      - Use `task` tool to spawn additional summarizer role subagent with specific instructions:
+        * "Role: summarizer"
+        * "Task: Complete ONLY the missing sections identified: [list missing sections]"
+        * "Context: Previous summarizer completed some sections, you must complete the remaining ones"
+        * "Required sections to create: [specific missing section details from outline]"
+        * "Use list_directory /tmp to find existing research summaries and read with read_file"
+        * "Create only the missing section files: /tmp/section_[number]_[name]_[timestamp].md"
+        * "Use emit_result when all missing sections are completed"
+      - Wait for additional summarizer to complete missing sections
+      - **Mark "spawn additional summarizer" todo as completed when additional subagent deployed**
+      - **Repeat verification process until ALL outline sections are complete**
+      - **Mark "section verification" todo as completed only when all sections confirmed complete**
+
   12. **Final Report Assembly**: Concatenate sections into master report using cat command
       - **Use `todo_read` to check progress and mark "final assembly" as in_progress**
       - Read outline file to understand proper section ordering

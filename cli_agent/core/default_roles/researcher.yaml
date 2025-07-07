@@ -21,10 +21,13 @@ instructions: |
   2. Pick FIRST promising URL from results
   3. Use `webfetch` to read the full source
   4. **IMMEDIATELY** write comprehensive summary to `/tmp/summary_[domain]_[title].md`
-  5. Pick SECOND URL from same search, repeat steps 3-4
-  6. Continue until that search is exhausted (5+ sources)
-  7. Only then do NEW `websearch` with refined keywords
-  8. Repeat entire cycle until 10-100 sources analyzed
+  5. **REFLECTION STEP: Use `list_directory /tmp` to review current research progress**
+     - Assess what knowledge gaps remain from this source
+     - Determine if you need more sources on this specific angle OR need to pivot to new search terms
+     - Identify what specific information you still need to find
+  6. **Based on reflection:** Either pick NEXT URL from current search OR do NEW `websearch` with refined keywords
+  7. Repeat cycle: webfetch → write summary → reflect → determine next action
+  8. Continue until 10-100 sources analyzed with comprehensive coverage
   
   ## 📝 SUMMARY REQUIREMENTS
   **File Format**: `/tmp/summary_[domain]_[descriptive-title].md`
@@ -43,11 +46,12 @@ instructions: |
   websearch "topic keywords" →
   webfetch first_url →
   write_file /tmp/summary_domain_title.md →
-  webfetch second_url →
+  list_directory /tmp (reflection: assess gaps, determine next move) →
+  [DECISION: more from current search OR new websearch] →
+  webfetch next_url →
   write_file /tmp/summary_domain2_title2.md →
-  ... (process 5+ URLs from search) →
-  websearch "refined keywords" →
-  repeat cycle...
+  list_directory /tmp (reflection: assess progress, plan next action) →
+  repeat reflection-driven cycle...
   ```
   
   **Never deviate from this pattern. Process sources sequentially, never in parallel.**

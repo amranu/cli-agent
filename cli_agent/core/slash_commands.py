@@ -919,6 +919,9 @@ Please start by reading the key files to understand the architecture, then write
    - Summarizer will find research sources in /tmp/summary_*.md using list_directory and read_file
    - Single summarizer works through each section sequentially with 3 rounds each and uses emit_result with all file paths
    - Collect section file paths from summarizer emit_result automatically
+   - **VERIFY SECTION COMPLETENESS**: Use `list_directory /tmp` to check all completed section files against outline requirements
+   - **RECOVERY FOR MISSING SECTIONS**: If any sections are missing, spawn additional summarizer subagent for incomplete sections only
+   - **REPEAT VERIFICATION**: Continue verification process until ALL outline sections are confirmed complete
    - Use cat command to concatenate all sections into final master report
    - Display the final concatenated report to the user
 11. **Use `todo_read` and mark todos as in_progress/completed throughout each phase**
@@ -934,6 +937,7 @@ Please start by reading the key files to understand the architecture, then write
 - Phase 5b: **SPAWN SINGLE SUMMARIZER ROLE SUBAGENT (Role: summarizer)** for all sections
 - Phase 6a: Single summarizer completes 3-round iterative refinement per section and emit_result with all file paths
 - Phase 6b: Collect section file paths from summarizer results automatically
+- Phase 6.5: **SECTION VERIFICATION & RECOVERY**: Use `list_directory /tmp` to check completed sections against outline, spawn additional summarizer for missing sections if needed
 - Phase 6c: Use cat command to concatenate sections: `/tmp/deep_research_master_report_[topic]_[timestamp].md`
 - Phase 6d: Display final concatenated report to user using read_file
 - Use `read_file` to review ALL researcher summaries before outline creation
@@ -971,6 +975,8 @@ Begin by analyzing the topic and planning your research strategy."""
    - Outline Creation: Review ALL researcher summaries, create detailed 8-10 section outline
    - Section Delegation: **SPAWN SINGLE SUMMARIZER ROLE SUBAGENT (Role: summarizer)** to iteratively refine all sections (3 rounds each)
    - Section Collection: Collect section file paths from summarizer emit_result automatically
+   - **Section Verification**: Check completed sections against outline using `list_directory /tmp`
+   - **Recovery Process**: Spawn additional summarizer for any missing sections until all complete
    - Final Assembly: Use cat command to concatenate sections and display final report (automatic)
 7. MANDATORY: Review researcher source summaries before outline creation
 8. Complete entire section-based workflow without stopping for user approval
