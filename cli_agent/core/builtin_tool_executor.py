@@ -703,9 +703,19 @@ class BuiltinToolExecutor:
 
     def websearch(self, args: Dict[str, Any]) -> str:
         """Search the web using DuckDuckGo search library with fallback to HTML scraping."""
+        # Debug logging for websearch arguments
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"🔍 WEBSEARCH DEBUG: Raw args type: {type(args)}")
+        logger.error(f"🔍 WEBSEARCH DEBUG: Raw args content: {repr(args)}")
+        
         query = args.get("query", "")
         allowed_domains = args.get("allowed_domains", [])
         blocked_domains = args.get("blocked_domains", [])
+        
+        logger.error(f"🔍 WEBSEARCH DEBUG: Extracted query: {repr(query)}")
+        logger.error(f"🔍 WEBSEARCH DEBUG: Query type: {type(query)}")
+        logger.error(f"🔍 WEBSEARCH DEBUG: Query length: {len(query) if query else 'N/A'}")
 
         if not query:
             return "Error: No search query provided"

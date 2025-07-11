@@ -1655,7 +1655,18 @@ class BaseMCPAgent(ABC):
                 # Parse arguments if they're a string
                 if isinstance(arguments, str):
                     try:
+                        # Debug logging for websearch
+                        if "websearch" in function_name.lower():
+                            logger.error(f"🔍 BASE AGENT DEBUG: Parsing JSON arguments for {function_name}")
+                            logger.error(f"🔍 BASE AGENT DEBUG: Raw JSON string: {repr(arguments)}")
+                        
                         parsed_args = json.loads(arguments)
+                        
+                        # Debug logging for websearch
+                        if "websearch" in function_name.lower():
+                            logger.error(f"🔍 BASE AGENT DEBUG: Parsed args: {repr(parsed_args)}")
+                            logger.error(f"🔍 BASE AGENT DEBUG: Query from parsed: {repr(parsed_args.get('query', 'NOT_FOUND'))}")
+                        
                     except json.JSONDecodeError as e:
                         # Handle JSON parsing errors
                         error_content = (

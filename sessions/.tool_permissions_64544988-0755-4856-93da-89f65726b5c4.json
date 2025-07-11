@@ -1,0 +1,8 @@
+{
+  "approvals": [
+    "bash_execute",
+    "write_file"
+  ],
+  "denials": [],
+  "auto_approve": false
+}

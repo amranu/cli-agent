@@ -1,0 +1,9 @@
+{
+  "approvals": [
+    "websearch",
+    "webfetch",
+    "write_file"
+  ],
+  "denials": [],
+  "auto_approve": false
+}

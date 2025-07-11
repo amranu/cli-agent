@@ -38,6 +38,12 @@ class ToolExecutionEngine:
             # Debug logging for tool calls
             logger.debug(f"Tool call: {tool_key} with args: {arguments}")
             
+            # Special debug logging for websearch
+            if "websearch" in tool_key.lower():
+                logger.error(f"🔍 TOOL ENGINE DEBUG: websearch call - tool_key: {tool_key}")
+                logger.error(f"🔍 TOOL ENGINE DEBUG: websearch args type: {type(arguments)}")
+                logger.error(f"🔍 TOOL ENGINE DEBUG: websearch args content: {repr(arguments)}")
+            
             # Log tool execution for subagents
             if self.agent.is_subagent:
                 logger.debug(f"Subagent tool execution: tool_key='{tool_key}', available_tools_count={len(self.agent.available_tools)}")

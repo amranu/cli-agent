@@ -61,6 +61,7 @@ class SubagentProcess:
         self.session_id = session_id  # Store session ID for permission inheritance
         self.process: Optional[subprocess.Popen] = None
         self.start_time = time.time()
+        self.last_message_time = time.time()  # Track individual subagent's last message time
         self.completed = False
         self.result = None
 
@@ -169,6 +170,22 @@ class SubagentProcess:
 
         # Mark as completed
         self.completed = True
+
+    def update_last_message_time(self):
+        """Update the last message time for this subagent."""
+        self.last_message_time = time.time()
+
+    def is_timed_out(self, timeout_seconds: int = 300) -> bool:
+        """Check if this subagent has timed out (default 5 minutes)."""
+        if self.completed:
+            return False
+        current_time = time.time()
+        time_since_last_message = current_time - self.last_message_time
+        return time_since_last_message > timeout_seconds
+
+    def get_time_since_last_message(self) -> float:
+        """Get time in seconds since last message from this subagent."""
+        return time.time() - self.last_message_time
 
     async def terminate(self):
         """Terminate the subagent process."""

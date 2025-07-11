@@ -1,0 +1,8 @@
+{
+  "approvals": [
+    "write_file",
+    "glob"
+  ],
+  "denials": [],
+  "auto_approve": false
+}

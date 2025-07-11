@@ -94,14 +94,6 @@ class SlashCommandManager:
             return self._handle_refresh_models()
         elif command == "switch":
             return self._handle_switch(args)
-        elif command == "switch-deepseek" or command == "switch-chat":
-            return self._handle_switch_deepseek()
-        elif command == "switch-reason":
-            return self._handle_switch_reason()
-        elif command == "switch-gemini-flash" or command == "switch-gemini":
-            return self._handle_switch_gemini_flash()
-        elif command == "switch-gemini-pro":
-            return self._handle_switch_gemini_pro()
         elif command == "init":
             return await self._handle_init()
         elif command == "deep-research":
@@ -139,12 +131,6 @@ Built-in Commands:
   /init           - Analyze codebase and generate AGENT.md
   /deep-research <topic> - Start deep research with multiple subagents
   /quit, /exit    - Exit the interactive chat
-
-Legacy Model Switching (deprecated):
-  /switch-deepseek - Switch to deepseek-chat model
-  /switch-reason  - Switch to deepseek-reasoner model
-  /switch-gemini-flash - Switch to Gemini Flash 2.5 backend
-  /switch-gemini-pro - Switch to Gemini Pro 2.5 backend
 
 Custom Commands:"""
 
@@ -356,69 +342,6 @@ Custom Commands:"""
         except Exception as e:
             return f"❌ Failed to switch model: {str(e)}"
 
-    def _handle_switch_deepseek(self) -> Dict[str, Any]:
-        """Handle /switch-deepseek command."""
-        try:
-            from config import load_config
-
-            config = load_config()
-            config.default_provider_model = "deepseek:deepseek-chat"
-            config.model_type = "deepseek"
-            config.save_persistent_config()
-            return {
-                "status": f"⚠️  DEPRECATED: Use '/model deepseek-chat' instead.\n✅ Switched to: {config.default_provider_model}",
-                "reload_host": "provider-model",
-            }
-        except Exception as e:
-            return f"❌ Failed to switch model: {str(e)}"
-
-    def _handle_switch_reason(self) -> Dict[str, Any]:
-        """Handle /switch-reason command."""
-        try:
-            from config import load_config
-
-            config = load_config()
-            config.default_provider_model = "deepseek:deepseek-reasoner"
-            config.model_type = "deepseek"
-            config.save_persistent_config()
-            return {
-                "status": f"⚠️  DEPRECATED: Use '/model deepseek-reasoner' instead.\n✅ Switched to: {config.default_provider_model}",
-                "reload_host": "provider-model",
-            }
-        except Exception as e:
-            return f"❌ Failed to switch model: {str(e)}"
-
-    def _handle_switch_gemini_flash(self) -> Dict[str, Any]:
-        """Handle /switch-gemini-flash command."""
-        try:
-            from config import load_config
-
-            config = load_config()
-            config.default_provider_model = "google:gemini-2.5-flash"
-            config.model_type = "gemini"
-            config.save_persistent_config()
-            return {
-                "status": f"⚠️  DEPRECATED: Use '/provider google' or '/model gemini-2.5-flash' instead.\n✅ Switched to: {config.default_provider_model}",
-                "reload_host": "provider-model",
-            }
-        except Exception as e:
-            return f"❌ Failed to switch backend: {str(e)}"
-
-    def _handle_switch_gemini_pro(self) -> Dict[str, Any]:
-        """Handle /switch-gemini-pro command."""
-        try:
-            from config import load_config
-
-            config = load_config()
-            config.default_provider_model = "google:gemini-2.5-pro"
-            config.model_type = "gemini"
-            config.save_persistent_config()
-            return {
-                "status": f"⚠️  DEPRECATED: Use '/provider google' or '/model gemini-2.5-pro' instead.\n✅ Switched to: {config.default_provider_model}",
-                "reload_host": "provider-model",
-            }
-        except Exception as e:
-            return f"❌ Failed to switch backend: {str(e)}"
 
     def _handle_model(self, args: str) -> Dict[str, Any]:
         """Handle /model command."""

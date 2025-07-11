@@ -131,6 +131,17 @@ class OllamaConfig(BaseModel):
     timeout: float = 180.0  # Ollama can be slower for local inference
 
 
+class MoonshotConfig(BaseModel):
+    """Configuration for Moonshot API."""
+
+    api_key: str
+    base_url: str = "https://api.moonshot.ai/v1"
+    model: str = "moonshot-v1-8k"
+    temperature: float = 0.7
+    max_tokens: int = 4096
+    timeout: float = 120.0
+
+
 class ProviderModelConfig(BaseModel):
     """Configuration for provider-model combination."""
 
@@ -143,6 +154,7 @@ class ProviderModelConfig(BaseModel):
         DeepseekConfig,
         GeminiConfig,
         OllamaConfig,
+        MoonshotConfig,
     ]
     display_name: Optional[str] = None  # Human-readable name
 
@@ -208,6 +220,13 @@ class HostConfig(BaseSettings):
     ollama_temperature: float = Field(default=0.7, alias="OLLAMA_TEMPERATURE")
     ollama_max_tokens: int = Field(default=4096, alias="OLLAMA_MAX_TOKENS")
     ollama_timeout: float = Field(default=180.0, alias="OLLAMA_TIMEOUT")
+
+    # Moonshot configuration
+    moonshot_api_key: str = Field(default="", alias="MOONSHOT_API_KEY")
+    moonshot_model: str = Field(default="moonshot-v1-8k", alias="MOONSHOT_MODEL")
+    moonshot_temperature: float = Field(default=0.7, alias="MOONSHOT_TEMPERATURE")
+    moonshot_max_tokens: int = Field(default=4096, alias="MOONSHOT_MAX_TOKENS")
+    moonshot_timeout: float = Field(default=120.0, alias="MOONSHOT_TIMEOUT")
 
     # Provider-Model selection
     default_provider_model: str = Field(
@@ -335,6 +354,16 @@ class HostConfig(BaseSettings):
             timeout=self.ollama_timeout,
         )
 
+    def get_moonshot_config(self) -> MoonshotConfig:
+        """Get Moonshot configuration."""
+        return MoonshotConfig(
+            api_key=self.moonshot_api_key,
+            model=self.moonshot_model,
+            temperature=self.moonshot_temperature,
+            max_tokens=self.moonshot_max_tokens,
+            timeout=self.moonshot_timeout,
+        )
+
     def get_intelligent_default_provider_model(self) -> str:
         """Intelligently select the best available provider based on configured API keys.
         
@@ -349,11 +378,12 @@ class HostConfig(BaseSettings):
             "deepseek": "deepseek-chat", 
             "anthropic": "claude-3-5-sonnet-20241022",
             "openrouter": "anthropic/claude-3.5-sonnet",
+            "moonshot": "moonshot-v1-8k",
             "ollama": "llama2"  # Ollama doesn't require an API key
         }
         
-        # Priority order: OpenAI > DeepSeek > Anthropic > OpenRouter > Ollama
-        priority_order = ["openai", "deepseek", "anthropic", "openrouter", "ollama"]
+        # Priority order: OpenAI > DeepSeek > Anthropic > OpenRouter > Moonshot > Ollama
+        priority_order = ["openai", "deepseek", "anthropic", "openrouter", "moonshot", "ollama"]
         
         for provider in priority_order:
             # Check if API key is configured for this provider
@@ -365,6 +395,8 @@ class HostConfig(BaseSettings):
                 return f"anthropic:{provider_defaults['anthropic']}"
             elif provider == "openrouter" and self.openrouter_api_key:
                 return f"openrouter:{provider_defaults['openrouter']}"
+            elif provider == "moonshot" and self.moonshot_api_key:
+                return f"moonshot:{provider_defaults['moonshot']}"
             elif provider == "ollama":
                 # Check if Ollama is actually running
                 if self._is_ollama_available():
@@ -416,6 +448,8 @@ Then restart the agent.
             return bool(self.openrouter_api_key)
         elif provider_name == "google":
             return bool(self.gemini_api_key)
+        elif provider_name == "moonshot":
+            return bool(self.moonshot_api_key)
         elif provider_name == "ollama":
             return self._is_ollama_available()  # Check if Ollama is actually running
         else:
@@ -526,6 +560,10 @@ Then restart the agent.
             provider_config = self.get_gemini_config()
             if model_name:
                 provider_config.model = model_name
+        elif provider_name == "moonshot":
+            provider_config = self.get_moonshot_config()
+            if model_name:
+                provider_config.model = model_name
         elif provider_name == "ollama":
             provider_config = self.get_ollama_config()
             if model_name:
@@ -561,10 +599,12 @@ Then restart the agent.
             DeepSeekModel,
             GeminiModel,
             GPTModel,
+            MoonshotModel,
         )
         from cli_agent.providers.anthropic_provider import AnthropicProvider
         from cli_agent.providers.deepseek_provider import DeepSeekProvider
         from cli_agent.providers.google_provider import GoogleProvider
+        from cli_agent.providers.moonshot_provider import MoonshotProvider
         from cli_agent.providers.ollama_provider import OllamaProvider
         from cli_agent.providers.openai_provider import OpenAIProvider
         from cli_agent.providers.openrouter_provider import OpenRouterProvider
@@ -607,6 +647,12 @@ Then restart the agent.
         elif pm_config.provider_name == "google":
             provider = GoogleProvider(
                 api_key=pm_config.provider_config.api_key, timeout=120.0
+            )
+        elif pm_config.provider_name == "moonshot":
+            provider = MoonshotProvider(
+                api_key=pm_config.provider_config.api_key,
+                base_url=pm_config.provider_config.base_url,
+                timeout=pm_config.provider_config.timeout,
             )
         elif pm_config.provider_name == "ollama":
             provider = OllamaProvider(
@@ -662,6 +708,9 @@ Then restart the agent.
                 model = DeepSeekModel(variant="deepseek-reasoner")
             else:
                 model = DeepSeekModel(variant="deepseek-chat")
+        elif pm_config.provider_name == "moonshot":
+            # Direct Moonshot API - use Moonshot format (OpenAI compatible)
+            model = MoonshotModel(variant=pm_config.model_name)
         elif pm_config.provider_name == "openai":
             # Direct OpenAI API - use OpenAI format
             model = GPTModel(variant=pm_config.model_name)
@@ -675,6 +724,8 @@ Then restart the agent.
                 model = GeminiModel(variant="gemini-2.5-flash")
             elif "deepseek" in model_name:
                 model = DeepSeekModel(variant="deepseek-chat")
+            elif "moonshot" in model_name:
+                model = MoonshotModel(variant=pm_config.model_name)
             else:
                 # Final fallback
                 model = GPTModel(variant=pm_config.model_name)
@@ -1081,6 +1132,78 @@ Then restart the agent.
                     available["google"] = fallback_models
                     logger.info(f"Using fallback Google models: {fallback_models}")
 
+        if self.moonshot_api_key:
+            # Try to get dynamic model list from Moonshot API with caching
+            moonshot_cache_key = f"moonshot_models_{hash(self.moonshot_api_key)}"
+
+            # Check Moonshot-specific cache first
+            if (
+                moonshot_cache_key in self._model_cache
+                and current_time
+                - self._model_cache[moonshot_cache_key].get("timestamp", 0)
+                < self._cache_ttl
+            ):
+                available["moonshot"] = self._model_cache[moonshot_cache_key]["data"]
+                logger.debug("Using cached Moonshot models")
+            else:
+                try:
+                    import asyncio
+
+                    from cli_agent.providers.moonshot_provider import MoonshotProvider
+
+                    # Use static method to avoid client lifecycle issues
+                    # Check if we're already in an event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # We're in an async context, create a new thread to run the async call
+                        import concurrent.futures
+
+                        def run_in_thread():
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                return new_loop.run_until_complete(
+                                    MoonshotProvider.fetch_available_models_static(
+                                        self.moonshot_api_key
+                                    )
+                                )
+                            finally:
+                                new_loop.close()
+
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(run_in_thread)
+                            models = future.result(timeout=15)  # 15 second timeout
+
+                    except RuntimeError:
+                        # No event loop running, we can use asyncio.run
+                        models = asyncio.run(
+                            MoonshotProvider.fetch_available_models_static(
+                                self.moonshot_api_key
+                            )
+                        )
+
+                    if models:  # Only add if we got models
+                        available["moonshot"] = models
+                        # Cache the Moonshot models separately
+                        self._model_cache[moonshot_cache_key] = {
+                            "data": models,
+                            "timestamp": current_time,
+                        }
+                        logger.info(
+                            f"Successfully fetched and cached {len(models)} Moonshot models dynamically"
+                        )
+
+                except Exception as e:
+                    logger.warning(f"Failed to get dynamic Moonshot models: {e}")
+                    # Fallback to static list if API fails
+                    fallback_models = [
+                        "moonshot-v1-8k",
+                        "moonshot-v1-32k",
+                        "moonshot-v1-128k",
+                    ]
+                    available["moonshot"] = fallback_models
+                    logger.info(f"Using fallback Moonshot models: {fallback_models}")
+
         # Add Ollama models (mostly static as it's typically local)
         if self.ollama_base_url:  # Check if Ollama is configured
             # Try to get dynamic model list from Ollama API with caching
@@ -1295,6 +1418,11 @@ Then restart the agent.
             "OLLAMA_TEMPERATURE": str(self.ollama_temperature),
             "OLLAMA_MAX_TOKENS": str(self.ollama_max_tokens),
             "OLLAMA_TIMEOUT": str(self.ollama_timeout),
+            "MOONSHOT_API_KEY": self.moonshot_api_key,
+            "MOONSHOT_MODEL": self.moonshot_model,
+            "MOONSHOT_TEMPERATURE": str(self.moonshot_temperature),
+            "MOONSHOT_MAX_TOKENS": str(self.moonshot_max_tokens),
+            "MOONSHOT_TIMEOUT": str(self.moonshot_timeout),
             "DEFAULT_PROVIDER_MODEL": self.default_provider_model,
             "MODEL_TYPE": self.model_type,
             "HOST_NAME": self.host_name,
@@ -1347,6 +1475,7 @@ Then restart the agent.
             anthropic_vars = [v for v in missing_vars if v.startswith("ANTHROPIC_")]
             openai_vars = [v for v in missing_vars if v.startswith("OPENAI_")]
             openrouter_vars = [v for v in missing_vars if v.startswith("OPENROUTER_")]
+            moonshot_vars = [v for v in missing_vars if v.startswith("MOONSHOT_")]
             ollama_vars = [v for v in missing_vars if v.startswith("OLLAMA_")]
             host_vars = [
                 v
@@ -1382,6 +1511,12 @@ Then restart the agent.
             if openrouter_vars:
                 updated_lines.append("# OpenRouter API Configuration")
                 for var in sorted(openrouter_vars):
+                    updated_lines.append(f"{var}={managed_vars[var]}")
+                updated_lines.append("")
+
+            if moonshot_vars:
+                updated_lines.append("# Moonshot API Configuration")
+                for var in sorted(moonshot_vars):
                     updated_lines.append(f"{var}={managed_vars[var]}")
                 updated_lines.append("")
 
@@ -1423,6 +1558,7 @@ Then restart the agent.
             "anthropic_model": self.anthropic_model,
             "openai_model": self.openai_model,
             "openrouter_model": self.openrouter_model,
+            "moonshot_model": self.moonshot_model,
             "ollama_model": self.ollama_model,
             "default_provider_model": self.default_provider_model,
             "model_type": self.model_type,
@@ -1466,6 +1602,8 @@ Then restart the agent.
                 self.openai_model = persistent_config["openai_model"]
             if "openrouter_model" in persistent_config:
                 self.openrouter_model = persistent_config["openrouter_model"]
+            if "moonshot_model" in persistent_config:
+                self.moonshot_model = persistent_config["moonshot_model"]
             if "ollama_model" in persistent_config:
                 self.ollama_model = persistent_config["ollama_model"]
             if "default_provider_model" in persistent_config:
@@ -1610,6 +1748,13 @@ OLLAMA_MODEL=llama2
 OLLAMA_TEMPERATURE=0.7
 OLLAMA_MAX_TOKENS=4096
 OLLAMA_TIMEOUT=180.0
+
+# Moonshot API Configuration
+MOONSHOT_API_KEY=your_moonshot_api_key_here
+MOONSHOT_MODEL=moonshot-v1-8k
+MOONSHOT_TEMPERATURE=0.7
+MOONSHOT_MAX_TOKENS=4096
+MOONSHOT_TIMEOUT=120.0
 
 # Provider-Model Selection
 DEFAULT_PROVIDER_MODEL=deepseek:deepseek-chat

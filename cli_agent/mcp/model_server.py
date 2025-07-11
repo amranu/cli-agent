@@ -5,6 +5,7 @@ Supports persistent conversations with each model.
 """
 
 import asyncio
+import fnmatch
 import logging
 import re
 import sys
@@ -208,10 +209,26 @@ def create_model_server() -> FastMCP:
         for model in models:
             all_models.append(f"{actual_provider}:{model}")
 
-    # Create the docstring with available models
-    available_models_str = ', '.join(all_models)
+    # Create a truncated description showing sample models from each provider
+    # (since the full list of 400+ models is too long for most MCP clients)
+    description_samples = []
+    total_models = len(all_models)
     
-    @app.tool(description=f"Start or continue a chat with any available AI model. Available models: {available_models_str}")
+    for config_provider, models in available_models.items():
+        actual_provider = provider_name_map.get(config_provider, config_provider)
+        # Show first 3 models from each provider
+        sample_models = models[:3]
+        provider_samples = [f"{actual_provider}:{model}" for model in sample_models]
+        
+        if len(models) > 3:
+            description_samples.extend(provider_samples)
+            description_samples.append(f"... (+{len(models)-3} more {actual_provider} models)")
+        else:
+            description_samples.extend(provider_samples)
+    
+    available_models_str = ', '.join(description_samples)
+    
+    @app.tool(description=f"Start or continue a chat with any available AI model ({total_models} total models from {len(available_models)} providers). Sample models: {available_models_str}")
     async def chat(
         model: str,
         message: Optional[str] = None,
@@ -331,8 +348,86 @@ def create_model_server() -> FastMCP:
                 "model": model,
             }
 
+    @app.tool(description="List available AI models for chatting, optionally filtered by provider and/or glob pattern")
+    async def model_list(
+        provider: Optional[str] = None,
+        pattern: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """List available AI models for chatting.
+        
+        Args:
+            provider: Filter by provider name (e.g., 'anthropic', 'openai', 'google', 'deepseek', 'openrouter')
+            pattern: Glob pattern to filter model names (e.g., '*sonnet*', 'gpt-4*', '*flash*')
+            
+        Returns:
+            List of models in provider:model format ready for use with the chat tool
+        """
+        try:
+            # Start with all available models
+            filtered_models = {}
+            
+            # Apply provider filter
+            if provider:
+                provider_lower = provider.lower()
+                # Find matching providers (allow partial matches)
+                matching_providers = []
+                for config_provider in available_models.keys():
+                    actual_provider = provider_name_map.get(config_provider, config_provider)
+                    if provider_lower in actual_provider.lower() or provider_lower in config_provider.lower():
+                        matching_providers.append(config_provider)
+                
+                if not matching_providers:
+                    return {
+                        "error": f"Provider '{provider}' not found",
+                        "available_providers": list(available_models.keys())
+                    }
+                
+                # Filter to matching providers
+                for config_provider in matching_providers:
+                    filtered_models[config_provider] = available_models[config_provider]
+            else:
+                filtered_models = available_models.copy()
+            
+            # Apply model name pattern filter
+            if pattern:
+                pattern_filtered = {}
+                for config_provider, models in filtered_models.items():
+                    matching_models = []
+                    for model in models:
+                        # Check if model name matches glob pattern
+                        if fnmatch.fnmatch(model.lower(), pattern.lower()):
+                            matching_models.append(model)
+                    
+                    if matching_models:
+                        pattern_filtered[config_provider] = matching_models
+                
+                filtered_models = pattern_filtered
+            
+            # Build flat list of models in provider:model format
+            model_list = []
+            for config_provider, models in filtered_models.items():
+                actual_provider = provider_name_map.get(config_provider, config_provider)
+                for model in models:
+                    model_list.append(f"{actual_provider}:{model}")
+            
+            # Return results
+            return {
+                "models": model_list,
+                "total": len(model_list),
+                "filters": {
+                    "provider": provider,
+                    "pattern": pattern
+                }
+            }
+            
+        except Exception as e:
+            return {
+                "error": f"Failed to list models: {str(e)}",
+                "available_providers": list(available_models.keys())
+            }
+
     logger.debug(
-        f"Created MCP server with consolidated chat tool supporting {len(all_models)} models"
+        f"Created MCP server with chat tool and model_list tool supporting {len(all_models)} models"
     )
     return app
 

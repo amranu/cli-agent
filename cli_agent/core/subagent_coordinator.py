@@ -230,6 +230,12 @@ class SubagentCoordinator:
                 else "unknown"
             )
 
+            # Update individual subagent's last message time
+            if self.agent.subagent_manager and task_id != "unknown":
+                subagent = self.agent.subagent_manager.subagents.get(task_id)
+                if subagent:
+                    subagent.update_last_message_time()
+
             if message.type == "output":
                 formatted = f"🤖 [SUBAGENT-{task_id}] {message.content}"
             elif message.type == "status":
@@ -344,14 +350,40 @@ class SubagentCoordinator:
                     await self.agent.subagent_manager.terminate_all()
                     return []  # Return empty results to indicate cancellation
 
-            # Check timeout based on time since last message received
+            # Check individual subagent timeouts (5 minutes per subagent)
+            timed_out_subagents = []
+            for task_id, subagent in list(self.agent.subagent_manager.subagents.items()):
+                if subagent.is_timed_out(timeout_seconds=300):  # 5 minutes
+                    time_since_last = subagent.get_time_since_last_message()
+                    logger.warning(
+                        f"Subagent {task_id} timed out ({time_since_last:.1f}s since last message)"
+                    )
+                    timed_out_subagents.append(task_id)
+
+            # Terminate only the timed-out subagents
+            for task_id in timed_out_subagents:
+                try:
+                    await self.agent.subagent_manager.terminate_subagent(task_id)
+                    logger.info(f"Terminated timed-out subagent {task_id}")
+                    
+                    # Emit a status message about the timeout
+                    if self.event_emitter:
+                        await self.event_emitter.emit_system_message(
+                            f"⏰ Subagent {task_id} timed out after 5 minutes of inactivity and was terminated",
+                            "timeout",
+                            "⏰",
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to terminate subagent {task_id}: {e}")
+
+            # Check global timeout as fallback (keep the original behavior as backup)
             time_since_last_message = (
                 current_time - self.agent.last_subagent_message_time
             )
 
             if time_since_last_message > max_wait_time:
                 logger.error(
-                    f"Timeout waiting for subagents to complete ({time_since_last_message:.1f}s since last message)"
+                    f"Global timeout reached ({time_since_last_message:.1f}s since any message)"
                 )
                 break
 
@@ -398,6 +430,22 @@ class SubagentCoordinator:
                 logger.info("Cleared subagent message queue after collecting results")
 
         return results
+
+    def get_subagent_timeout_status(self) -> Dict[str, Dict]:
+        """Get timeout status for all active subagents."""
+        if not self.agent.subagent_manager:
+            return {}
+            
+        status = {}
+        for task_id, subagent in self.agent.subagent_manager.subagents.items():
+            time_since_last = subagent.get_time_since_last_message()
+            status[task_id] = {
+                "time_since_last_message": time_since_last,
+                "is_timed_out_5min": subagent.is_timed_out(300),
+                "is_completed": subagent.completed,
+                "description": subagent.description
+            }
+        return status
 
     def detect_task_tool_execution(self, tool_calls) -> bool:
         """Detect if any task tools were executed that spawn subagents."""

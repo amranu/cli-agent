@@ -537,3 +537,79 @@ Reasoning Pattern: Think through problems step-by-step in <reasoning> blocks, th
         """Parse DeepSeek content using universal parsing."""
         # Use the universal parsing from the base class
         return super().parse_special_content(response_text)
+
+
+class MoonshotModel(ModelConfig):
+    """Moonshot AI model configuration."""
+
+    def __init__(self, variant: str = "moonshot-v1-8k"):
+        """Initialize Moonshot model configuration.
+
+        Args:
+            variant: Moonshot model variant (moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k, etc.)
+        """
+        model_map = {
+            "moonshot-v1-8k": "moonshot-v1-8k",
+            "moonshot-v1-32k": "moonshot-v1-32k", 
+            "moonshot-v1-128k": "moonshot-v1-128k",
+        }
+
+        # Context lengths based on model variant
+        context_lengths = {
+            "moonshot-v1-8k": 8000,
+            "moonshot-v1-32k": 32000,
+            "moonshot-v1-128k": 128000,
+        }
+
+        super().__init__(
+            name=variant,
+            provider_model_name=model_map.get(variant, variant),
+            context_length=context_lengths.get(variant, 8000),
+            supports_tools=True,
+            supports_streaming=True,
+            temperature=0.7,
+            max_tokens=4000,
+        )
+
+    @property
+    def model_family(self) -> str:
+        return "moonshot"
+
+    def get_tool_format(self) -> str:
+        return "openai"  # Moonshot uses OpenAI-compatible format
+
+    def get_system_prompt_style(self) -> str:
+        return "message"  # Moonshot uses system messages
+
+    def format_messages_for_model(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Moonshot uses standard OpenAI format."""
+        return messages
+
+    def get_model_specific_instructions(self, is_subagent: bool = False) -> str:
+        if is_subagent:
+            return """You are a Moonshot subagent focused on completing a specific task efficiently.
+
+Key behaviors:
+- Use tools immediately when you need to perform actions
+- Be direct and task-focused
+- End your response by calling `emit_result` with your findings
+- Provide clear, actionable results
+
+Focus on your assigned task and complete it thoroughly."""
+
+        return """You are Moonshot, Kimi's advanced AI model.
+
+Key behaviors:
+- Use available tools when you need to take actions or get information
+- Be helpful, accurate, and thorough in your responses
+- For complex multi-step tasks, consider using the `task` tool to spawn subagents
+- Think step by step and explain your reasoning when appropriate
+
+Tool usage: When users request actions (running commands, reading files, etc.), use the appropriate tools immediately rather than just describing what you would do."""
+
+    def parse_special_content(self, response_text: str) -> Dict[str, Any]:
+        """Parse Moonshot content using universal parsing."""
+        # Use the universal parsing from the base class
+        return super().parse_special_content(response_text)
